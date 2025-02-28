@@ -228,6 +228,8 @@ The dashboard is tested and optimized for:
 
 ## Recent Updates
 
+- Fixed win/loss calculation to properly exclude "Open" positions
+- Fixed Excel import issue where the last record was not being imported
 - Improved filter button alignment in the Performance Analysis component
 - Fixed tooltip text color in dark mode for better readability
 - Enhanced chart responsiveness and interaction

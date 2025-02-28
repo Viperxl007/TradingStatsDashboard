@@ -25,11 +25,15 @@ export const calculateAccountSummary = (data: TradeData[]): AccountSummary => {
   
   // Calculate profit/loss metrics - only consider closing trades with actual P/L
   // Filter out opening trades where P/L is just the negative of the fee
-  const closingTrades = data.filter(trade =>
-    trade.type === 'sell' &&
-    (trade.exchange.toLowerCase().includes('close') ||
-     !trade.exchange.toLowerCase().includes('open'))
-  );
+  const closingTrades = data.filter(trade => {
+    // Exclude any trade with "open" in the exchange field regardless of type
+    if (trade.exchange.toLowerCase().includes('open')) {
+      return false;
+    }
+    
+    // Include only sell trades or trades with "close" in the exchange field
+    return trade.type === 'sell' || trade.exchange.toLowerCase().includes('close');
+  });
   
   const totalProfitLoss = closingTrades.reduce((acc, trade) => acc + trade.profitLoss, 0);
   const averageProfitLoss = closingTrades.length > 0
@@ -146,11 +150,15 @@ export const analyzeTokenPerformance = (data: TradeData[]): TokenPerformance[] =
     const totalVolume = trades.reduce((acc, trade) => acc + trade.totalValue, 0);
     
     // Calculate profit/loss metrics - only consider closing trades with actual P/L
-    const closingTrades = trades.filter(trade =>
-      trade.type === 'sell' &&
-      (trade.exchange.toLowerCase().includes('close') ||
-       !trade.exchange.toLowerCase().includes('open'))
-    );
+    const closingTrades = trades.filter(trade => {
+      // Exclude any trade with "open" in the exchange field regardless of type
+      if (trade.exchange.toLowerCase().includes('open')) {
+        return false;
+      }
+      
+      // Include only sell trades or trades with "close" in the exchange field
+      return trade.type === 'sell' || trade.exchange.toLowerCase().includes('close');
+    });
     
     const totalProfitLoss = closingTrades.reduce((acc, trade) => acc + trade.profitLoss, 0);
     const averageProfitLoss = closingTrades.length > 0
@@ -347,11 +355,15 @@ export const calculateMonthlyPerformance = (data: TradeData[]): MonthlyPerforman
     const tradesCount = trades.length;
     
     // Calculate profit/loss - only consider closing trades with actual P/L
-    const closingTrades = trades.filter(trade =>
-      trade.type === 'sell' &&
-      (trade.exchange.toLowerCase().includes('close') ||
-       !trade.exchange.toLowerCase().includes('open'))
-    );
+    const closingTrades = trades.filter(trade => {
+      // Exclude any trade with "open" in the exchange field regardless of type
+      if (trade.exchange.toLowerCase().includes('open')) {
+        return false;
+      }
+      
+      // Include only sell trades or trades with "close" in the exchange field
+      return trade.type === 'sell' || trade.exchange.toLowerCase().includes('close');
+    });
     
     const profitLoss = closingTrades.reduce((acc, trade) => acc + trade.profitLoss, 0);
     
@@ -394,11 +406,15 @@ export const calculateTimeframePerformance = (
   const tradesCount = tradesInTimeframe.length;
   
   // Calculate profit/loss - only consider closing trades with actual P/L
-  const closingTrades = tradesInTimeframe.filter(trade =>
-    trade.type === 'sell' &&
-    (trade.exchange.toLowerCase().includes('close') ||
-     !trade.exchange.toLowerCase().includes('open'))
-  );
+  const closingTrades = tradesInTimeframe.filter(trade => {
+    // Exclude any trade with "open" in the exchange field regardless of type
+    if (trade.exchange.toLowerCase().includes('open')) {
+      return false;
+    }
+    
+    // Include only sell trades or trades with "close" in the exchange field
+    return trade.type === 'sell' || trade.exchange.toLowerCase().includes('close');
+  });
   
   const profitLoss = closingTrades.reduce((acc, trade) => acc + trade.profitLoss, 0);
   

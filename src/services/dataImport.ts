@@ -9,19 +9,28 @@ import * as dateFns from 'date-fns';
  */
 export const importData = async (file: File): Promise<TradeData[]> => {
   try {
+    console.log(`Starting import of file: ${file.name} (${file.size} bytes)`);
+    
     const fileData = await file.arrayBuffer();
     const workbook = read(fileData);
     const sheetName = workbook.SheetNames[0];
     const worksheet = workbook.Sheets[sheetName];
 
     const jsonData = utils.sheet_to_json(worksheet);
-    console.log('Raw imported data:', jsonData);
+    console.log(`Raw imported data: ${jsonData.length} rows`);
+    
+    if (jsonData.length > 0) {
+      console.log('First row sample:', jsonData[0]);
+      console.log('Last row sample:', jsonData[jsonData.length - 1]);
+    }
     
     // Transform the data to match our TradeData interface
     const transformedData = transformData(jsonData);
+    console.log(`Transformed data: ${transformedData.length} rows`);
     
     // Filter out duplicates
     const uniqueData = filterDuplicates(transformedData);
+    console.log(`Final unique data: ${uniqueData.length} rows`);
     
     return uniqueData;
   } catch (error) {
@@ -38,11 +47,17 @@ export const importData = async (file: File): Promise<TradeData[]> => {
 export const transformData = (data: any[]): TradeData[] => {
   const transformedData: TradeData[] = [];
   
+  console.log(`Starting transformation of ${data.length} rows`);
+  let skippedRows = 0;
+  let processedRows = 0;
+  let errorRows = 0;
+  
   data.forEach((row, index) => {
     try {
       // Skip rows that don't have essential data
       if (!row || typeof row !== 'object') {
         console.log(`Skipping row ${index + 1}: Not an object`);
+        skippedRows++;
         return;
       }
       
@@ -87,6 +102,10 @@ export const transformData = (data: any[]): TradeData[] => {
       // Normalize direction to determine trade type
       const dirLower = direction.toLowerCase();
       
+      // Note: "Open" positions are stored with their original direction in the exchange field
+      // They are excluded from win/loss calculations in dataProcessing.ts
+      // This ensures that fees for opening positions don't count as losses
+      
       if (dirLower.includes('open long') || dirLower.includes('buy')) {
         type = 'buy';
         // For opening trades, profit/loss is 0 (the closedPnl is just the negative of the fee)
@@ -108,9 +127,13 @@ export const transformData = (data: any[]): TradeData[] => {
       // Calculate total value if not provided
       const totalValue = notional || (amount * price);
       
+      // Extract ID from the row or generate a unique one
+      const existingId = extractField(row, ['id', 'Id', 'ID', 'tradeId', 'TradeId'], '');
+      
       // Create TradeData object
       const tradeData: TradeData = {
-        id: String(index + 1), // Use row index as ID
+        // Use existing ID if available, otherwise generate a unique one using timestamp and index
+        id: existingId || `import-${Date.now()}-${index}`,
         token: String(token).toUpperCase(),
         date,
         timestamp,
@@ -125,11 +148,21 @@ export const transformData = (data: any[]): TradeData[] => {
       };
       
       transformedData.push(tradeData);
+      processedRows++;
     } catch (error) {
       console.error(`Error transforming row ${index + 1}:`, error);
+      errorRows++;
       // Skip this row and continue with the next one
     }
   });
+  
+  console.log(`Transformation complete: ${processedRows} rows processed, ${skippedRows} rows skipped, ${errorRows} rows with errors`);
+  console.log(`Total transformed rows: ${transformedData.length}`);
+  
+  if (transformedData.length > 0) {
+    console.log('First transformed row:', transformedData[0]);
+    console.log('Last transformed row:', transformedData[transformedData.length - 1]);
+  }
   
   return transformedData;
 };
@@ -178,15 +211,24 @@ const normalizeTradeType = (type: string): 'buy' | 'sell' => {
  */
 export const filterDuplicates = (data: TradeData[]): TradeData[] => {
   const uniqueTrades = new Map<string, TradeData>();
+  let duplicatesFound = 0;
   
-  data.forEach(trade => {
+  console.log(`Filtering duplicates from ${data.length} trades`);
+  
+  data.forEach((trade, index) => {
     // Use id as the unique key
     if (!uniqueTrades.has(trade.id)) {
       uniqueTrades.set(trade.id, trade);
+    } else {
+      duplicatesFound++;
+      console.log(`Duplicate found: Trade ID ${trade.id} at index ${index}`);
     }
   });
   
-  return Array.from(uniqueTrades.values());
+  const result = Array.from(uniqueTrades.values());
+  console.log(`Filtered ${duplicatesFound} duplicates. Returning ${result.length} unique trades.`);
+  
+  return result;
 };
 
 /**
