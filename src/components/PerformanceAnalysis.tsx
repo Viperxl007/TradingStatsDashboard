@@ -145,10 +145,17 @@ const PerformanceAnalysis: React.FC = () => {
   const { filteredData, tokenPerformance: allTokenPerformance } = state;
   
   // Local state
-  const [timeframe, setTimeframe] = React.useState('all');
   const [chartType, setChartType] = React.useState('line');
   const [dateRange, setDateRange] = React.useState<[Date | null, Date | null]>([null, null]);
   const [isDatePickerOpen, setIsDatePickerOpen] = React.useState(false);
+  
+  // Get timeframe from global state
+  const { state: { timeframe }, dispatch } = useData();
+  
+  // Function to update timeframe in global state
+  const setTimeframe = (newTimeframe: string) => {
+    dispatch(updateFilters({ timeframe: newTimeframe }));
+  };
   
   // Colors
   const cardBg = useColorModeValue('white', 'gray.800');
@@ -191,8 +198,20 @@ const PerformanceAnalysis: React.FC = () => {
       return Object.keys(tokenGroups).map(token => {
         const trades = tokenGroups[token];
         const totalTrades = trades.length;
-        const winningTrades = trades.filter((t: any) => t.profitLoss > 0).length;
-        const winRate = totalTrades > 0 ? (winningTrades / totalTrades) * 100 : 0;
+        
+        // Filter out "Open..." trades for win rate calculation
+        const closingTrades = trades.filter((t: any) => {
+          // Exclude any trade with "open" in the exchange field regardless of type
+          if (t.exchange.toLowerCase().includes('open')) {
+            return false;
+          }
+          
+          // Include only sell trades or trades with "close" in the exchange field
+          return t.type === 'sell' || t.exchange.toLowerCase().includes('close');
+        });
+        
+        const winningTrades = closingTrades.filter((t: any) => t.profitLoss > 0).length;
+        const winRate = closingTrades.length > 0 ? (winningTrades / closingTrades.length) * 100 : 0;
         const totalProfitLoss = trades.reduce((sum: number, t: any) => sum + t.profitLoss, 0);
         const averageProfitLoss = totalTrades > 0 ? totalProfitLoss / totalTrades : 0;
         const totalVolume = trades.reduce((sum: number, t: any) => sum + (t.totalValue || 0), 0);
@@ -280,6 +299,7 @@ const PerformanceAnalysis: React.FC = () => {
                     rightIcon={<Icon as={FiChevronDown} boxSize="16px" />}
                     iconSpacing={2}
                     bg={useColorModeValue('white', 'gray.700')}
+                    color={useColorModeValue('gray.800', 'white')}
                     borderColor={useColorModeValue('gray.200', 'gray.600')}
                     _hover={{ borderColor: useColorModeValue('gray.300', 'gray.500') }}
                   >
@@ -321,12 +341,16 @@ const PerformanceAnalysis: React.FC = () => {
                       rightIcon={<Icon as={FiChevronDown} boxSize="16px" />}
                       iconSpacing={2}
                       bg={useColorModeValue('white', 'gray.700')}
+                      color={useColorModeValue('gray.800', 'white')}
                       borderColor={useColorModeValue('gray.200', 'gray.600')}
                       _hover={{ borderColor: useColorModeValue('gray.300', 'gray.500') }}
                       onClick={() => setIsDatePickerOpen(true)}
+                      textOverflow="ellipsis"
+                      overflow="hidden"
+                      whiteSpace="nowrap"
                     >
                       {dateRange[0] && dateRange[1]
-                        ? `${format(dateRange[0], 'MM/dd/yyyy')} - ${format(dateRange[1], 'MM/dd/yyyy')}`
+                        ? `${format(dateRange[0], 'MM/dd/yy')} - ${format(dateRange[1], 'MM/dd/yy')}`
                         : 'Date Range'}
                     </Button>
                   </PopoverTrigger>
@@ -401,6 +425,7 @@ const PerformanceAnalysis: React.FC = () => {
                     rightIcon={<Icon as={FiChevronDown} boxSize="16px" />}
                     iconSpacing={2}
                     bg={useColorModeValue('white', 'gray.700')}
+                    color={useColorModeValue('gray.800', 'white')}
                     borderColor={useColorModeValue('gray.200', 'gray.600')}
                     _hover={{ borderColor: useColorModeValue('gray.300', 'gray.500') }}
                   >
@@ -434,6 +459,7 @@ const PerformanceAnalysis: React.FC = () => {
                     rightIcon={<Icon as={FiChevronDown} boxSize="16px" />}
                     iconSpacing={2}
                     bg={useColorModeValue('white', 'gray.700')}
+                    color={useColorModeValue('gray.800', 'white')}
                     borderColor={useColorModeValue('gray.200', 'gray.600')}
                     _hover={{ borderColor: useColorModeValue('gray.300', 'gray.500') }}
                   >
