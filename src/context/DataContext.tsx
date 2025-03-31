@@ -1,10 +1,12 @@
 import * as React from 'react';
-import { 
-  TradeData, 
-  AccountSummary, 
-  TokenPerformance, 
+import {
+  TradeData,
+  AccountSummary,
+  TokenPerformance,
   DataState,
-  FilterOptions
+  FilterOptions,
+  OptionsAnalysisResult,
+  EarningsCalendarItem
 } from '../types';
 import { 
   calculateAccountSummary, 
@@ -23,7 +25,19 @@ export enum ActionType {
   UPDATE_FILTERS = 'UPDATE_FILTERS',
   RESET_FILTERS = 'RESET_FILTERS',
   SET_ACTIVE_TAB = 'SET_ACTIVE_TAB',
-  TOGGLE_DARK_MODE = 'TOGGLE_DARK_MODE'
+  TOGGLE_DARK_MODE = 'TOGGLE_DARK_MODE',
+  
+  // Options actions
+  ANALYZE_OPTIONS_START = 'ANALYZE_OPTIONS_START',
+  ANALYZE_OPTIONS_SUCCESS = 'ANALYZE_OPTIONS_SUCCESS',
+  ANALYZE_OPTIONS_ERROR = 'ANALYZE_OPTIONS_ERROR',
+  SCAN_EARNINGS_START = 'SCAN_EARNINGS_START',
+  SCAN_EARNINGS_SUCCESS = 'SCAN_EARNINGS_SUCCESS',
+  SCAN_EARNINGS_ERROR = 'SCAN_EARNINGS_ERROR',
+  FETCH_EARNINGS_CALENDAR_START = 'FETCH_EARNINGS_CALENDAR_START',
+  FETCH_EARNINGS_CALENDAR_SUCCESS = 'FETCH_EARNINGS_CALENDAR_SUCCESS',
+  FETCH_EARNINGS_CALENDAR_ERROR = 'FETCH_EARNINGS_CALENDAR_ERROR',
+  CLEAR_OPTIONS_DATA = 'CLEAR_OPTIONS_DATA'
 }
 
 // Define action interfaces
@@ -64,8 +78,58 @@ interface ToggleDarkModeAction {
   type: ActionType.TOGGLE_DARK_MODE;
 }
 
+// Options action interfaces
+interface AnalyzeOptionsStartAction {
+  type: ActionType.ANALYZE_OPTIONS_START;
+  payload: string; // ticker
+}
+
+interface AnalyzeOptionsSuccessAction {
+  type: ActionType.ANALYZE_OPTIONS_SUCCESS;
+  payload: OptionsAnalysisResult;
+}
+
+interface AnalyzeOptionsErrorAction {
+  type: ActionType.ANALYZE_OPTIONS_ERROR;
+  payload: string; // error message
+}
+
+interface ScanEarningsStartAction {
+  type: ActionType.SCAN_EARNINGS_START;
+  payload?: string; // optional date
+}
+
+interface ScanEarningsSuccessAction {
+  type: ActionType.SCAN_EARNINGS_SUCCESS;
+  payload: OptionsAnalysisResult[];
+}
+
+interface ScanEarningsErrorAction {
+  type: ActionType.SCAN_EARNINGS_ERROR;
+  payload: string; // error message
+}
+
+interface FetchEarningsCalendarStartAction {
+  type: ActionType.FETCH_EARNINGS_CALENDAR_START;
+  payload?: string; // optional date
+}
+
+interface FetchEarningsCalendarSuccessAction {
+  type: ActionType.FETCH_EARNINGS_CALENDAR_SUCCESS;
+  payload: EarningsCalendarItem[];
+}
+
+interface FetchEarningsCalendarErrorAction {
+  type: ActionType.FETCH_EARNINGS_CALENDAR_ERROR;
+  payload: string; // error message
+}
+
+interface ClearOptionsDataAction {
+  type: ActionType.CLEAR_OPTIONS_DATA;
+}
+
 // Union of all action types
-type DataAction = 
+type DataAction =
   | ImportDataStartAction
   | ImportDataSuccessAction
   | ImportDataErrorAction
@@ -73,7 +137,17 @@ type DataAction =
   | UpdateFiltersAction
   | ResetFiltersAction
   | SetActiveTabAction
-  | ToggleDarkModeAction;
+  | ToggleDarkModeAction
+  | AnalyzeOptionsStartAction
+  | AnalyzeOptionsSuccessAction
+  | AnalyzeOptionsErrorAction
+  | ScanEarningsStartAction
+  | ScanEarningsSuccessAction
+  | ScanEarningsErrorAction
+  | FetchEarningsCalendarStartAction
+  | FetchEarningsCalendarSuccessAction
+  | FetchEarningsCalendarErrorAction
+  | ClearOptionsDataAction;
 
 // Initial state
 const initialState: DataState = {
@@ -99,6 +173,17 @@ const initialState: DataState = {
   selectedTokens: [],
   dateRange: [null, null],
   tradeType: 'all',
+  timeframe: 'all',
+  
+  // Options data
+  optionsData: {
+    analysisResult: null,
+    scanResults: [],
+    earningsCalendar: [],
+    isLoading: false,
+    error: null
+  },
+  
   isLoading: false,
   error: null,
   activeTab: 'summary',
@@ -150,15 +235,18 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
     
     case ActionType.UPDATE_FILTERS: {
       const newFilters = {
-        selectedTokens: action.payload.selectedTokens !== undefined 
-          ? action.payload.selectedTokens 
+        selectedTokens: action.payload.selectedTokens !== undefined
+          ? action.payload.selectedTokens
           : state.selectedTokens,
-        dateRange: action.payload.dateRange !== undefined 
-          ? action.payload.dateRange 
+        dateRange: action.payload.dateRange !== undefined
+          ? action.payload.dateRange
           : state.dateRange,
-        tradeType: action.payload.tradeType !== undefined 
-          ? action.payload.tradeType 
-          : state.tradeType
+        tradeType: action.payload.tradeType !== undefined
+          ? action.payload.tradeType
+          : state.tradeType,
+        timeframe: action.payload.timeframe !== undefined
+          ? action.payload.timeframe
+          : state.timeframe
       };
       
       const filteredData = filterTrades(
@@ -174,13 +262,13 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
         filteredData
       };
     }
-    
     case ActionType.RESET_FILTERS:
       return {
         ...state,
         selectedTokens: [],
         dateRange: [null, null],
         tradeType: 'all',
+        timeframe: 'all',
         filteredData: state.rawData
       };
     
@@ -194,6 +282,112 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
       return {
         ...state,
         isDarkMode: !state.isDarkMode
+      };
+    
+    // Options actions
+    case ActionType.ANALYZE_OPTIONS_START:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.ANALYZE_OPTIONS_SUCCESS:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          analysisResult: action.payload,
+          isLoading: false,
+          error: null
+        }
+      };
+    
+    case ActionType.ANALYZE_OPTIONS_ERROR:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.SCAN_EARNINGS_START:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.SCAN_EARNINGS_SUCCESS:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          scanResults: action.payload,
+          isLoading: false,
+          error: null
+        }
+      };
+    
+    case ActionType.SCAN_EARNINGS_ERROR:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.FETCH_EARNINGS_CALENDAR_START:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.FETCH_EARNINGS_CALENDAR_SUCCESS:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          earningsCalendar: action.payload,
+          isLoading: false,
+          error: null
+        }
+      };
+    
+    case ActionType.FETCH_EARNINGS_CALENDAR_ERROR:
+      return {
+        ...state,
+        optionsData: {
+          ...state.optionsData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.CLEAR_OPTIONS_DATA:
+      return {
+        ...state,
+        optionsData: {
+          analysisResult: null,
+          scanResults: [],
+          earningsCalendar: [],
+          isLoading: false,
+          error: null
+        }
       };
     
     default:
@@ -266,4 +460,54 @@ export const setActiveTab = (tab: string): SetActiveTabAction => ({
 
 export const toggleDarkMode = (): ToggleDarkModeAction => ({
   type: ActionType.TOGGLE_DARK_MODE
+});
+
+// Options action creators
+export const analyzeOptionsStart = (ticker: string): AnalyzeOptionsStartAction => ({
+  type: ActionType.ANALYZE_OPTIONS_START,
+  payload: ticker
+});
+
+export const analyzeOptionsSuccess = (result: OptionsAnalysisResult): AnalyzeOptionsSuccessAction => ({
+  type: ActionType.ANALYZE_OPTIONS_SUCCESS,
+  payload: result
+});
+
+export const analyzeOptionsError = (error: string): AnalyzeOptionsErrorAction => ({
+  type: ActionType.ANALYZE_OPTIONS_ERROR,
+  payload: error
+});
+
+export const scanEarningsStart = (date?: string): ScanEarningsStartAction => ({
+  type: ActionType.SCAN_EARNINGS_START,
+  payload: date
+});
+
+export const scanEarningsSuccess = (results: OptionsAnalysisResult[]): ScanEarningsSuccessAction => ({
+  type: ActionType.SCAN_EARNINGS_SUCCESS,
+  payload: results
+});
+
+export const scanEarningsError = (error: string): ScanEarningsErrorAction => ({
+  type: ActionType.SCAN_EARNINGS_ERROR,
+  payload: error
+});
+
+export const fetchEarningsCalendarStart = (date?: string): FetchEarningsCalendarStartAction => ({
+  type: ActionType.FETCH_EARNINGS_CALENDAR_START,
+  payload: date
+});
+
+export const fetchEarningsCalendarSuccess = (calendar: EarningsCalendarItem[]): FetchEarningsCalendarSuccessAction => ({
+  type: ActionType.FETCH_EARNINGS_CALENDAR_SUCCESS,
+  payload: calendar
+});
+
+export const fetchEarningsCalendarError = (error: string): FetchEarningsCalendarErrorAction => ({
+  type: ActionType.FETCH_EARNINGS_CALENDAR_ERROR,
+  payload: error
+});
+
+export const clearOptionsData = (): ClearOptionsDataAction => ({
+  type: ActionType.CLEAR_OPTIONS_DATA
 });

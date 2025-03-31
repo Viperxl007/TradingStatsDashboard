@@ -83,6 +83,57 @@ export interface FilterOptions {
   selectedTokens: string[];
   dateRange: [Date | null, Date | null];
   tradeType: 'all' | 'buy' | 'sell';
+  timeframe: string;
+}
+
+/**
+ * Options analysis metrics
+ */
+export interface OptionsMetrics {
+  avgVolume: number;             // Average trading volume
+  avgVolumePass: string;         // Whether average volume passes threshold ("true" or "false")
+  iv30Rv30: number;              // Implied volatility to realized volatility ratio
+  iv30Rv30Pass: string;          // Whether IV/RV ratio passes threshold ("true" or "false")
+  tsSlope: number;               // Term structure slope
+  tsSlopePass: string;           // Whether term structure slope passes threshold ("true" or "false")
+}
+
+/**
+ * Options analysis result
+ */
+export interface OptionsAnalysisResult {
+  ticker: string;                // Stock ticker symbol
+  companyName?: string;          // Company name (optional)
+  currentPrice: number;          // Current stock price
+  metrics: OptionsMetrics;       // Analysis metrics
+  expectedMove: string;          // Expected move percentage
+  recommendation: 'Recommended' | 'Consider' | 'Avoid'; // Analysis recommendation
+  reportTime?: 'BMO' | 'AMC' | 'DMH'; // Earnings report time (optional)
+  timestamp: number;             // Timestamp of the analysis
+  error?: string;                // Error message if analysis failed
+}
+
+/**
+ * Earnings calendar item
+ */
+export interface EarningsCalendarItem {
+  ticker: string;                // Stock ticker symbol
+  companyName: string;           // Company name
+  reportTime: 'BMO' | 'AMC' | 'DMH'; // Before Market Open, After Market Close, During Market Hours
+  date: string;                  // Date of earnings report
+  estimatedEPS: number | null;   // Estimated earnings per share
+  actualEPS: number | null;      // Actual earnings per share
+}
+
+/**
+ * Options data state
+ */
+export interface OptionsDataState {
+  analysisResult: OptionsAnalysisResult | null; // Current analysis result
+  scanResults: OptionsAnalysisResult[];        // Results from earnings scan
+  earningsCalendar: EarningsCalendarItem[];    // Earnings calendar data
+  isLoading: boolean;                          // Loading state
+  error: string | null;                        // Error message if any
 }
 
 /**
@@ -100,6 +151,10 @@ export interface DataState {
   selectedTokens: string[];      // Currently selected tokens for filtering
   dateRange: [Date | null, Date | null]; // Selected date range
   tradeType: 'all' | 'buy' | 'sell'; // Filter by trade type
+  timeframe: string;             // Timeframe filter (all, week, month, etc.)
+  
+  // Options Data
+  optionsData: OptionsDataState; // Options earnings screener data
   
   // UI State
   isLoading: boolean;            // Loading state for async operations
