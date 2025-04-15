@@ -148,6 +148,7 @@ const PerformanceAnalysis: React.FC = () => {
   const [chartType, setChartType] = React.useState('line');
   const [dateRange, setDateRange] = React.useState<[Date | null, Date | null]>([null, null]);
   const [isDatePickerOpen, setIsDatePickerOpen] = React.useState(false);
+  const [dateRangeError, setDateRangeError] = React.useState<string | null>(null);
   
   // Get timeframe from global state
   const { state: { timeframe }, dispatch } = useData();
@@ -177,60 +178,57 @@ const PerformanceAnalysis: React.FC = () => {
     [groupedData]
   );
   
-  // Filter token performance data by timeframe
+  // Calculate token performance data based on filtered data
   const tokenPerformance = React.useMemo(() => {
-    // If we have timeframe filtering, we need to recalculate token performance
-    if (timeframe !== 'all') {
-      // Get the filtered trades
-      const filteredTrades = filterDataByTimeframe(filteredData, timeframe);
-      
-      // Group by token
-      const tokenGroups = filteredTrades.reduce((acc, trade) => {
-        const token = trade.token;
-        if (!acc[token]) {
-          acc[token] = [];
-        }
-        acc[token].push(trade);
-        return acc;
-      }, {});
-      
-      // Calculate performance metrics for each token
-      return Object.keys(tokenGroups).map(token => {
-        const trades = tokenGroups[token];
-        const totalTrades = trades.length;
-        
-        // Filter out "Open..." trades for win rate calculation
-        const closingTrades = trades.filter((t: any) => {
-          // Exclude any trade with "open" in the exchange field regardless of type
-          if (t.exchange.toLowerCase().includes('open')) {
-            return false;
-          }
-          
-          // Include only sell trades or trades with "close" in the exchange field
-          return t.type === 'sell' || t.exchange.toLowerCase().includes('close');
-        });
-        
-        const winningTrades = closingTrades.filter((t: any) => t.profitLoss > 0).length;
-        const winRate = closingTrades.length > 0 ? (winningTrades / closingTrades.length) * 100 : 0;
-        const totalProfitLoss = trades.reduce((sum: number, t: any) => sum + t.profitLoss, 0);
-        const averageProfitLoss = totalTrades > 0 ? totalProfitLoss / totalTrades : 0;
-        const totalVolume = trades.reduce((sum: number, t: any) => sum + (t.totalValue || 0), 0);
-        
-        return {
-          token,
-          totalTrades,
-          winningTrades,
-          winRate,
-          totalProfitLoss,
-          averageProfitLoss,
-          totalVolume
-        };
-      });
-    }
+    // Always recalculate token performance based on the filtered data
+    // This ensures all filters (tokens, date range, trade type, timeframe) are applied
     
-    // If no timeframe filtering, use the original token performance data
-    return allTokenPerformance;
-  }, [allTokenPerformance, filteredData, timeframe]);
+    // First apply timeframe filter to the already filtered data
+    const filteredByTimeframeData = filterDataByTimeframe(filteredData, timeframe);
+    
+    // Group by token
+    const tokenGroups = filteredByTimeframeData.reduce((acc, trade) => {
+      const token = trade.token;
+      if (!acc[token]) {
+        acc[token] = [];
+      }
+      acc[token].push(trade);
+      return acc;
+    }, {});
+    
+    // Calculate performance metrics for each token
+    return Object.keys(tokenGroups).map(token => {
+      const trades = tokenGroups[token];
+      const totalTrades = trades.length;
+      
+      // Filter out "Open..." trades for win rate calculation
+      const closingTrades = trades.filter((t: any) => {
+        // Exclude any trade with "open" in the exchange field regardless of type
+        if (t.exchange.toLowerCase().includes('open')) {
+          return false;
+        }
+        
+        // Include only sell trades or trades with "close" in the exchange field
+        return t.type === 'sell' || t.exchange.toLowerCase().includes('close');
+      });
+      
+      const winningTrades = closingTrades.filter((t: any) => t.profitLoss > 0).length;
+      const winRate = closingTrades.length > 0 ? (winningTrades / closingTrades.length) * 100 : 0;
+      const totalProfitLoss = trades.reduce((sum: number, t: any) => sum + t.profitLoss, 0);
+      const averageProfitLoss = totalTrades > 0 ? totalProfitLoss / totalTrades : 0;
+      const totalVolume = trades.reduce((sum: number, t: any) => sum + (t.totalValue || 0), 0);
+      
+      return {
+        token,
+        totalTrades,
+        winningTrades,
+        winRate,
+        totalProfitLoss,
+        averageProfitLoss,
+        totalVolume
+      };
+    });
+  }, [filteredData, timeframe]); // Only depend on filteredData and timeframe
   
   // Loading state
   if (state.isLoading) {
@@ -255,10 +253,16 @@ const PerformanceAnalysis: React.FC = () => {
         {/* Get context from DataContext */}
         {(() => {
           const { state, dispatch } = useData();
-          const { selectedTokens, tradeType } = state;
+          const { selectedTokens, tradeType, filteredData } = state;
           
           // Get unique tokens from raw data
           const uniqueTokens = [...new Set(state.rawData.map(trade => trade.token))].sort();
+          
+          // Get tokens that are actually present in the filtered data
+          const tokensInFilteredData = React.useMemo(() =>
+            [...new Set(filteredData.map(trade => trade.token))],
+            [filteredData]
+          );
           
           // Handle token selection
           const handleTokenSelect = (token: string) => {
@@ -307,16 +311,25 @@ const PerformanceAnalysis: React.FC = () => {
                   </MenuButton>
                   <MenuList maxH="300px" overflowY="auto">
                     <MenuOptionGroup title="Select Tokens" type="checkbox">
-                      {uniqueTokens.map(token => (
-                        <MenuItemOption
-                          key={token}
-                          value={token}
-                          isChecked={selectedTokens.includes(token)}
-                          onClick={() => handleTokenSelect(token)}
-                        >
-                          {token}
-                        </MenuItemOption>
-                      ))}
+                      {uniqueTokens.map(token => {
+                        // A token is effectively selected if it's in the selectedTokens array
+                        // OR if selectedTokens is empty (meaning all tokens are selected)
+                        const isEffectivelySelected = selectedTokens.length === 0 || selectedTokens.includes(token);
+                        
+                        // A token is displayed in the data if it's effectively selected AND present in the filtered data
+                        const isDisplayedInData = isEffectivelySelected && tokensInFilteredData.includes(token);
+                        
+                        return (
+                          <MenuItemOption
+                            key={token}
+                            value={token}
+                            isChecked={isDisplayedInData}
+                            onClick={() => handleTokenSelect(token)}
+                          >
+                            {token}
+                          </MenuItemOption>
+                        );
+                      })}
                     </MenuOptionGroup>
                   </MenuList>
                 </Menu>
@@ -367,11 +380,18 @@ const PerformanceAnalysis: React.FC = () => {
                             value={dateRange[0] ? format(dateRange[0], 'yyyy-MM-dd') : ''}
                             onChange={(e) => {
                               const date = e.target.value ? new Date(e.target.value) : null;
-                              setDateRange([date, dateRange[1]]);
+                              const newDateRange: [Date | null, Date | null] = [date, dateRange[1]];
+                              setDateRange(newDateRange);
                               
-                              // Update filters in DataContext
+                              // Validate date range
                               if (date && dateRange[1]) {
-                                dispatch(updateFilters({ dateRange: [date, dateRange[1]] }));
+                                if (isAfter(date, dateRange[1])) {
+                                  setDateRangeError('Start date cannot be after end date');
+                                } else {
+                                  setDateRangeError(null);
+                                }
+                              } else {
+                                setDateRangeError(null);
                               }
                             }}
                           />
@@ -383,25 +403,47 @@ const PerformanceAnalysis: React.FC = () => {
                             value={dateRange[1] ? format(dateRange[1], 'yyyy-MM-dd') : ''}
                             onChange={(e) => {
                               const date = e.target.value ? new Date(e.target.value) : null;
-                              setDateRange([dateRange[0], date]);
+                              const newDateRange: [Date | null, Date | null] = [dateRange[0], date];
+                              setDateRange(newDateRange);
                               
-                              // Update filters in DataContext
+                              // Validate date range
                               if (dateRange[0] && date) {
-                                dispatch(updateFilters({ dateRange: [dateRange[0], date] }));
+                                if (isAfter(dateRange[0], date)) {
+                                  setDateRangeError('End date cannot be before start date');
+                                } else {
+                                  setDateRangeError(null);
+                                }
+                              } else {
+                                setDateRangeError(null);
                               }
                             }}
                           />
                         </Box>
+                        {dateRangeError && (
+                          <Text color="red.500" fontSize="sm">
+                            {dateRangeError}
+                          </Text>
+                        )}
                         <Button
                           colorScheme="blue"
                           size="sm"
                           onClick={() => {
                             if (dateRange[0] && dateRange[1]) {
+                              // Ensure start date is before or equal to end date
+                              const start = dateRange[0];
+                              const end = dateRange[1];
+                              
+                              if (isAfter(start, end)) {
+                                setDateRangeError('Invalid date range. Start date must be before end date.');
+                                return;
+                              }
+                              
                               dispatch(updateFilters({ dateRange }));
                               setIsDatePickerOpen(false);
+                              setDateRangeError(null);
                             }
                           }}
-                          isDisabled={!dateRange[0] || !dateRange[1]}
+                          isDisabled={!dateRange[0] || !dateRange[1] || dateRangeError !== null}
                         >
                           Apply
                         </Button>
@@ -1345,12 +1387,12 @@ const PerformanceAnalysis: React.FC = () => {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={[
-                          { range: 'Large Loss (>$1000)', count: filteredByTimeframe.filter(t => t.profitLoss <= -1000).length },
-                          { range: 'Medium Loss ($500-$1000)', count: filteredByTimeframe.filter(t => t.profitLoss < -500 && t.profitLoss > -1000).length },
-                          { range: 'Small Loss ($0-$500)', count: filteredByTimeframe.filter(t => t.profitLoss < 0 && t.profitLoss >= -500).length },
-                          { range: 'Small Profit ($0-$500)', count: filteredByTimeframe.filter(t => t.profitLoss > 0 && t.profitLoss <= 500).length },
-                          { range: 'Medium Profit ($500-$1000)', count: filteredByTimeframe.filter(t => t.profitLoss > 500 && t.profitLoss <= 1000).length },
-                          { range: 'Large Profit (>$1000)', count: filteredByTimeframe.filter(t => t.profitLoss > 1000).length }
+                          { range: 'Large Loss (>$1000)', count: filteredData.filter(t => t.profitLoss <= -1000).length },
+                          { range: 'Medium Loss ($500-$1000)', count: filteredData.filter(t => t.profitLoss < -500 && t.profitLoss > -1000).length },
+                          { range: 'Small Loss ($0-$500)', count: filteredData.filter(t => t.profitLoss < 0 && t.profitLoss >= -500).length },
+                          { range: 'Small Profit ($0-$500)', count: filteredData.filter(t => t.profitLoss > 0 && t.profitLoss <= 500).length },
+                          { range: 'Medium Profit ($500-$1000)', count: filteredData.filter(t => t.profitLoss > 500 && t.profitLoss <= 1000).length },
+                          { range: 'Large Profit (>$1000)', count: filteredData.filter(t => t.profitLoss > 1000).length }
                         ]}
                         margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                       >
