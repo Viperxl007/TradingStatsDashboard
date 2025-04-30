@@ -22,4 +22,6 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     
     # Run app
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Disable auto-reloader to prevent server restarts during scans
+    # while keeping debug mode for better error reporting
+    app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)

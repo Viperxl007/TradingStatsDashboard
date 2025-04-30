@@ -25,27 +25,41 @@ import {
   Select,
   HStack,
   useColorMode,
-  useToast
+  useToast,
+  RadioGroup,
+  Radio,
+  Stack
 } from '@chakra-ui/react';
 import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle } from 'react-icons/fi';
 import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
 import { scanEarningsToday, scanEarningsByDate } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
+import NakedOptionsDisplay from './NakedOptionsDisplay';
 
 /**
  * ScanResults Component
- * 
+ *
  * This component allows users to scan stocks with earnings announcements
  * and view options analysis results for all of them.
+ *
+ * It supports two strategy types:
+ * 1. calendar - For calendar spread opportunities
+ * 2. naked - For naked options selling opportunities
  */
-const ScanResults: React.FC = () => {
+interface ScanResultsProps {
+  scanType?: 'calendar' | 'naked';
+}
+
+const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) => {
   const { colorMode } = useColorMode();
   const { state, dispatch } = useData();
+  const [strategyType, setStrategyType] = useState<'calendar' | 'naked'>(initialScanType || 'calendar');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterRecommendation, setFilterRecommendation] = useState<string>('all');
   const [sortField, setSortField] = useState<string>('ticker');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const [customDate, setCustomDate] = useState<string>('');
+  const [selectedTicker, setSelectedTicker] = useState<string | null>(null);
   const toast = useToast();
   
   const { optionsData } = state;
@@ -137,6 +151,32 @@ const ScanResults: React.FC = () => {
     }
   };
 
+  const handleRowClick = (ticker: string) => {
+    if (strategyType === 'naked') {
+      const newSelectedTicker = selectedTicker === ticker ? null : ticker;
+      setSelectedTicker(newSelectedTicker);
+      
+      // Scroll to the naked options display if a ticker is selected
+      if (newSelectedTicker) {
+        // Add a small delay to ensure the component is rendered
+        setTimeout(() => {
+          const element = document.getElementById(`naked-options-${newSelectedTicker}`);
+          if (element) {
+            element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }
+        }, 100);
+      }
+    }
+  };
+
+  // Add console logging to debug naked options
+  React.useEffect(() => {
+    if (strategyType === 'naked' && optionsData.scanResults.length > 0) {
+      console.log('Recommended stocks:', optionsData.scanResults.filter(r => r.recommendation === 'Recommended'));
+      console.log('Stocks with naked options:', optionsData.scanResults.filter(r => r.optimalNakedOptions));
+    }
+  }, [strategyType, optionsData.scanResults]);
+
   // Filter and sort results
   const filteredResults = optionsData.scanResults
     .filter(result => {
@@ -189,9 +229,28 @@ const ScanResults: React.FC = () => {
   return (
     <Box>
       <Box mb={6}>
-        <Heading size="md" mb={4}>Scan Stocks with Earnings</Heading>
+        <Heading size="md" mb={4}>
+          Options Strategies Scanner
+        </Heading>
+        
+        <RadioGroup
+          onChange={(value) => {
+            setStrategyType(value as 'calendar' | 'naked');
+            setSelectedTicker(null); // Reset selected ticker when changing strategy
+          }}
+          value={strategyType}
+          mb={4}
+        >
+          <Stack direction="row" spacing={5}>
+            <Radio value="calendar" colorScheme="brand">Calendar Spreads</Radio>
+            <Radio value="naked" colorScheme="brand">Naked Options</Radio>
+          </Stack>
+        </RadioGroup>
+        
         <Text mb={4}>
-          Scan all stocks with earnings announcements and analyze their options data to find potential plays.
+          {strategyType === 'calendar'
+            ? 'Scan stocks with earnings announcements to find potential calendar spread opportunities.'
+            : 'Scan stocks with earnings announcements to find potential naked options selling opportunities.'}
         </Text>
         
         <Flex direction={{ base: 'column', md: 'row' }} mb={6} gap={4}>
@@ -281,12 +340,37 @@ const ScanResults: React.FC = () => {
             </HStack>
           </Flex>
           
-          <TableContainer>
+          {/* Display naked options details for selected ticker - MOVED ABOVE TABLE */}
+          {strategyType === 'naked' && selectedTicker && (
+            <Box
+              borderWidth="2px"
+              borderRadius="lg"
+              borderColor="brand.500"
+              bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+              boxShadow="lg"
+              mb={6}
+              overflow="hidden"
+            >
+              {filteredResults
+                .filter(result => result.ticker === selectedTicker && result.optimalNakedOptions)
+                .map(result => (
+                  <NakedOptionsDisplay
+                    key={result.ticker}
+                    ticker={result.ticker}
+                    nakedOptions={result.optimalNakedOptions!}
+                    compact={true}
+                  />
+                ))
+              }
+            </Box>
+          )}
+          
+          <TableContainer mt={4}>
             <Table variant="simple" size="sm">
               <Thead>
                 <Tr>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('ticker')}
                     color={sortField === 'ticker' ? 'brand.500' : undefined}
                   >
@@ -294,8 +378,8 @@ const ScanResults: React.FC = () => {
                     {sortField === 'ticker' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
                   <Th>Company</Th>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('price')}
                     color={sortField === 'price' ? 'brand.500' : undefined}
                     isNumeric
@@ -303,8 +387,8 @@ const ScanResults: React.FC = () => {
                     Price
                     {sortField === 'price' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('avgVolume')}
                     color={sortField === 'avgVolume' ? 'brand.500' : undefined}
                     isNumeric
@@ -312,8 +396,8 @@ const ScanResults: React.FC = () => {
                     Avg Volume
                     {sortField === 'avgVolume' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('iv30Rv30')}
                     color={sortField === 'iv30Rv30' ? 'brand.500' : undefined}
                     isNumeric
@@ -321,8 +405,8 @@ const ScanResults: React.FC = () => {
                     IV/RV
                     {sortField === 'iv30Rv30' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('tsSlope')}
                     color={sortField === 'tsSlope' ? 'brand.500' : undefined}
                     isNumeric
@@ -331,19 +415,32 @@ const ScanResults: React.FC = () => {
                     {sortField === 'tsSlope' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
                   <Th>Expected Move</Th>
-                  <Th 
-                    cursor="pointer" 
+                  <Th
+                    cursor="pointer"
                     onClick={() => handleSort('recommendation')}
                     color={sortField === 'recommendation' ? 'brand.500' : undefined}
                   >
                     Recommendation
                     {sortField === 'recommendation' && (sortDirection === 'asc' ? ' ↑' : ' ↓')}
                   </Th>
+                  {strategyType === 'naked' && (
+                    <Th>Naked Options</Th>
+                  )}
                 </Tr>
               </Thead>
               <Tbody>
                 {filteredResults.map((result) => (
-                  <Tr key={result.ticker}>
+                  <Tr
+                    key={result.ticker}
+                    onClick={() => handleRowClick(result.ticker)}
+                    cursor={strategyType === 'naked' && result.optimalNakedOptions ? 'pointer' : 'default'}
+                    bg={selectedTicker === result.ticker
+                      ? (colorMode === 'dark' ? 'brand.900' : 'brand.50')
+                      : undefined}
+                    _hover={strategyType === 'naked' && result.optimalNakedOptions
+                      ? { bg: colorMode === 'dark' ? 'brand.800' : 'brand.50' }
+                      : undefined}
+                  >
                     <Td fontWeight="bold">{result.ticker}</Td>
                     <Td>{result.companyName || '-'}</Td>
                     <Td isNumeric>${result.currentPrice !== undefined && result.currentPrice !== null ? result.currentPrice.toFixed(2) : 'N/A'}</Td>
@@ -389,6 +486,15 @@ const ScanResults: React.FC = () => {
                         {result.recommendation}
                       </Badge>
                     </Td>
+                    {strategyType === 'naked' && (
+                      <Td>
+                        {result.optimalNakedOptions ? (
+                          <Badge colorScheme="green" fontSize="sm" px={2} py={1}>Available</Badge>
+                        ) : (
+                          <Badge colorScheme="gray" fontSize="sm" px={2} py={1}>None</Badge>
+                        )}
+                      </Td>
+                    )}
                   </Tr>
                 ))}
                 

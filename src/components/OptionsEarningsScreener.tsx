@@ -21,7 +21,7 @@ import TradeTracker from './TradeTracker';
  * This component serves as the container for the Options Earnings Screener feature.
  * It includes three tabs:
  * 1. Direct Search - For analyzing individual stocks
- * 2. Scan - For scanning stocks with earnings announcements
+ * 2. Options Strategies - For scanning stocks with earnings announcements for different strategy types
  * 3. Trade Tracker - For tracking trades using a Google Sheets spreadsheet
  */
 const OptionsEarningsScreener: React.FC = () => {
@@ -42,16 +42,16 @@ const OptionsEarningsScreener: React.FC = () => {
         </Text>
       </Box>
 
-      <Tabs 
-        variant="line" 
-        colorScheme="brand" 
-        index={activeTab} 
+      <Tabs
+        variant="line"
+        colorScheme="brand"
+        index={activeTab}
         onChange={handleTabChange}
         isLazy
       >
         <TabList>
           <Tab>Direct Search</Tab>
-          <Tab>Scan</Tab>
+          <Tab>Options Strategies</Tab>
           <Tab>Trade Tracker</Tab>
         </TabList>
 

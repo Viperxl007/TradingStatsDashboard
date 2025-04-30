@@ -112,6 +112,39 @@ export interface OptimalCalendarSpread {
 }
 
 /**
+ * Naked option details
+ */
+export interface NakedOption {
+  type: 'call' | 'put';          // Option type
+  strike: number;                // Strike price
+  expiration: string;            // Expiration date
+  premium: number;               // Option premium
+  iv: number;                    // Implied volatility
+  delta: number | null;          // Option delta
+  probOtm: number;               // Probability of finishing out-of-the-money
+  roc: number;                   // Return on capital
+  marginRequirement: number;     // Margin requirement
+  maxLoss: number | null;        // Maximum possible loss (null for unlimited)
+  liquidity: number;             // Liquidity score
+  breakEven: number;             // Break-even price (Strike - Premium for puts, Strike + Premium for calls)
+  breakEvenPct: number;          // Break-even price as percentage from current price
+  outsideExpectedMove: string;   // Whether break-even is outside the expected move range ("true" or "false")
+  score: number;                 // Algorithmic score
+}
+
+/**
+ * Optimal naked options details
+ */
+export interface OptimalNakedOptions {
+  expectedMove: {
+    percent: number;             // Expected move as a percentage
+    dollars: number;             // Expected move in dollars
+  };
+  daysToExpiration: number;      // Days to expiration
+  topOptions: NakedOption[];     // Top naked option opportunities
+}
+
+/**
  * Options analysis result
  */
 export interface OptionsAnalysisResult {
@@ -125,6 +158,7 @@ export interface OptionsAnalysisResult {
   timestamp: number;             // Timestamp of the analysis
   error?: string;                // Error message if analysis failed
   optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
+  optimalNakedOptions?: OptimalNakedOptions;    // Optimal naked options (if available)
 }
 
 /**

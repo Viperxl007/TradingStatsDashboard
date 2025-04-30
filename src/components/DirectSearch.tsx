@@ -35,6 +35,7 @@ import { analyzeOptions } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import TradingViewWidget from './TradingViewWidget';
 import EarningsHistoryChart from './EarningsHistoryChart';
+import NakedOptionsDisplay from './NakedOptionsDisplay';
 
 declare global {
   interface Window {
@@ -303,6 +304,31 @@ const DirectSearch: React.FC = () => {
                           )}
                         </Text>
                       </Stack>
+                    </>
+                  )}
+                  
+                  {/* Naked Options Section - Show if optimalNakedOptions is available */}
+                  {optionsData.analysisResult.optimalNakedOptions && (
+                    <>
+                      <Divider my={4} />
+                      <Heading size="sm" mb={3}>
+                        Naked Options Opportunities
+                      </Heading>
+                      <Box
+                        borderWidth="2px"
+                        borderRadius="lg"
+                        borderColor="brand.500"
+                        bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+                        boxShadow="lg"
+                        mb={6}
+                        overflow="hidden"
+                      >
+                        <NakedOptionsDisplay
+                          ticker={optionsData.analysisResult.ticker}
+                          nakedOptions={optionsData.analysisResult.optimalNakedOptions}
+                          compact={true}
+                        />
+                      </Box>
                     </>
                   )}
                 </CardBody>

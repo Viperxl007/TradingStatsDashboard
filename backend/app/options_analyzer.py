@@ -482,6 +482,305 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
         return None
 
 
+def find_optimal_naked_options(ticker):
+    """
+    Find the optimal naked options for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        dict or None: Details of the optimal naked options, or None if no worthwhile options are found
+    """
+    logger.info(f"NAKED OPTIONS DEBUG: Starting search for {ticker}")
+    try:
+        # Get stock data
+        stock = get_stock_data(ticker)
+        if not stock or len(stock.options) == 0:
+            logger.warning(f"NAKED OPTIONS DEBUG: No options data found for {ticker}")
+            return None
+        
+        # Get current price
+        current_price = get_current_price(stock)
+        if current_price is None:
+            logger.warning(f"Could not get current price for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} current price: ${current_price}")
+        
+        # Get expiration dates
+        exp_dates = stock.options
+        if not exp_dates:
+            logger.warning(f"No expiration dates found for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} available expiration dates: {exp_dates}")
+        
+        # Convert to datetime objects for sorting
+        date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+        sorted_dates = sorted(date_objs)
+        
+        # Filter for dates in the future
+        today = datetime.today().date()
+        future_dates = [d for d in sorted_dates if d > today]
+        
+        if not future_dates:
+            logger.warning(f"No future expiration dates found for {ticker}")
+            return None
+        
+        # Get the first expiration date after earnings
+        target_exp = future_dates[0]
+        target_exp_str = target_exp.strftime("%Y-%m-%d")
+        days_to_expiration = (target_exp - today).days
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} target expiration: {target_exp_str}, days to expiration: {days_to_expiration}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} all available expirations: {[d.strftime('%Y-%m-%d') for d in future_dates]}")
+        
+        # Get options chain for the target expiration
+        try:
+            chain = stock.option_chain(target_exp_str)
+            calls = chain.calls
+            puts = chain.puts
+            
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} options chain retrieved for {target_exp_str}")
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} calls count: {len(calls)}, puts count: {len(puts)}")
+            
+            if not calls.empty:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} call strikes: {sorted(calls['strike'].unique().tolist())}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} call bid/ask sample: {calls[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if not puts.empty:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} put strikes: {sorted(puts['strike'].unique().tolist())}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} put bid/ask sample: {puts[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if calls.empty or puts.empty:
+                logger.warning(f"NAKED OPTIONS DEBUG: No options data found for {ticker} on {target_exp_str}")
+                return None
+        except Exception as e:
+            logger.error(f"NAKED OPTIONS DEBUG: Error getting options chain for {ticker} on {target_exp_str}: {str(e)}")
+            return None
+        
+        # Calculate expected move based on straddle price
+        atm_call_idx = (calls['strike'] - current_price).abs().idxmin()
+        atm_put_idx = (puts['strike'] - current_price).abs().idxmin()
+        
+        atm_call = calls.loc[atm_call_idx]
+        atm_put = puts.loc[atm_put_idx]
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} current price: ${current_price}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} ATM call strike: ${atm_call['strike']}, bid: {atm_call['bid']}, ask: {atm_call['ask']}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} ATM put strike: ${atm_put['strike']}, bid: {atm_put['bid']}, ask: {atm_put['ask']}")
+        
+        call_mid = (atm_call['bid'] + atm_call['ask']) / 2 if atm_call['bid'] > 0 and atm_call['ask'] > 0 else 0
+        put_mid = (atm_put['bid'] + atm_put['ask']) / 2 if atm_put['bid'] > 0 and atm_put['ask'] > 0 else 0
+        
+        straddle_price = call_mid + put_mid
+        expected_move_pct = straddle_price / current_price
+        expected_move_dollars = current_price * expected_move_pct
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} call mid: ${call_mid}, put mid: ${put_mid}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} straddle price: ${straddle_price}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} expected move: ${expected_move_dollars:.2f} ({expected_move_pct:.2%})")
+        
+        # Get price history for historical earnings moves
+        price_history = stock.history(period='1y')
+        
+        # Calculate historical volatility
+        historical_vol = yang_zhang(price_history)
+        
+        # Define a function to evaluate a single option
+        def evaluate_option(option, is_call):
+            try:
+                strike = option['strike']
+                bid = option['bid']
+                ask = option['ask']
+                iv = option['impliedVolatility']
+                delta = abs(option['delta']) if 'delta' in option else None
+                
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} Evaluating {is_call and 'call' or 'put'} at strike ${strike}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: bid=${bid}, ask=${ask}, IV={iv:.2f}, delta={delta}")
+                
+                # Skip if no valid pricing
+                if bid <= 0 or ask <= 0:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: REJECTED - Invalid pricing - bid: ${bid}, ask: ${ask}")
+                    return None
+                
+                # Calculate mid price
+                mid_price = (bid + ask) / 2
+                
+                # Calculate distance from current price
+                distance_pct = abs(strike - current_price) / current_price
+                
+                # Calculate return on capital (ROC)
+                if is_call:
+                    max_loss = float('inf')  # Unlimited for calls
+                    margin_req = current_price * 0.2  # Simplified margin calculation
+                else:
+                    max_loss = strike  # For puts, max loss is the strike price
+                    margin_req = min(strike * 0.2, strike - (current_price * 0.1))  # Simplified margin calculation
+                
+                roc = mid_price / margin_req
+                
+                # Calculate probability metrics
+                if delta is not None:
+                    prob_otm = 1 - delta if is_call else delta
+                else:
+                    # Estimate delta if not available
+                    moneyness = (current_price / strike) if is_call else (strike / current_price)
+                    prob_otm = 0.5 + (0.5 * (1 - moneyness) / expected_move_pct) if expected_move_pct > 0 else 0.5
+                
+                # Calculate IV crush potential
+                # Typically IV drops by 30-50% after earnings
+                iv_crush_potential = iv * 0.4  # Assuming 40% IV reduction
+                
+                # Calculate liquidity score
+                spread_pct = (ask - bid) / mid_price
+                volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 1
+                open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 1
+                liquidity_score = min(10.0, (1 / spread_pct) * np.sqrt(volume) * np.sqrt(open_interest) / 100.0)
+                
+                # Calculate composite score
+                # Weights for different factors
+                iv_weight = 0.3
+                delta_weight = 0.25
+                premium_weight = 0.25
+                liquidity_weight = 0.1
+                historical_weight = 0.1
+                
+                # Individual component scores
+                iv_score = (iv / historical_vol) * iv_weight if historical_vol > 0 else 0
+                delta_score = prob_otm * delta_weight
+                premium_score = (roc * 10) * premium_weight  # Scale ROC to 0-10 range
+                liquidity_score = liquidity_score * liquidity_weight
+                
+                # Historical behavior score - simplified for now
+                historical_score = historical_weight * 0.5  # Placeholder
+                
+                # Composite score
+                score = iv_score + delta_score + premium_score + liquidity_score + historical_score
+                
+                # Calculate break-even price
+                break_even = float(strike - mid_price) if not is_call else float(strike + mid_price)
+                break_even_pct = float((break_even - current_price) / current_price * 100)
+                
+                # Check if break-even is outside expected move range
+                expected_move_dollars = current_price * (expected_move_pct / 100)
+                expected_move_lower = current_price - expected_move_dollars
+                expected_move_upper = current_price + expected_move_dollars
+                outside_expected_move = (not is_call and break_even < expected_move_lower) or \
+                                       (is_call and break_even > expected_move_upper)
+                
+                # Add bonus to score if break-even is outside expected move
+                bonus_score = 0
+                if outside_expected_move:
+                    bonus_score = score * 0.2  # 20% bonus
+                    score += bonus_score
+                
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: Break-even ${break_even:.2f} ({break_even_pct:.2f}%), Outside expected move: {outside_expected_move}")
+                
+                # Return option details with score
+                return {
+                    'type': 'call' if is_call else 'put',
+                    'strike': float(strike),
+                    'expiration': target_exp_str,
+                    'premium': float(mid_price),
+                    'iv': float(iv),
+                    'delta': float(delta) if delta is not None else None,
+                    'probOtm': float(prob_otm),
+                    'roc': float(roc),
+                    'marginRequirement': float(margin_req),
+                    'maxLoss': float(max_loss) if max_loss != float('inf') else None,
+                    'liquidity': float(liquidity_score / liquidity_weight),  # Normalize back to 0-10
+                    'breakEven': break_even,
+                    'breakEvenPct': break_even_pct,
+                    'outsideExpectedMove': "true" if outside_expected_move else "false",  # Convert boolean to string for JSON serialization
+                    'score': float(score)
+                }
+            except Exception as e:
+                logger.warning(f"Error evaluating option: {str(e)}")
+                return None
+        
+        # Filter for OTM options with appropriate delta range
+        otm_calls = calls[calls['strike'] > current_price]
+        otm_puts = puts[puts['strike'] < current_price]
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM calls count: {len(otm_calls)}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM puts count: {len(otm_puts)}")
+        
+        if not otm_calls.empty:
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM call strikes: {sorted(otm_calls['strike'].unique().tolist())}")
+        
+        if not otm_puts.empty:
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM put strikes: {sorted(otm_puts['strike'].unique().tolist())}")
+        
+        # Evaluate all options
+        call_results = []
+        put_results = []
+        
+        # Use a more lenient delta range (0.10-0.50 instead of 0.15-0.40)
+        min_delta = 0.10
+        max_delta = 0.50
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} Using delta range: {min_delta}-{max_delta}")
+        
+        for _, call in otm_calls.iterrows():
+            result = evaluate_option(call, True)
+            if result:
+                if result['delta'] is None or (min_delta <= result['delta'] <= max_delta):
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} ACCEPTED call at strike ${result['strike']}: Delta {result['delta']} within range {min_delta}-{max_delta}")
+                    call_results.append(result)
+                else:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} REJECTED call at strike ${result['strike']}: Delta {result['delta']} outside range {min_delta}-{max_delta}")
+        
+        for _, put in otm_puts.iterrows():
+            result = evaluate_option(put, False)
+            if result:
+                if result['delta'] is None or (min_delta <= result['delta'] <= max_delta):
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} ACCEPTED put at strike ${result['strike']}: Delta {result['delta']} within range {min_delta}-{max_delta}")
+                    put_results.append(result)
+                else:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} REJECTED put at strike ${result['strike']}: Delta {result['delta']} outside range {min_delta}-{max_delta}")
+        
+        # Sort by score
+        call_results.sort(key=lambda x: x['score'], reverse=True)
+        put_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Get top options
+        top_calls = call_results[:3] if call_results else []
+        top_puts = put_results[:3] if put_results else []
+        
+        # Combine and sort
+        top_options = sorted(top_calls + top_puts, key=lambda x: x['score'], reverse=True)
+        
+        if not top_options:
+            logger.warning(f"NAKED OPTIONS DEBUG: {ticker} No suitable naked options found")
+            # Log more details about why no options were found
+            logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Call results: {len(call_results)}, Put results: {len(put_results)}")
+            
+            # Do NOT create fake data - return None if no valid options are found
+            return None
+        
+        # Return top options
+        result = {
+            'expectedMove': {
+                'percent': float(expected_move_pct),
+                'dollars': float(expected_move_dollars)
+            },
+            'daysToExpiration': days_to_expiration,
+            'topOptions': top_options[:5]  # Return top 5 options
+        }
+        
+        logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Returning naked options result with {len(top_options)} options")
+        logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Top options: {[f'{opt['type'].upper()} ${opt['strike']} (score: {opt['score']})' for opt in top_options[:3]]}")
+        return result
+    
+    except Exception as e:
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Error finding optimal naked options: {str(e)}")
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Exception details: {type(e).__name__}")
+        import traceback
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+        return None
+
 def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
     """
     Calculate Yang-Zhang volatility estimator.
@@ -719,6 +1018,19 @@ def analyze_options(ticker):
             optimal_spread = find_optimal_calendar_spread(ticker)
             if optimal_spread:
                 result["optimalCalendarSpread"] = optimal_spread
+            
+            # Find optimal naked options if all metrics pass
+            # Always try to find naked options for recommended stocks
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} Calling find_optimal_naked_options from analyze_options")
+            optimal_naked = find_optimal_naked_options(ticker)
+            
+            if optimal_naked:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} Found optimal naked options with {len(optimal_naked.get('topOptions', []))} options")
+            else:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} No optimal naked options found")
+                
+            # Always set optimalNakedOptions for recommended stocks
+            result["optimalNakedOptions"] = optimal_naked
         
         return result
     
