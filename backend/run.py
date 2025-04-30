@@ -10,7 +10,7 @@ import logging
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,  # Changed from INFO to DEBUG to capture all debug logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 

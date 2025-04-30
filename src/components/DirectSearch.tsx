@@ -264,6 +264,47 @@ const DirectSearch: React.FC = () => {
                       </Badge>
                     </Flex>
                   </Stack>
+                  
+                  {/* Optimal Spread Section - Always show if optimalCalendarSpread is available */}
+                  {optionsData.analysisResult.optimalCalendarSpread && (
+                    <>
+                      <Divider my={4} />
+                      <Heading size="sm" mb={3}>
+                        Optimal Spread
+                        {optionsData.analysisResult.optimalCalendarSpread.metricsPass === "false" && (
+                          <Badge ml={2} colorScheme="orange">Metrics Not Met</Badge>
+                        )}
+                      </Heading>
+                      <Stack spacing={3}>
+                        <Flex align="center">
+                          <Text fontWeight="medium">Strike Price:</Text>
+                          <Text ml={2}>${optionsData.analysisResult.optimalCalendarSpread.strike.toFixed(2)}</Text>
+                        </Flex>
+                        <Flex align="center">
+                          <Text fontWeight="medium">Front Month:</Text>
+                          <Text ml={2}>{new Date(optionsData.analysisResult.optimalCalendarSpread.frontMonth).toLocaleDateString()}</Text>
+                        </Flex>
+                        <Flex align="center">
+                          <Text fontWeight="medium">Back Month:</Text>
+                          <Text ml={2}>{new Date(optionsData.analysisResult.optimalCalendarSpread.backMonth).toLocaleDateString()}</Text>
+                        </Flex>
+                        <Flex align="center">
+                          <Text fontWeight="medium">Spread Cost:</Text>
+                          <Text ml={2}>${optionsData.analysisResult.optimalCalendarSpread.spreadCost.toFixed(2)}</Text>
+                        </Flex>
+                        <Flex align="center">
+                          <Text fontWeight="medium">IV Differential:</Text>
+                          <Text ml={2}>{(optionsData.analysisResult.optimalCalendarSpread.ivDifferential * 100).toFixed(2)}%</Text>
+                        </Flex>
+                        <Text fontSize="sm" fontStyle="italic" mt={2}>
+                          This is the algorithmically identified optimal calendar spread based on liquidity, IV differential, and cost efficiency.
+                          {optionsData.analysisResult.optimalCalendarSpread.metricsPass === "false" && (
+                            <Text as="span" color="orange.500"> Note: This ticker does not meet all the recommended metrics for a calendar spread.</Text>
+                          )}
+                        </Text>
+                      </Stack>
+                    </>
+                  )}
                 </CardBody>
               </Card>
             </GridItem>

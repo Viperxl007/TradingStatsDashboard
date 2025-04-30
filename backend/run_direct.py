@@ -15,10 +15,15 @@ import importlib.util
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.INFO,  # Changed back to INFO to reduce noise
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Suppress excessive debug logging from external libraries
+logging.getLogger('yfinance').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('peewee').setLevel(logging.WARNING)
 
 # Check for required packages
 required_packages = ['flask', 'flask_cors', 'yfinance', 'numpy', 'scipy', 'finance_calendars', 'pandas']
@@ -113,6 +118,689 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
     else:
         return result.dropna()
 
+def get_liquidity_score(stock, expiration, strike):
+    """
+    Calculate a liquidity score for an option.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        expiration (str): Option expiration date in YYYY-MM-DD format
+        strike (float): Strike price
+        
+    Returns:
+        float: Liquidity score (higher is better)
+    """
+    try:
+        chain = stock.option_chain(expiration)
+        calls = chain.calls
+        
+        if calls.empty:
+            logger.debug(f"No calls data for {expiration} at strike {strike}")
+            return 0.0
+        
+        # Find the option with the given strike
+        options = calls[calls['strike'] == strike]
+        
+        if options.empty:
+            logger.debug(f"No options at strike {strike} for {expiration}")
+            return 0.0
+        
+        option = options.iloc[0]
+        
+        # Calculate bid-ask spread as a percentage of the mid price
+        bid = option['bid']
+        ask = option['ask']
+        
+        if bid == 0 or ask == 0:
+            logger.debug(f"Bid or ask is zero for {expiration} at strike {strike}")
+            return 0.0
+        
+        mid = (bid + ask) / 2.0
+        spread_pct = (ask - bid) / mid
+        
+        # Volume and open interest factors
+        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 1
+        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 1
+        
+        # Less punitive liquidity scoring - using square root instead of log10
+        liquidity_score = (1 / spread_pct) * np.sqrt(volume) * np.sqrt(open_interest)
+        
+        # Cap and normalize
+        return min(10.0, max(0.0, liquidity_score / 100.0))
+    except Exception as e:
+        logger.debug(f"Error calculating liquidity score: {str(e)}")
+        return 0.0
+
+def get_atm_iv(stock, expiration, strike):
+    """
+    Get at-the-money implied volatility for a specific expiration and strike.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        expiration (str): Option expiration date in YYYY-MM-DD format
+        strike (float): Strike price
+        
+    Returns:
+        float: Implied volatility
+    """
+    try:
+        chain = stock.option_chain(expiration)
+        calls = chain.calls
+        puts = chain.puts
+        
+        # Check if we have any options data
+        if calls.empty and puts.empty:
+            logger.warning(f"IV DATA: No options data for {stock.ticker} {expiration}")
+            return 0.0
+        
+        # Initialize variables
+        call_iv = 0.0
+        put_iv = 0.0
+        has_call = False
+        has_put = False
+        
+        # Check for call options at this strike
+        if not calls.empty:
+            call_options = calls[calls['strike'] == strike]
+            if not call_options.empty:
+                has_call = True
+                call_iv = call_options.iloc[0]['impliedVolatility']
+                call_bid = call_options.iloc[0]['bid']
+                call_ask = call_options.iloc[0]['ask']
+                has_call_pricing = call_bid > 0 and call_ask > 0
+                
+                if call_iv > 0:
+                    logger.warning(f"IV DATA: Call option for {stock.ticker} {expiration} strike ${strike}")
+                    logger.warning(f"  Call IV: {call_iv:.4f}, Bid/Ask: {call_bid}/{call_ask}, Valid pricing: {has_call_pricing}")
+        
+        # Check for put options at this strike
+        if not puts.empty:
+            put_options = puts[puts['strike'] == strike]
+            if not put_options.empty:
+                has_put = True
+                put_iv = put_options.iloc[0]['impliedVolatility']
+                put_bid = put_options.iloc[0]['bid']
+                put_ask = put_options.iloc[0]['ask']
+                has_put_pricing = put_bid > 0 and put_ask > 0
+                
+                if put_iv > 0:
+                    logger.warning(f"IV DATA: Put option for {stock.ticker} {expiration} strike ${strike}")
+                    logger.warning(f"  Put IV: {put_iv:.4f}, Bid/Ask: {put_bid}/{put_ask}, Valid pricing: {has_put_pricing}")
+        
+        # If neither call nor put options exist at this strike
+        if not has_call and not has_put:
+            logger.warning(f"IV DATA: No options at strike ${strike} for {stock.ticker} {expiration}")
+            return 0.0
+        
+        # If both call and put have IV, use average
+        if call_iv > 0 and put_iv > 0:
+            avg_iv = (call_iv + put_iv) / 2.0
+            logger.warning(f"IV DATA: Using average IV: {avg_iv:.4f} for {stock.ticker} {expiration} strike ${strike}")
+            return avg_iv
+        # Otherwise use whichever is available
+        elif call_iv > 0:
+            logger.warning(f"IV DATA: Using call IV: {call_iv:.4f} for {stock.ticker} {expiration} strike ${strike}")
+            return call_iv
+        elif put_iv > 0:
+            logger.warning(f"IV DATA: Using put IV: {put_iv:.4f} for {stock.ticker} {expiration} strike ${strike}")
+            return put_iv
+        else:
+            logger.warning(f"IV DATA: No valid IV data for {stock.ticker} {expiration} at strike ${strike}")
+            return 0.0
+    except Exception as e:
+        logger.debug(f"Error getting ATM IV: {str(e)}")
+        return 0.0
+
+def calculate_spread_cost(stock, front_month, back_month, strike):
+    """
+    Calculate the cost of a calendar spread.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        front_month (str): Front month expiration in YYYY-MM-DD format
+        back_month (str): Back month expiration in YYYY-MM-DD format
+        strike (float): Strike price
+        
+    Returns:
+        float: Cost of the calendar spread
+    """
+    try:
+        # Get front month option
+        front_chain = stock.option_chain(front_month)
+        front_calls = front_chain.calls
+        
+        # Get back month option
+        back_chain = stock.option_chain(back_month)
+        back_calls = back_chain.calls
+        
+        if front_calls.empty or back_calls.empty:
+            logger.debug(f"Missing options data for {front_month} or {back_month}")
+            return 0.0
+        
+        # Find the options with the given strike
+        front_options = front_calls[front_calls['strike'] == strike]
+        back_options = back_calls[back_calls['strike'] == strike]
+        
+        if front_options.empty or back_options.empty:
+            return 0.0
+        
+        # Calculate mid prices
+        front_bid = front_options.iloc[0]['bid']
+        front_ask = front_options.iloc[0]['ask']
+        
+        # Handle missing or zero bid/ask data
+        if front_bid == 0 or pd.isna(front_bid):
+            front_bid = front_options.iloc[0]['lastPrice'] * 0.9 if 'lastPrice' in front_options.columns else 0.0
+        if front_ask == 0 or pd.isna(front_ask):
+            front_ask = front_options.iloc[0]['lastPrice'] * 1.1 if 'lastPrice' in front_options.columns else 0.0
+            
+        front_mid = (front_bid + front_ask) / 2.0 if front_bid > 0 and front_ask > 0 else 0.0
+        
+        back_bid = back_options.iloc[0]['bid']
+        back_ask = back_options.iloc[0]['ask']
+        
+        # Handle missing or zero bid/ask data
+        if back_bid == 0 or pd.isna(back_bid):
+            back_bid = back_options.iloc[0]['lastPrice'] * 0.9 if 'lastPrice' in back_options.columns else 0.0
+        if back_ask == 0 or pd.isna(back_ask):
+            back_ask = back_options.iloc[0]['lastPrice'] * 1.1 if 'lastPrice' in back_options.columns else 0.0
+            
+        back_mid = (back_bid + back_ask) / 2.0 if back_bid > 0 and back_ask > 0 else 0.0
+        
+        # Check if we have valid bid/ask data
+        front_has_price = front_bid > 0 and front_ask > 0
+        back_has_price = back_bid > 0 and back_ask > 0
+        
+        # Log detailed information about the options data
+        logger.warning(f"SPREAD PRICING CHECK: {stock.ticker} {front_month}/{back_month} strike ${strike}")
+        logger.warning(f"  Front month option:")
+        logger.warning(f"    Bid: {front_bid}, Ask: {front_ask}, Mid: {front_mid}")
+        logger.warning(f"    Valid pricing: {front_has_price}")
+        logger.warning(f"  Back month option:")
+        logger.warning(f"    Bid: {back_bid}, Ask: {back_ask}, Mid: {back_mid}")
+        logger.warning(f"    Valid pricing: {back_has_price}")
+        
+        if not front_has_price or not back_has_price:
+            # This is the critical issue - log when we're missing pricing data
+            logger.warning(f"  PRICING DATA ISSUE: Missing valid bid/ask data")
+            return 0.0
+        
+        # Calendar spread cost = back month price - front month price
+        return back_mid - front_mid
+    except Exception as e:
+        logger.debug(f"Error calculating spread cost: {str(e)}")
+        return 0.0
+
+def find_closest_expiration(exp_dates, target_date):
+    """
+    Find the closest expiration date to a target date.
+    
+    Args:
+        exp_dates (list): List of date strings in YYYY-MM-DD format
+        target_date (date): Target date to find closest expiration to
+        
+    Returns:
+        str: Closest expiration date in YYYY-MM-DD format
+        
+    Raises:
+        ValueError: If no expiration dates are provided
+    """
+    if not exp_dates:
+        raise ValueError("No expiration dates provided")
+    
+    date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+    
+    # Find the date with the minimum absolute difference from target_date
+    closest_date = min(date_objs, key=lambda date_obj: abs((date_obj - target_date).days))
+    
+    return closest_date.strftime("%Y-%m-%d")
+
+def get_common_strikes(stock, front_month, back_month):
+    """
+    Get strike prices that exist in both front and back month expirations.
+    
+    Args:
+        stock (yf.Ticker): Stock ticker object
+        front_month (str): Front month expiration date in YYYY-MM-DD format
+        back_month (str): Back month expiration date in YYYY-MM-DD format
+        
+    Returns:
+        list: List of strike prices that exist in both expirations, sorted
+    """
+    try:
+        # Get option chains for both expirations
+        front_chain = stock.option_chain(front_month)
+        back_chain = stock.option_chain(back_month)
+        
+        # Get unique strikes from each expiration
+        front_strikes = set(front_chain.calls['strike'].unique())
+        back_strikes = set(back_chain.calls['strike'].unique())
+        
+        # Find the intersection (common strikes)
+        common_strikes = list(front_strikes.intersection(back_strikes))
+        
+        logger.warning(f"COMMON STRIKES: {stock.ticker} {front_month}/{back_month}")
+        logger.warning(f"  Front month strikes: {len(front_strikes)}, Back month strikes: {len(back_strikes)}")
+        logger.warning(f"  Common strikes: {len(common_strikes)} - {sorted(common_strikes)}")
+        
+        return sorted(common_strikes)
+    except Exception as e:
+        logger.error(f"Error getting common strikes: {str(e)}")
+        return []
+
+def get_strikes_near_price(stock, expiration, current_price, range_percent=15):
+    """
+    Get option strikes near the current price.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        expiration (str): Option expiration date in YYYY-MM-DD format
+        current_price (float): Current stock price
+        range_percent (float): Percentage range around current price to include
+        
+    Returns:
+        list: List of strike prices near the current price
+    """
+    try:
+        # Calculate price range
+        min_price = current_price * (1 - range_percent/100)
+        max_price = current_price * (1 + range_percent/100)
+        
+        # Get option chain
+        chain = stock.option_chain(expiration)
+        calls = chain.calls
+        
+        if calls.empty:
+            logger.debug(f"No calls data for {expiration}")
+            return []
+        
+        # Get all available strikes
+        all_strikes = calls['strike'].unique()
+        
+        # Filter strikes within range
+        strikes = [strike for strike in all_strikes if min_price <= strike <= max_price]
+        
+        return strikes
+    except Exception as e:
+        logger.debug(f"Error getting strikes near price: {str(e)}")
+        return []
+
+def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_liquidity,
+                          strike_distance_from_atm, days_between_expirations=30,
+                          days_to_front_expiration=14):
+    """
+    Calculate a composite score for a potential calendar spread.
+    """
+    logger.debug(f"Calculating spread score with: iv_diff={iv_differential}, cost={spread_cost}, " +
+                f"liquidity={front_liquidity}/{back_liquidity}, distance={strike_distance_from_atm}, " +
+                f"days_between={days_between_expirations}, days_to_front={days_to_front_expiration}")
+    
+    # Avoid division by zero
+    if spread_cost <= 0:
+        logger.debug("Score calculation aborted: spread_cost <= 0")
+        return 0.0
+    
+    # IV differential factors
+    iv_diff_score = iv_differential * 100  # Scale up for scoring
+    
+    # IV differential to cost ratio (bang for buck)
+    cost_efficiency = iv_differential / spread_cost
+    
+    # Liquidity factor (average of front and back month)
+    liquidity_score = (front_liquidity + back_liquidity) / 2.0
+    
+    # Delta neutrality factor (closer to ATM is better)
+    delta_neutrality = 1.0 / (1.0 + strike_distance_from_atm)
+    
+    # Days between expirations factor (optimal is 30-45 days)
+    days_between_factor = 1.0 - abs(days_between_expirations - 37.5) / 37.5
+    
+    # Days to front expiration factor (optimal is 2-5 days after earnings)
+    days_to_front_factor = 1.0 - abs(days_to_front_expiration - 3.5) / 14.0
+    
+    # Calculate individual components for logging
+    iv_component = iv_diff_score * 0.3
+    cost_component = cost_efficiency * 50 * 0.3  # Reduced scaling factor from 100 to 50
+    liquidity_component = liquidity_score * 0.15
+    delta_component = delta_neutrality * 0.1
+    days_between_component = days_between_factor * 0.1
+    days_to_front_component = days_to_front_factor * 0.05
+    
+    score = (
+        iv_component +
+        cost_component +
+        liquidity_component +
+        delta_component +
+        days_between_component +
+        days_to_front_component
+    )
+    
+    # Only log scores that are close to or above the threshold
+    if score >= 0.5:
+        logger.info(f"Spread score: {score:.2f} (threshold: 1.0) - " +
+                   f"IV: {iv_component:.2f}, Cost: {cost_component:.2f}, " +
+                   f"Liquidity: {liquidity_component:.2f}")
+    
+    return max(0.0, score)
+
+def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], ts_slope=None):
+    """
+    Find the optimal calendar spread for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        back_month_exp_options (list): List of days out to consider for back month expiration
+        
+    Returns:
+        dict or None: Details of the optimal calendar spread, or None if no worthwhile spread is found
+    """
+    logger.info(f"Finding optimal calendar spread for {ticker} with term structure slope: {ts_slope}")
+    
+    try:
+        # Get stock data
+        stock = yf.Ticker(ticker)
+        if not stock or len(stock.options) == 0:
+            logger.warning(f"No options data found for {ticker}")
+            return None
+        
+        # Get current price
+        current_price = get_current_price(stock)
+        if current_price is None:
+            logger.warning(f"Could not get current price for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} current price: ${current_price}")
+        
+        best_spread = None
+        best_score = 0
+        
+        # Get expiration dates
+        exp_dates = stock.options
+        if not exp_dates:
+            logger.warning(f"No expiration dates found for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} available expiration dates: {exp_dates}")
+        
+        # Check if pricing data is available for key expirations
+        logger.warning(f"API PRICING CHECK: {ticker}")
+        has_pricing_data = False
+        
+        # Sample a few expirations to check for pricing data
+        sample_expirations = exp_dates[:min(3, len(exp_dates))]
+        for exp_date in sample_expirations:
+            try:
+                chain = stock.option_chain(exp_date)
+                calls = chain.calls
+                puts = chain.puts
+                
+                if not calls.empty and not puts.empty:
+                    sample_call = calls.iloc[0]
+                    sample_put = puts.iloc[0]
+                    
+                    # Check if bid/ask data is available
+                    call_has_price = sample_call['bid'] > 0 and sample_call['ask'] > 0
+                    put_has_price = sample_put['bid'] > 0 and sample_put['ask'] > 0
+                    
+                    # Log detailed pricing information for the first strike
+                    strike = sample_call['strike']
+                    logger.warning(f"  {exp_date} Strike ${strike}: Call bid/ask: {sample_call['bid']}/{sample_call['ask']}, Put bid/ask: {sample_put['bid']}/{sample_put['ask']}")
+                    
+                    if call_has_price or put_has_price:
+                        has_pricing_data = True
+                        logger.warning(f"  {exp_date}: Valid pricing data available")
+                    else:
+                        logger.warning(f"  {exp_date}: No valid pricing data (bid/ask = 0)")
+            except Exception as e:
+                logger.warning(f"  Error checking {exp_date}: {str(e)}")
+        
+        if not has_pricing_data:
+            logger.warning(f"API PRICING ISSUE: No valid pricing data found for any expiration for {ticker}")
+        
+        # Convert to datetime objects for sorting
+        date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+        sorted_dates = sorted(date_objs)
+        
+        # Filter for dates in the future
+        today = datetime.today().date()
+        future_dates = [d for d in sorted_dates if d > today]
+        
+        if not future_dates:
+            logger.warning(f"No future expiration dates found for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} future expiration dates: {[d.strftime('%Y-%m-%d') for d in future_dates]}")
+        
+        # First, find the front month expiration (closest to today)
+        front_month_date = future_dates[0]
+        front_month = front_month_date.strftime("%Y-%m-%d")
+        days_to_front_expiration = (front_month_date - today).days
+        
+        logger.info(f"{ticker} front month: {front_month}, days to expiration: {days_to_front_expiration}")
+        
+        # For each potential back month expiration
+        for days_out in back_month_exp_options:
+            target_date = today + timedelta(days=days_out)
+            
+            # Find closest expiration to target date
+            back_month = find_closest_expiration(exp_dates, target_date)
+            back_month_date = datetime.strptime(back_month, "%Y-%m-%d").date()
+            
+            # Calculate days between expirations
+            days_between_expirations = (back_month_date - front_month_date).days
+            
+            logger.info(f"{ticker} considering back month: {back_month}, days between expirations: {days_between_expirations}")
+            
+            # Get ALL strikes for each expiration (not just near the current price)
+            front_chain = stock.option_chain(front_month)
+            back_chain = stock.option_chain(back_month)
+            
+            # Get ALL strikes from BOTH calls AND puts
+            front_call_strikes = set(front_chain.calls['strike'].unique())
+            front_put_strikes = set(front_chain.puts['strike'].unique())
+            front_strikes = front_call_strikes.union(front_put_strikes)
+            
+            back_call_strikes = set(back_chain.calls['strike'].unique())
+            back_put_strikes = set(back_chain.puts['strike'].unique())
+            back_strikes = back_call_strikes.union(back_put_strikes)
+            
+            logger.warning(f"Front month call strikes: {len(front_call_strikes)} - {sorted(front_call_strikes)}")
+            logger.warning(f"Front month put strikes: {len(front_put_strikes)} - {sorted(front_put_strikes)}")
+            logger.warning(f"Back month call strikes: {len(back_call_strikes)} - {sorted(back_call_strikes)}")
+            logger.warning(f"Back month put strikes: {len(back_put_strikes)} - {sorted(back_put_strikes)}")
+            
+            # Get strikes that exist in BOTH front and back month expirations
+            common_strikes = list(front_strikes.intersection(back_strikes))
+            
+            logger.warning(f"STRIKE SELECTION: {ticker} {front_month}/{back_month}")
+            logger.warning(f"  Front month ALL strikes: {len(front_strikes)} - {sorted(front_strikes)}")
+            logger.warning(f"  Back month ALL strikes: {len(back_strikes)} - {sorted(back_strikes)}")
+            logger.warning(f"  Common strikes: {len(common_strikes)} - {sorted(common_strikes)}")
+            
+            if not common_strikes:
+                logger.warning(f"  No common strikes found between {front_month} and {back_month}")
+                continue
+            
+            # Sort common strikes by distance from current price
+            sorted_strikes = sorted(common_strikes, key=lambda x: abs(x - current_price))
+            
+            # Take the closest 5 strikes to current price (or all if less than 5)
+            filtered_strikes = sorted_strikes[:min(5, len(sorted_strikes))]
+            
+            # Log the strikes we're considering
+            logger.warning(f"  Selected strikes closest to current price: {filtered_strikes}")
+            
+            # Also log the distance of each strike from current price
+            for strike in filtered_strikes:
+                distance_pct = abs(strike - current_price) / current_price * 100
+                logger.warning(f"  Strike ${strike}: {distance_pct:.2f}% from current price (${current_price:.2f})")
+            
+            # Skip if no strikes found (should never happen now since we're taking all common strikes)
+            if not filtered_strikes:
+                logger.warning(f"  No valid strikes found between {front_month} and {back_month}")
+                continue
+                
+            logger.warning(f"  Proceeding with {len(filtered_strikes)} strikes for {front_month}/{back_month}")
+                
+            for strike in filtered_strikes:
+                # Calculate key metrics for this potential spread
+                front_iv = get_atm_iv(stock, front_month, strike)
+                back_iv = get_atm_iv(stock, back_month, strike)
+                
+                # Log distance from current price as percentage
+                strike_distance_pct = abs(strike - current_price) / current_price * 100
+                logger.warning(f"  Strike ${strike}: {strike_distance_pct:.2f}% from current price (${current_price:.2f})")
+                
+                # Handle missing IV data
+                if front_iv == 0:
+                    logger.debug(f"{ticker} strike ${strike}: Skipping due to missing front month IV data")
+                    continue
+                
+                # If back month IV is missing, estimate it using term structure slope
+                if back_iv == 0:
+                    logger.warning(f"IV DATA CHECK: {ticker} strike ${strike} - Front IV: {front_iv:.4f}, Back IV missing")
+                    
+                    if ts_slope is not None:
+                        # Use the estimate_back_month_iv function with the term structure slope
+                        back_iv = estimate_back_month_iv(
+                            front_iv,
+                            front_month_date,
+                            back_month_date,
+                            ts_slope
+                        )
+                        logger.warning(f"  ESTIMATED BACK IV: {back_iv:.4f} using term structure slope {ts_slope:.6f}")
+                    else:
+                        # Fallback to simple estimation if ts_slope is not available
+                        back_iv = front_iv * 0.85
+                        logger.warning(f"  ESTIMATED BACK IV: {back_iv:.4f} using fallback method (85% of front)")
+                
+                # IV differential (front month should be higher)
+                iv_differential = front_iv - back_iv
+                
+                # Log whether back month IV was estimated
+                estimated_iv = back_iv == front_iv * 0.85
+                
+                # Allow small negative IV differentials (front month can be slightly lower)
+                # Skip only if the differential is significantly negative
+                if iv_differential < -0.1:
+                    logger.debug(f"{ticker} strike ${strike}: Skipping due to low IV differential: {iv_differential}")
+                    continue
+                
+                logger.debug(f"{ticker} strike ${strike}: IV differential: {iv_differential}, front_iv: {front_iv}, back_iv: {back_iv} (estimated: {estimated_iv})")
+                
+                # Get pricing information
+                logger.warning(f"SPREAD COST CHECK: {ticker} {front_month}/{back_month} strike ${strike}")
+                spread_cost = calculate_spread_cost(stock, front_month, back_month, strike)
+                
+                # Skip if spread cost is invalid
+                if spread_cost <= 0:
+                    logger.warning(f"  INVALID SPREAD COST: ${spread_cost:.2f}")
+                    continue
+                
+                # Calculate cost as percentage of underlying price for reference
+                cost_percent = (spread_cost / current_price) * 100
+                logger.warning(f"  VALID SPREAD COST: ${spread_cost:.2f} ({cost_percent:.2f}% of underlying)")
+                
+                # Calculate liquidity metrics
+                front_liquidity = get_liquidity_score(stock, front_month, strike)
+                back_liquidity = get_liquidity_score(stock, back_month, strike)
+                
+                logger.debug(f"{ticker} strike ${strike}: Liquidity scores - front: {front_liquidity}, back: {back_liquidity}")
+                
+                # Calculate a composite score
+                score = calculate_spread_score(
+                    iv_differential,
+                    spread_cost,
+                    front_liquidity,
+                    back_liquidity,
+                    strike_distance_from_atm=abs(strike - current_price),
+                    days_between_expirations=days_between_expirations,
+                    days_to_front_expiration=days_to_front_expiration
+                )
+                
+                # Log detailed score information
+                logger.debug(f"{ticker} strike ${strike}: Calculated score: {score:.2f}")
+                # Don't try to access variables from calculate_spread_score function
+                
+                if score > best_score:
+                    best_score = score
+                    logger.info(f"{ticker} strike ${strike}: New best score: {score}")
+                    best_spread = {
+                        'strike': float(strike),
+                        'frontMonth': front_month,
+                        'backMonth': back_month,
+                        'spreadCost': float(spread_cost),
+                        'ivDifferential': float(iv_differential),
+                        'frontIv': float(front_iv),
+                        'backIv': float(back_iv),
+                        'frontLiquidity': float(front_liquidity),
+                        'backLiquidity': float(back_liquidity),
+                        'daysBetweenExpirations': days_between_expirations,
+                        'daysToFrontExpiration': days_to_front_expiration,
+                        'score': float(score)
+                    }
+        
+        # Set a minimum threshold score (lowered from 5.0 to 1.0)
+        MINIMUM_VIABLE_SCORE = 1.0
+        
+        # Log summary of what we found
+        logger.warning(f"SPREAD SEARCH RESULTS FOR {ticker}:")
+        
+        if best_score > 0:
+            logger.warning(f"  Best score: {best_score:.2f}, Threshold: {MINIMUM_VIABLE_SCORE}")
+            if best_spread:
+                logger.warning(f"  Best spread - Strike: ${best_spread['strike']}, " +
+                           f"Front/Back: {best_spread['frontMonth']}/{best_spread['backMonth']}, " +
+                           f"Cost: ${best_spread['spreadCost']:.2f}, IV Diff: {best_spread['ivDifferential']:.4f}")
+                
+                # Add detailed pricing information for the best spread
+                logger.warning(f"  Pricing details for best spread:")
+                logger.warning(f"    Front month: {best_spread['frontMonth']} - IV: {best_spread['frontIv']:.4f}")
+                logger.warning(f"    Back month: {best_spread['backMonth']} - IV: {best_spread['backIv']:.4f}")
+        else:
+            logger.warning(f"  No valid spreads found with non-zero scores")
+            logger.warning(f"  This suggests no spreads had valid pricing data")
+        
+        if best_score < MINIMUM_VIABLE_SCORE:
+            logger.warning(f"  RESULT: Best score {best_score:.2f} below threshold {MINIMUM_VIABLE_SCORE}")
+            return None  # No worthwhile play
+        
+        logger.warning(f"  RESULT: Found optimal spread with score {best_score:.2f}")
+        return best_spread
+    
+    except Exception as e:
+        logger.error(f"Error finding optimal calendar spread for {ticker}: {str(e)}")
+        return None
+
+def estimate_back_month_iv(front_iv, front_month_date, back_month_date, ts_slope_0_45):
+    """
+    Estimate back month IV using the calculated term structure slope.
+    
+    Args:
+        front_iv (float): Front month implied volatility
+        front_month_date (date): Front month expiration date
+        back_month_date (date): Back month expiration date
+        ts_slope_0_45 (float): Term structure slope between day 0 and day 45
+        
+    Returns:
+        float: Estimated back month implied volatility
+    """
+    today = datetime.today().date()
+    
+    # Calculate days to expiration for front and back month
+    days_to_front = (front_month_date - today).days
+    days_to_back = (back_month_date - today).days
+    
+    # Calculate the difference in days between the months
+    days_diff = days_to_back - days_to_front
+    
+    # Estimate back month IV using the term structure slope
+    estimated_back_iv = front_iv + (ts_slope_0_45 * days_diff)
+    
+    # Ensure IV doesn't go below a minimum threshold
+    min_iv = front_iv * 0.5  # Set a minimum floor as 50% of front month IV
+    return max(estimated_back_iv, min_iv)
+
 def build_term_structure(days, ivs):
     """Build a term structure spline from days to expiry and implied volatilities."""
     days = np.array(days)
@@ -139,8 +827,14 @@ def get_current_price(ticker):
     todays_data = ticker.history(period='1d')
     return todays_data['Close'].iloc[0]
 
-def analyze_options(ticker_symbol):
-    """Analyze options data for a given ticker and provide a recommendation."""
+def analyze_options(ticker_symbol, is_scan_mode=False):
+    """
+    Analyze options data for a given ticker and provide a recommendation.
+    
+    Args:
+        ticker_symbol (str): The ticker symbol to analyze
+        is_scan_mode (bool): Whether this is being called from scan mode (default: False)
+    """
     try:
         ticker_symbol = ticker_symbol.strip().upper()
         if not ticker_symbol:
@@ -289,6 +983,22 @@ def analyze_options(ticker_symbol):
             "recommendation": recommendation,
             "timestamp": datetime.now().timestamp()
         }
+        
+        # Only search for optimal calendar spread in direct search mode
+        if not is_scan_mode:
+            logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal calendar spread (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+            optimal_spread = find_optimal_calendar_spread(ticker_symbol, ts_slope=ts_slope_0_45)
+            if optimal_spread:
+                logger.info(f"{ticker_symbol}: Found optimal calendar spread: {optimal_spread}")
+                result["optimalCalendarSpread"] = optimal_spread
+                
+                # Add metrics pass status to the optimal spread result - convert boolean to string for JSON serialization
+                metrics_pass = avg_volume_pass and iv30_rv30_pass and ts_slope_pass
+                result["optimalCalendarSpread"]["metricsPass"] = "true" if metrics_pass else "false"
+            else:
+                logger.info(f"{ticker_symbol}: No optimal calendar spread found")
+        else:
+            logger.info(f"{ticker_symbol}: Scan mode - Skipping optimal calendar spread search to improve performance")
         
         return result
     
@@ -586,7 +1296,8 @@ def health_check():
 def analyze_ticker(ticker):
     """Analyze options data for a given ticker."""
     try:
-        result = analyze_options(ticker)
+        # Explicitly set is_scan_mode=False for direct searches
+        result = analyze_options(ticker, is_scan_mode=False)
         if "error" in result:
             return jsonify({
                 "error": result["error"],
@@ -664,7 +1375,8 @@ def scan_earnings():
                 
             logger.info(f"Analyzing ticker: {ticker}, company: {earning.get('companyName', '')}")
             try:
-                analysis = analyze_options(ticker)
+                # Call analyze_options with is_scan_mode=True
+                analysis = analyze_options(ticker, is_scan_mode=True)
                 if "error" not in analysis:
                     # Add company name from earnings data
                     analysis['companyName'] = earning.get('companyName', '')
