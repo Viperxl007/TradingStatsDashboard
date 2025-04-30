@@ -6,6 +6,7 @@ This module defines the API routes for the options earnings screener.
 
 from flask import Blueprint, jsonify, request
 import logging
+import concurrent.futures
 from datetime import datetime
 from app.options_analyzer import analyze_options
 from app.earnings_calendar import get_earnings_today, get_earnings_by_date
@@ -81,29 +82,50 @@ def scan_earnings():
         else:
             earnings = get_earnings_today()
         
-        # Analyze each ticker
-        results = []
-        for earning in earnings:
+        # Define a function to analyze a single ticker
+        def analyze_ticker(earning):
             ticker = earning.get('ticker')
             if not ticker:
-                continue
+                return None
                 
             try:
                 analysis = analyze_options(ticker)
                 # Add company name from earnings data
                 analysis['companyName'] = earning.get('companyName', '')
                 analysis['reportTime'] = earning.get('reportTime', '')
-                results.append(analysis)
+                return analysis
             except Exception as e:
                 logger.warning(f"Error analyzing {ticker}: {str(e)}")
                 # Include failed analysis with error message
-                results.append({
+                return {
                     "ticker": ticker,
                     "companyName": earning.get('companyName', ''),
                     "reportTime": earning.get('reportTime', ''),
                     "error": str(e),
                     "timestamp": datetime.now().timestamp()
-                })
+                }
+        
+        # Use ThreadPoolExecutor to parallelize the analysis
+        import concurrent.futures
+        
+        # Filter out earnings with no ticker
+        valid_earnings = [earning for earning in earnings if earning.get('ticker')]
+        
+        # Determine the number of workers based on the number of tickers
+        # Use a reasonable maximum to avoid overwhelming the system
+        max_workers = min(20, len(valid_earnings))
+        
+        # Process tickers in parallel
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks and collect futures
+            future_to_earning = {executor.submit(analyze_ticker, earning): earning for earning in valid_earnings}
+            
+            # Collect results as they complete
+            for future in concurrent.futures.as_completed(future_to_earning):
+                result = future.result()
+                if result:
+                    results.append(result)
         
         return jsonify({
             "date": date_str or datetime.now().strftime('%Y-%m-%d'),

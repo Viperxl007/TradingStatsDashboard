@@ -464,8 +464,21 @@ export const filterTrades = (
     // Filter by date range
     if (dateRange[0] && dateRange[1]) {
       const tradeDate = dateFns.parseISO(trade.date);
-      if (!dateFns.isWithinInterval(tradeDate, { start: dateRange[0], end: dateRange[1] })) {
-        return false;
+      // Ensure start date is before or equal to end date to avoid "Invalid interval" error
+      const start = dateRange[0];
+      const end = dateRange[1];
+      
+      // If start date is after end date, swap them to create a valid interval
+      const validStart = dateFns.isBefore(start, end) ? start : end;
+      const validEnd = dateFns.isBefore(start, end) ? end : start;
+      
+      try {
+        if (!dateFns.isWithinInterval(tradeDate, { start: validStart, end: validEnd })) {
+          return false;
+        }
+      } catch (error) {
+        // If there's still an error, just include the trade (don't filter it out)
+        console.warn("Date filtering error:", error);
       }
     }
     

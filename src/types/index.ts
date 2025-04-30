@@ -99,6 +99,19 @@ export interface OptionsMetrics {
 }
 
 /**
+ * Optimal calendar spread details
+ */
+export interface OptimalCalendarSpread {
+  strike: number;                // Strike price for the spread
+  frontMonth: string;            // Front month expiration date
+  backMonth: string;             // Back month expiration date
+  spreadCost: number;            // Cost of the spread
+  ivDifferential: number;        // IV differential between months
+  score: number;                 // Algorithmic score of the spread
+  metricsPass?: string;          // Whether all metrics pass thresholds ("true" or "false")
+}
+
+/**
  * Options analysis result
  */
 export interface OptionsAnalysisResult {
@@ -111,6 +124,7 @@ export interface OptionsAnalysisResult {
   reportTime?: 'BMO' | 'AMC' | 'DMH'; // Earnings report time (optional)
   timestamp: number;             // Timestamp of the analysis
   error?: string;                // Error message if analysis failed
+  optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
 }
 
 /**
