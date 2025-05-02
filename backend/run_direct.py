@@ -1029,15 +1029,25 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
             # Also search for optimal naked options in direct search mode
             logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
             
-            # Import the find_optimal_naked_options function from options_analyzer
-            from app.options_analyzer import find_optimal_naked_options
+            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer
+            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
             
+            # Find optimal naked options
             optimal_naked = find_optimal_naked_options(ticker_symbol)
             if optimal_naked:
                 logger.info(f"{ticker_symbol}: Found optimal naked options: {optimal_naked}")
                 result["optimalNakedOptions"] = optimal_naked
             else:
                 logger.info(f"{ticker_symbol}: No optimal naked options found")
+                
+            # Find optimal iron condors
+            logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal iron condors (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+            optimal_iron_condors = find_optimal_iron_condor(ticker_symbol)
+            if optimal_iron_condors:
+                logger.info(f"{ticker_symbol}: Found optimal iron condors: {optimal_iron_condors}")
+                result["optimalIronCondors"] = optimal_iron_condors
+            else:
+                logger.info(f"{ticker_symbol}: No optimal iron condors found")
         else:
             logger.info(f"{ticker_symbol}: Scan mode - Skipping optimal calendar spread search to improve performance")
             
@@ -1045,16 +1055,26 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
             # This is important for the screener tab to show naked options
             logger.info(f"{ticker_symbol}: Scan mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
             
-            # Import the find_optimal_naked_options function from options_analyzer if not already imported
-            from app.options_analyzer import find_optimal_naked_options
+            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer if not already imported
+            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
             
             if avg_volume_pass and iv30_rv30_pass and ts_slope_pass:
+                # Find optimal naked options
                 optimal_naked = find_optimal_naked_options(ticker_symbol)
                 if optimal_naked:
                     logger.info(f"{ticker_symbol}: Found optimal naked options: {optimal_naked}")
                     result["optimalNakedOptions"] = optimal_naked
                 else:
                     logger.info(f"{ticker_symbol}: No optimal naked options found")
+                
+                # Find optimal iron condors
+                logger.info(f"{ticker_symbol}: Scan mode - Searching for optimal iron condors (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+                optimal_iron_condors = find_optimal_iron_condor(ticker_symbol)
+                if optimal_iron_condors:
+                    logger.info(f"{ticker_symbol}: Found optimal iron condors: {optimal_iron_condors}")
+                    result["optimalIronCondors"] = optimal_iron_condors
+                else:
+                    logger.info(f"{ticker_symbol}: No optimal iron condors found")
         
         return result
     

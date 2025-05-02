@@ -35,6 +35,7 @@ import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } fr
 import { scanEarningsToday, scanEarningsByDate } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
+import IronCondorDisplay from './IronCondorDisplay';
 
 /**
  * ScanResults Component
@@ -42,18 +43,19 @@ import NakedOptionsDisplay from './NakedOptionsDisplay';
  * This component allows users to scan stocks with earnings announcements
  * and view options analysis results for all of them.
  *
- * It supports two strategy types:
+ * It supports three strategy types:
  * 1. calendar - For calendar spread opportunities
  * 2. naked - For naked options selling opportunities
+ * 3. ironCondor - For short iron condor opportunities
  */
 interface ScanResultsProps {
-  scanType?: 'calendar' | 'naked';
+  scanType?: 'calendar' | 'naked' | 'ironCondor';
 }
 
 const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) => {
   const { colorMode } = useColorMode();
   const { state, dispatch } = useData();
-  const [strategyType, setStrategyType] = useState<'calendar' | 'naked'>(initialScanType || 'calendar');
+  const [strategyType, setStrategyType] = useState<'calendar' | 'naked' | 'ironCondor'>(initialScanType || 'calendar');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterRecommendation, setFilterRecommendation] = useState<string>('all');
   const [sortField, setSortField] = useState<string>('ticker');
@@ -152,15 +154,18 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   };
 
   const handleRowClick = (ticker: string) => {
-    if (strategyType === 'naked') {
+    if (strategyType === 'naked' || strategyType === 'ironCondor') {
       const newSelectedTicker = selectedTicker === ticker ? null : ticker;
       setSelectedTicker(newSelectedTicker);
       
-      // Scroll to the naked options display if a ticker is selected
+      // Scroll to the options display if a ticker is selected
       if (newSelectedTicker) {
         // Add a small delay to ensure the component is rendered
         setTimeout(() => {
-          const element = document.getElementById(`naked-options-${newSelectedTicker}`);
+          const elementId = strategyType === 'naked'
+            ? `naked-options-${newSelectedTicker}`
+            : `iron-condor-${newSelectedTicker}`;
+          const element = document.getElementById(elementId);
           if (element) {
             element.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
@@ -171,9 +176,14 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
 
   // Add console logging to debug naked options
   React.useEffect(() => {
-    if (strategyType === 'naked' && optionsData.scanResults.length > 0) {
+    if ((strategyType === 'naked' || strategyType === 'ironCondor') && optionsData.scanResults.length > 0) {
       console.log('Recommended stocks:', optionsData.scanResults.filter(r => r.recommendation === 'Recommended'));
-      console.log('Stocks with naked options:', optionsData.scanResults.filter(r => r.optimalNakedOptions));
+      
+      if (strategyType === 'naked') {
+        console.log('Stocks with naked options:', optionsData.scanResults.filter(r => r.optimalNakedOptions));
+      } else if (strategyType === 'ironCondor') {
+        console.log('Stocks with iron condors:', optionsData.scanResults.filter(r => r.optimalIronCondors));
+      }
     }
   }, [strategyType, optionsData.scanResults]);
 
@@ -244,13 +254,16 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           <Stack direction="row" spacing={5}>
             <Radio value="calendar" colorScheme="brand">Calendar Spreads</Radio>
             <Radio value="naked" colorScheme="brand">Naked Options</Radio>
+            <Radio value="ironCondor" colorScheme="brand">Iron Condors</Radio>
           </Stack>
         </RadioGroup>
         
         <Text mb={4}>
           {strategyType === 'calendar'
             ? 'Scan stocks with earnings announcements to find potential calendar spread opportunities.'
-            : 'Scan stocks with earnings announcements to find potential naked options selling opportunities.'}
+            : strategyType === 'naked'
+              ? 'Scan stocks with earnings announcements to find potential naked options selling opportunities.'
+              : 'Scan stocks with earnings announcements to find potential short iron condor opportunities.'}
         </Text>
         
         <Flex direction={{ base: 'column', md: 'row' }} mb={6} gap={4}>
@@ -365,6 +378,30 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             </Box>
           )}
           
+          {strategyType === 'ironCondor' && selectedTicker && (
+            <Box
+              borderWidth="2px"
+              borderRadius="lg"
+              borderColor="brand.500"
+              bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+              boxShadow="lg"
+              mb={6}
+              overflow="hidden"
+            >
+              {filteredResults
+                .filter(result => result.ticker === selectedTicker && result.optimalIronCondors)
+                .map(result => (
+                  <IronCondorDisplay
+                    key={result.ticker}
+                    ticker={result.ticker}
+                    ironCondors={result.optimalIronCondors!}
+                    compact={true}
+                  />
+                ))
+              }
+            </Box>
+          )}
+          
           <TableContainer mt={4}>
             <Table variant="simple" size="sm">
               <Thead>
@@ -426,6 +463,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                   {strategyType === 'naked' && (
                     <Th>Naked Options</Th>
                   )}
+                  {strategyType === 'ironCondor' && (
+                    <Th>Iron Condors</Th>
+                  )}
                 </Tr>
               </Thead>
               <Tbody>
@@ -433,13 +473,21 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                   <Tr
                     key={result.ticker}
                     onClick={() => handleRowClick(result.ticker)}
-                    cursor={strategyType === 'naked' && result.optimalNakedOptions ? 'pointer' : 'default'}
+                    cursor={
+                      (strategyType === 'naked' && result.optimalNakedOptions) ||
+                      (strategyType === 'ironCondor' && result.optimalIronCondors)
+                        ? 'pointer'
+                        : 'default'
+                    }
                     bg={selectedTicker === result.ticker
                       ? (colorMode === 'dark' ? 'brand.900' : 'brand.50')
                       : undefined}
-                    _hover={strategyType === 'naked' && result.optimalNakedOptions
-                      ? { bg: colorMode === 'dark' ? 'brand.800' : 'brand.50' }
-                      : undefined}
+                    _hover={
+                      (strategyType === 'naked' && result.optimalNakedOptions) ||
+                      (strategyType === 'ironCondor' && result.optimalIronCondors)
+                        ? { bg: colorMode === 'dark' ? 'brand.800' : 'brand.50' }
+                        : undefined
+                    }
                   >
                     <Td fontWeight="bold">{result.ticker}</Td>
                     <Td>{result.companyName || '-'}</Td>
@@ -489,6 +537,15 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                     {strategyType === 'naked' && (
                       <Td>
                         {result.optimalNakedOptions ? (
+                          <Badge colorScheme="green" fontSize="sm" px={2} py={1}>Available</Badge>
+                        ) : (
+                          <Badge colorScheme="gray" fontSize="sm" px={2} py={1}>None</Badge>
+                        )}
+                      </Td>
+                    )}
+                    {strategyType === 'ironCondor' && (
+                      <Td>
+                        {result.optimalIronCondors ? (
                           <Badge colorScheme="green" fontSize="sm" px={2} py={1}>Available</Badge>
                         ) : (
                           <Badge colorScheme="gray" fontSize="sm" px={2} py={1}>None</Badge>

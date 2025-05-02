@@ -74,7 +74,7 @@ const NakedOptionsDisplay: React.FC<NakedOptionsDisplayProps> = ({ ticker, naked
       <Heading
         size={compact ? "sm" : "md"}
         mb={4}
-        color="brand.500"
+        color="white"
         textAlign="center"
         borderBottom={compact ? "2px solid" : "none"}
         borderColor="brand.500"

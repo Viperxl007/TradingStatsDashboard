@@ -159,6 +159,7 @@ export interface OptionsAnalysisResult {
   error?: string;                // Error message if analysis failed
   optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
   optimalNakedOptions?: OptimalNakedOptions;    // Optimal naked options (if available)
+  optimalIronCondors?: OptimalIronCondors;      // Optimal iron condors (if available)
 }
 
 /**
@@ -209,4 +210,42 @@ export interface DataState {
   error: string | null;          // Error message if any
   activeTab: string;             // Currently active dashboard tab
   isDarkMode: boolean;           // Dark mode toggle state
+}
+
+/**
+ * Iron condor spread leg details
+ */
+export interface IronCondorSpreadLeg {
+  shortStrike: number;         // Short strike price
+  longStrike: number;          // Long strike price
+  shortDelta: number;          // Delta of short option
+  shortPremium: number;        // Premium of short option
+  longPremium: number;         // Premium of long option
+}
+
+/**
+ * Iron condor opportunity details
+ */
+export interface IronCondor {
+  callSpread: IronCondorSpreadLeg;  // Call spread leg (short call + long call)
+  putSpread: IronCondorSpreadLeg;   // Put spread leg (short put + long put)
+  netCredit: number;                // Net credit received
+  maxLoss: number;                  // Maximum possible loss
+  breakEvenLow: number;             // Lower break-even price
+  breakEvenHigh: number;            // Higher break-even price
+  probProfit: number;               // Probability of profit
+  returnOnRisk: number;             // Return on risk (net credit / max loss)
+  score: number;                    // Algorithmic score
+}
+
+/**
+ * Optimal iron condors details
+ */
+export interface OptimalIronCondors {
+  expectedMove: {
+    percent: number;             // Expected move as a percentage
+    dollars: number;             // Expected move in dollars
+  };
+  daysToExpiration: number;      // Days to expiration
+  topIronCondors: IronCondor[];  // Top iron condor opportunities
 }
