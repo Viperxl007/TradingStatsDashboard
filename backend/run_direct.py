@@ -13,9 +13,12 @@ from datetime import datetime, timedelta
 import json
 import importlib.util
 
+# Add app directory to path to allow importing from app
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,  # Changed back to INFO to reduce noise
+    level=logging.DEBUG,  # Set to DEBUG to see detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
@@ -24,6 +27,7 @@ logger = logging.getLogger(__name__)
 logging.getLogger('yfinance').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('peewee').setLevel(logging.WARNING)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
 
 # Check for required packages
 required_packages = ['flask', 'flask_cors', 'yfinance', 'numpy', 'scipy', 'finance_calendars', 'pandas']
@@ -823,9 +827,24 @@ def build_term_structure(days, ivs):
     return term_spline
 
 def get_current_price(ticker):
-    """Get the current price for a stock."""
-    todays_data = ticker.history(period='1d')
-    return todays_data['Close'].iloc[0]
+    """
+    Get the current price for a stock.
+    
+    Args:
+        ticker: yfinance Ticker object
+        
+    Returns:
+        float: Current price or None if there's an error
+    """
+    try:
+        todays_data = ticker.history(period='1d')
+        if todays_data.empty:
+            logger.warning(f"No price data available for {ticker.ticker}")
+            return None
+        return todays_data['Close'].iloc[0]
+    except Exception as e:
+        logger.warning(f"Error getting current price for {ticker.ticker}: {str(e)}")
+        return None
 
 def analyze_options(ticker_symbol, is_scan_mode=False):
     """
@@ -842,6 +861,15 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
         
         # Get stock and options data
         stock = yf.Ticker(ticker_symbol)
+        
+        # Get current price early to filter out low-priced stocks
+        current_price = get_current_price(stock)
+        
+        # Skip stocks with price under $2.50
+        if current_price is not None and current_price < 2.50:
+            logger.info(f"{ticker_symbol}: Skipping analysis - price ${current_price} is below $2.50 minimum threshold")
+            return {"error": f"Stock price (${current_price}) is below the minimum threshold of $2.50"}
+            
         if len(stock.options) == 0:
             return {"error": f"No options found for stock symbol '{ticker_symbol}'."}
         
@@ -997,8 +1025,56 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
                 result["optimalCalendarSpread"]["metricsPass"] = "true" if metrics_pass else "false"
             else:
                 logger.info(f"{ticker_symbol}: No optimal calendar spread found")
+                
+            # Also search for optimal naked options in direct search mode
+            logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+            
+            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer
+            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
+            
+            # Find optimal naked options
+            optimal_naked = find_optimal_naked_options(ticker_symbol)
+            if optimal_naked:
+                logger.info(f"{ticker_symbol}: Found optimal naked options: {optimal_naked}")
+                result["optimalNakedOptions"] = optimal_naked
+            else:
+                logger.info(f"{ticker_symbol}: No optimal naked options found")
+                
+            # Find optimal iron condors
+            logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal iron condors (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+            optimal_iron_condors = find_optimal_iron_condor(ticker_symbol)
+            if optimal_iron_condors:
+                logger.info(f"{ticker_symbol}: Found optimal iron condors: {optimal_iron_condors}")
+                result["optimalIronCondors"] = optimal_iron_condors
+            else:
+                logger.info(f"{ticker_symbol}: No optimal iron condors found")
         else:
             logger.info(f"{ticker_symbol}: Scan mode - Skipping optimal calendar spread search to improve performance")
+            
+            # But still search for optimal naked options in scan mode
+            # This is important for the screener tab to show naked options
+            logger.info(f"{ticker_symbol}: Scan mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+            
+            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer if not already imported
+            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
+            
+            if avg_volume_pass and iv30_rv30_pass and ts_slope_pass:
+                # Find optimal naked options
+                optimal_naked = find_optimal_naked_options(ticker_symbol)
+                if optimal_naked:
+                    logger.info(f"{ticker_symbol}: Found optimal naked options: {optimal_naked}")
+                    result["optimalNakedOptions"] = optimal_naked
+                else:
+                    logger.info(f"{ticker_symbol}: No optimal naked options found")
+                
+                # Find optimal iron condors
+                logger.info(f"{ticker_symbol}: Scan mode - Searching for optimal iron condors (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
+                optimal_iron_condors = find_optimal_iron_condor(ticker_symbol)
+                if optimal_iron_condors:
+                    logger.info(f"{ticker_symbol}: Found optimal iron condors: {optimal_iron_condors}")
+                    result["optimalIronCondors"] = optimal_iron_condors
+                else:
+                    logger.info(f"{ticker_symbol}: No optimal iron condors found")
         
         return result
     
@@ -1694,4 +1770,6 @@ if __name__ == "__main__":
     print("Starting server on http://localhost:5000")
     print("Press Ctrl+C to stop the server")
     print()
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # Disable auto-reloader to prevent server restarts during scans
+    # while keeping debug mode for better error reporting
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

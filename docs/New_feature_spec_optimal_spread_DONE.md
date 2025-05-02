@@ -1,3 +1,6 @@
+IMPORTANT NOTE: THIS FEATURE IS COMPLETED!!! DO NOT RE-IMPLEMENT!!!
+
+
 Algorithmic Selection Criteria
 
 On the "Direct Search" sub-tab inside the "Options Earnings" tab I want to add an enhancement.

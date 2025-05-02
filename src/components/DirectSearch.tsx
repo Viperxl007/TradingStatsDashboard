@@ -35,6 +35,8 @@ import { analyzeOptions } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import TradingViewWidget from './TradingViewWidget';
 import EarningsHistoryChart from './EarningsHistoryChart';
+import NakedOptionsDisplay from './NakedOptionsDisplay';
+import IronCondorDisplay from './IronCondorDisplay';
 
 declare global {
   interface Window {
@@ -305,6 +307,60 @@ const DirectSearch: React.FC = () => {
                       </Stack>
                     </>
                   )}
+                  
+                  {/* Strategy Sections - Always show both Naked Options and Iron Condors */}
+                  <Divider my={4} />
+                  
+                  {/* Display strategies in a grid layout */}
+                  <Grid templateColumns="repeat(2, 1fr)" gap={6}>
+                    {/* Naked Options Section */}
+                    <GridItem>
+                      <Box
+                        borderWidth="2px"
+                        borderRadius="lg"
+                        borderColor="brand.500"
+                        bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+                        boxShadow="lg"
+                        height="100%"
+                        overflow="hidden"
+                        p={1} // Add padding to ensure border is visible
+                      >
+                        <NakedOptionsDisplay
+                          ticker={optionsData.analysisResult.ticker}
+                          nakedOptions={optionsData.analysisResult.optimalNakedOptions || {
+                            expectedMove: { percent: 0, dollars: 0 },
+                            daysToExpiration: 0,
+                            topOptions: []
+                          }}
+                          compact={true}
+                        />
+                      </Box>
+                    </GridItem>
+                    
+                    {/* Iron Condor Section */}
+                    <GridItem>
+                      <Box
+                        borderWidth="2px"
+                        borderRadius="lg"
+                        borderColor="brand.500"
+                        bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+                        boxShadow="lg"
+                        height="100%"
+                        overflow="hidden"
+                        p={1} // Add padding to ensure border is visible
+                      >
+                        <IronCondorDisplay
+                          ticker={optionsData.analysisResult.ticker}
+                          ironCondors={optionsData.analysisResult.optimalIronCondors || {
+                            expectedMove: { percent: 0, dollars: 0 },
+                            daysToExpiration: 0,
+                            topIronCondors: []
+                          }}
+                          compact={true}
+                        />
+                      </Box>
+                    </GridItem>
+                  </Grid>
                 </CardBody>
               </Card>
             </GridItem>

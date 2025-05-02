@@ -112,6 +112,39 @@ export interface OptimalCalendarSpread {
 }
 
 /**
+ * Naked option details
+ */
+export interface NakedOption {
+  type: 'call' | 'put';          // Option type
+  strike: number;                // Strike price
+  expiration: string;            // Expiration date
+  premium: number;               // Option premium
+  iv: number;                    // Implied volatility
+  delta: number | null;          // Option delta
+  probOtm: number;               // Probability of finishing out-of-the-money
+  roc: number;                   // Return on capital
+  marginRequirement: number;     // Margin requirement
+  maxLoss: number | null;        // Maximum possible loss (null for unlimited)
+  liquidity: number;             // Liquidity score
+  breakEven: number;             // Break-even price (Strike - Premium for puts, Strike + Premium for calls)
+  breakEvenPct: number;          // Break-even price as percentage from current price
+  outsideExpectedMove: string;   // Whether break-even is outside the expected move range ("true" or "false")
+  score: number;                 // Algorithmic score
+}
+
+/**
+ * Optimal naked options details
+ */
+export interface OptimalNakedOptions {
+  expectedMove: {
+    percent: number;             // Expected move as a percentage
+    dollars: number;             // Expected move in dollars
+  };
+  daysToExpiration: number;      // Days to expiration
+  topOptions: NakedOption[];     // Top naked option opportunities
+}
+
+/**
  * Options analysis result
  */
 export interface OptionsAnalysisResult {
@@ -125,6 +158,8 @@ export interface OptionsAnalysisResult {
   timestamp: number;             // Timestamp of the analysis
   error?: string;                // Error message if analysis failed
   optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
+  optimalNakedOptions?: OptimalNakedOptions;    // Optimal naked options (if available)
+  optimalIronCondors?: OptimalIronCondors;      // Optimal iron condors (if available)
 }
 
 /**
@@ -175,4 +210,42 @@ export interface DataState {
   error: string | null;          // Error message if any
   activeTab: string;             // Currently active dashboard tab
   isDarkMode: boolean;           // Dark mode toggle state
+}
+
+/**
+ * Iron condor spread leg details
+ */
+export interface IronCondorSpreadLeg {
+  shortStrike: number;         // Short strike price
+  longStrike: number;          // Long strike price
+  shortDelta: number;          // Delta of short option
+  shortPremium: number;        // Premium of short option
+  longPremium: number;         // Premium of long option
+}
+
+/**
+ * Iron condor opportunity details
+ */
+export interface IronCondor {
+  callSpread: IronCondorSpreadLeg;  // Call spread leg (short call + long call)
+  putSpread: IronCondorSpreadLeg;   // Put spread leg (short put + long put)
+  netCredit: number;                // Net credit received
+  maxLoss: number;                  // Maximum possible loss
+  breakEvenLow: number;             // Lower break-even price
+  breakEvenHigh: number;            // Higher break-even price
+  probProfit: number;               // Probability of profit
+  returnOnRisk: number;             // Return on risk (net credit / max loss)
+  score: number;                    // Algorithmic score
+}
+
+/**
+ * Optimal iron condors details
+ */
+export interface OptimalIronCondors {
+  expectedMove: {
+    percent: number;             // Expected move as a percentage
+    dollars: number;             // Expected move in dollars
+  };
+  daysToExpiration: number;      // Days to expiration
+  topIronCondors: IronCondor[];  // Top iron condor opportunities
 }

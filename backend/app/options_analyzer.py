@@ -8,12 +8,17 @@ Extracted and refactored from the original calculator.py file.
 import numpy as np
 import logging
 import concurrent.futures
+import time
+import math
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
+from scipy.stats import norm
 from app.data_fetcher import get_stock_data, get_options_data, get_current_price
 
-# Set up logging
+# Set up logging first
 logger = logging.getLogger(__name__)
+
+# Logger is already set up above
 
 def filter_dates(dates):
     """
@@ -482,6 +487,838 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
         return None
 
 
+def find_optimal_naked_options(ticker):
+    """
+    Find the optimal naked options for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        dict or None: Details of the optimal naked options, or None if no worthwhile options are found
+    """
+    logger.info(f"NAKED OPTIONS DEBUG: Starting search for {ticker}")
+    try:
+        # Get stock data
+        stock = get_stock_data(ticker)
+        if not stock or len(stock.options) == 0:
+            logger.warning(f"NAKED OPTIONS DEBUG: No options data found for {ticker}")
+            return None
+        
+        # Get current price
+        current_price = get_current_price(stock)
+        if current_price is None:
+            logger.warning(f"Could not get current price for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} current price: ${current_price}")
+        
+        # Get expiration dates
+        exp_dates = stock.options
+        if not exp_dates:
+            logger.warning(f"No expiration dates found for {ticker}")
+            return None
+        
+        logger.info(f"{ticker} available expiration dates: {exp_dates}")
+        
+        # Convert to datetime objects for sorting
+        date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+        sorted_dates = sorted(date_objs)
+        
+        # Filter for dates in the future
+        today = datetime.today().date()
+        future_dates = [d for d in sorted_dates if d > today]
+        
+        if not future_dates:
+            logger.warning(f"No future expiration dates found for {ticker}")
+            return None
+        
+        # Get the first expiration date after earnings
+        target_exp = future_dates[0]
+        target_exp_str = target_exp.strftime("%Y-%m-%d")
+        days_to_expiration = (target_exp - today).days
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} target expiration: {target_exp_str}, days to expiration: {days_to_expiration}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} all available expirations: {[d.strftime('%Y-%m-%d') for d in future_dates]}")
+        
+        # Get options chain for the target expiration
+        try:
+            chain = stock.option_chain(target_exp_str)
+            calls = chain.calls
+            puts = chain.puts
+            
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} options chain retrieved for {target_exp_str}")
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} calls count: {len(calls)}, puts count: {len(puts)}")
+            
+            if not calls.empty:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} call strikes: {sorted(calls['strike'].unique().tolist())}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} call bid/ask sample: {calls[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if not puts.empty:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} put strikes: {sorted(puts['strike'].unique().tolist())}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} put bid/ask sample: {puts[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if calls.empty or puts.empty:
+                logger.warning(f"NAKED OPTIONS DEBUG: No options data found for {ticker} on {target_exp_str}")
+                return None
+        except Exception as e:
+            logger.error(f"NAKED OPTIONS DEBUG: Error getting options chain for {ticker} on {target_exp_str}: {str(e)}")
+            return None
+        
+        # Calculate expected move based on straddle price
+        atm_call_idx = (calls['strike'] - current_price).abs().idxmin()
+        atm_put_idx = (puts['strike'] - current_price).abs().idxmin()
+        
+        atm_call = calls.loc[atm_call_idx]
+        atm_put = puts.loc[atm_put_idx]
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} current price: ${current_price}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} ATM call strike: ${atm_call['strike']}, bid: {atm_call['bid']}, ask: {atm_call['ask']}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} ATM put strike: ${atm_put['strike']}, bid: {atm_put['bid']}, ask: {atm_put['ask']}")
+        
+        call_mid = (atm_call['bid'] + atm_call['ask']) / 2 if atm_call['bid'] > 0 and atm_call['ask'] > 0 else 0
+        put_mid = (atm_put['bid'] + atm_put['ask']) / 2 if atm_put['bid'] > 0 and atm_put['ask'] > 0 else 0
+        
+        straddle_price = call_mid + put_mid
+        expected_move_pct = straddle_price / current_price
+        expected_move_dollars = current_price * expected_move_pct
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} call mid: ${call_mid}, put mid: ${put_mid}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} straddle price: ${straddle_price}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} expected move: ${expected_move_dollars:.2f} ({expected_move_pct:.2%})")
+        
+        # Get price history for historical earnings moves
+        price_history = stock.history(period='1y')
+        
+        # Calculate historical volatility
+        historical_vol = yang_zhang(price_history)
+        
+        # Define a function to evaluate a single option
+        def evaluate_option(option, is_call):
+            try:
+                strike = option['strike']
+                bid = option['bid']
+                ask = option['ask']
+                iv = option['impliedVolatility']
+                delta = abs(option['delta']) if 'delta' in option else None
+                
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} Evaluating {is_call and 'call' or 'put'} at strike ${strike}")
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: bid=${bid}, ask=${ask}, IV={iv:.2f}, delta={delta}")
+                
+                # Skip if no valid pricing
+                if bid <= 0 or ask <= 0:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: REJECTED - Invalid pricing - bid: ${bid}, ask: ${ask}")
+                    return None
+                
+                # Calculate mid price
+                mid_price = (bid + ask) / 2
+                
+                # Calculate distance from current price
+                distance_pct = abs(strike - current_price) / current_price
+                
+                # Calculate return on capital (ROC)
+                if is_call:
+                    max_loss = float('inf')  # Unlimited for calls
+                    margin_req = current_price * 0.2  # Simplified margin calculation
+                else:
+                    max_loss = strike  # For puts, max loss is the strike price
+                    margin_req = min(strike * 0.2, strike - (current_price * 0.1))  # Simplified margin calculation
+                
+                roc = mid_price / margin_req
+                
+                # Calculate probability metrics
+                if delta is not None:
+                    prob_otm = 1 - delta if is_call else delta
+                else:
+                    # Estimate delta if not available
+                    moneyness = (current_price / strike) if is_call else (strike / current_price)
+                    prob_otm = 0.5 + (0.5 * (1 - moneyness) / expected_move_pct) if expected_move_pct > 0 else 0.5
+                
+                # Calculate IV crush potential
+                # Typically IV drops by 30-50% after earnings
+                iv_crush_potential = iv * 0.4  # Assuming 40% IV reduction
+                
+                # Calculate liquidity score
+                spread_pct = (ask - bid) / mid_price
+                volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 1
+                open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 1
+                liquidity_score = min(10.0, (1 / spread_pct) * np.sqrt(volume) * np.sqrt(open_interest) / 100.0)
+                
+                # Calculate composite score
+                # Weights for different factors
+                iv_weight = 0.3
+                delta_weight = 0.25
+                premium_weight = 0.25
+                liquidity_weight = 0.1
+                historical_weight = 0.1
+                
+                # Individual component scores
+                iv_score = (iv / historical_vol) * iv_weight if historical_vol > 0 else 0
+                delta_score = prob_otm * delta_weight
+                premium_score = (roc * 10) * premium_weight  # Scale ROC to 0-10 range
+                liquidity_score = liquidity_score * liquidity_weight
+                
+                # Historical behavior score - simplified for now
+                historical_score = historical_weight * 0.5  # Placeholder
+                
+                # Composite score
+                score = iv_score + delta_score + premium_score + liquidity_score + historical_score
+                
+                # Calculate break-even price
+                break_even = float(strike - mid_price) if not is_call else float(strike + mid_price)
+                break_even_pct = float((break_even - current_price) / current_price * 100)
+                
+                # Check if break-even is outside expected move range
+                expected_move_dollars = current_price * (expected_move_pct / 100)
+                expected_move_lower = current_price - expected_move_dollars
+                expected_move_upper = current_price + expected_move_dollars
+                outside_expected_move = (not is_call and break_even < expected_move_lower) or \
+                                       (is_call and break_even > expected_move_upper)
+                
+                # Add bonus to score if break-even is outside expected move
+                bonus_score = 0
+                if outside_expected_move:
+                    bonus_score = score * 0.2  # 20% bonus
+                    score += bonus_score
+                
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} {is_call and 'call' or 'put'} at strike ${strike}: Break-even ${break_even:.2f} ({break_even_pct:.2f}%), Outside expected move: {outside_expected_move}")
+                
+                # Return option details with score
+                return {
+                    'type': 'call' if is_call else 'put',
+                    'strike': float(strike),
+                    'expiration': target_exp_str,
+                    'premium': float(mid_price),
+                    'iv': float(iv),
+                    'delta': float(delta) if delta is not None else None,
+                    'probOtm': float(prob_otm),
+                    'roc': float(roc),
+                    'marginRequirement': float(margin_req),
+                    'maxLoss': float(max_loss) if max_loss != float('inf') else None,
+                    'liquidity': float(liquidity_score / liquidity_weight),  # Normalize back to 0-10
+                    'breakEven': break_even,
+                    'breakEvenPct': break_even_pct,
+                    'outsideExpectedMove': "true" if outside_expected_move else "false",  # Convert boolean to string for JSON serialization
+                    'score': float(score)
+                }
+            except Exception as e:
+                logger.warning(f"Error evaluating option: {str(e)}")
+                return None
+        
+        # Filter for OTM options with appropriate delta range
+        otm_calls = calls[calls['strike'] > current_price]
+        otm_puts = puts[puts['strike'] < current_price]
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM calls count: {len(otm_calls)}")
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM puts count: {len(otm_puts)}")
+        
+        if not otm_calls.empty:
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM call strikes: {sorted(otm_calls['strike'].unique().tolist())}")
+        
+        if not otm_puts.empty:
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} OTM put strikes: {sorted(otm_puts['strike'].unique().tolist())}")
+        
+        # Evaluate all options
+        call_results = []
+        put_results = []
+        
+        # Use a more lenient delta range (0.10-0.50 instead of 0.15-0.40)
+        min_delta = 0.10
+        max_delta = 0.50
+        
+        logger.info(f"NAKED OPTIONS DEBUG: {ticker} Using delta range: {min_delta}-{max_delta}")
+        
+        for _, call in otm_calls.iterrows():
+            result = evaluate_option(call, True)
+            if result:
+                if result['delta'] is None or (min_delta <= result['delta'] <= max_delta):
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} ACCEPTED call at strike ${result['strike']}: Delta {result['delta']} within range {min_delta}-{max_delta}")
+                    call_results.append(result)
+                else:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} REJECTED call at strike ${result['strike']}: Delta {result['delta']} outside range {min_delta}-{max_delta}")
+        
+        for _, put in otm_puts.iterrows():
+            result = evaluate_option(put, False)
+            if result:
+                if result['delta'] is None or (min_delta <= result['delta'] <= max_delta):
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} ACCEPTED put at strike ${result['strike']}: Delta {result['delta']} within range {min_delta}-{max_delta}")
+                    put_results.append(result)
+                else:
+                    logger.info(f"NAKED OPTIONS DEBUG: {ticker} REJECTED put at strike ${result['strike']}: Delta {result['delta']} outside range {min_delta}-{max_delta}")
+        
+        # Sort by score
+        call_results.sort(key=lambda x: x['score'], reverse=True)
+        put_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Get top options
+        top_calls = call_results[:3] if call_results else []
+        top_puts = put_results[:3] if put_results else []
+        
+        # Combine and sort
+        top_options = sorted(top_calls + top_puts, key=lambda x: x['score'], reverse=True)
+        
+        if not top_options:
+            logger.warning(f"NAKED OPTIONS DEBUG: {ticker} No suitable naked options found")
+            # Log more details about why no options were found
+            logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Call results: {len(call_results)}, Put results: {len(put_results)}")
+            
+            # Do NOT create fake data - return None if no valid options are found
+            return None
+        
+        # Return top options
+        result = {
+            'expectedMove': {
+                'percent': float(expected_move_pct),
+                'dollars': float(expected_move_dollars)
+            },
+            'daysToExpiration': days_to_expiration,
+            'topOptions': top_options[:5]  # Return top 5 options
+        }
+        
+        logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Returning naked options result with {len(top_options)} options")
+        logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Top options: {[f'{opt['type'].upper()} ${opt['strike']} (score: {opt['score']})' for opt in top_options[:3]]}")
+        return result
+    
+    except Exception as e:
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Error finding optimal naked options: {str(e)}")
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Exception details: {type(e).__name__}")
+        import traceback
+        logger.error(f"NAKED OPTIONS DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+        return None
+
+def black_scholes_d1(S, K, T, r, sigma):
+    """
+    Calculate d1 from the Black-Scholes formula.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        r (float): Risk-free interest rate
+        sigma (float): Volatility
+        
+    Returns:
+        float: d1 value
+    """
+    if sigma <= 0 or T <= 0:
+        return 0
+    return (np.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * np.sqrt(T))
+
+def black_scholes_d2(d1, sigma, T):
+    """
+    Calculate d2 from the Black-Scholes formula.
+    
+    Args:
+        d1 (float): d1 value
+        sigma (float): Volatility
+        T (float): Time to expiration in years
+        
+    Returns:
+        float: d2 value
+    """
+    if sigma <= 0 or T <= 0:
+        return 0
+    return d1 - sigma * np.sqrt(T)
+
+def black_scholes_call_price(S, K, T, r, sigma):
+    """
+    Calculate call option price using the Black-Scholes formula.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        r (float): Risk-free interest rate
+        sigma (float): Volatility
+        
+    Returns:
+        float: Call option price
+    """
+    if sigma <= 0 or T <= 0:
+        return max(0, S - K)
+    
+    d1 = black_scholes_d1(S, K, T, r, sigma)
+    d2 = black_scholes_d2(d1, sigma, T)
+    
+    return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+
+def black_scholes_put_price(S, K, T, r, sigma):
+    """
+    Calculate put option price using the Black-Scholes formula.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        r (float): Risk-free interest rate
+        sigma (float): Volatility
+        
+    Returns:
+        float: Put option price
+    """
+    if sigma <= 0 or T <= 0:
+        return max(0, K - S)
+    
+    d1 = black_scholes_d1(S, K, T, r, sigma)
+    d2 = black_scholes_d2(d1, sigma, T)
+    
+    return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+def calculate_option_greeks(S, K, T, r, sigma, option_type='call'):
+    """
+    Calculate option greeks using the Black-Scholes model.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        r (float): Risk-free interest rate
+        sigma (float): Volatility
+        option_type (str): 'call' or 'put'
+        
+    Returns:
+        dict: Dictionary containing option greeks (delta, gamma, theta, vega, rho)
+    """
+    if sigma <= 0 or T <= 0:
+        return {
+            'delta': 1.0 if option_type.lower() == 'call' and S > K else -1.0 if option_type.lower() == 'put' and S < K else 0.0,
+            'gamma': 0.0,
+            'theta': 0.0,
+            'vega': 0.0,
+            'rho': 0.0
+        }
+    
+    d1 = black_scholes_d1(S, K, T, r, sigma)
+    d2 = black_scholes_d2(d1, sigma, T)
+    
+    # Common calculations
+    gamma = norm.pdf(d1) / (S * sigma * np.sqrt(T))
+    vega = S * norm.pdf(d1) * np.sqrt(T) / 100  # Divided by 100 to get the change per 1% change in volatility
+    
+    if option_type.lower() == 'call':
+        delta = norm.cdf(d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * np.sqrt(T)) - r * K * np.exp(-r * T) * norm.cdf(d2)) / 365.0  # Daily theta
+        rho = K * T * np.exp(-r * T) * norm.cdf(d2) / 100  # Divided by 100 to get the change per 1% change in interest rate
+    else:  # put
+        delta = -norm.cdf(-d1)
+        theta = (-S * norm.pdf(d1) * sigma / (2 * np.sqrt(T)) + r * K * np.exp(-r * T) * norm.cdf(-d2)) / 365.0  # Daily theta
+        rho = -K * T * np.exp(-r * T) * norm.cdf(-d2) / 100  # Divided by 100 to get the change per 1% change in interest rate
+    
+    return {
+        'delta': delta,
+        'gamma': gamma,
+        'theta': theta,
+        'vega': vega,
+        'rho': rho
+    }
+
+def find_optimal_iron_condor(ticker):
+    """
+    Find the optimal iron condor for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        dict or None: Details of the optimal iron condor, or None if no worthwhile iron condor is found
+    """
+    logger.info(f"IRON CONDOR DEBUG: Starting search for {ticker}")
+    logger.warning(f"IRON CONDOR DEBUG: Starting search for {ticker}")
+    try:
+        # Get stock data
+        stock = get_stock_data(ticker)
+        if not stock or len(stock.options) == 0:
+            logger.warning(f"IRON CONDOR DEBUG: No options data found for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: No options data found for {ticker}")
+            return None
+        
+        # Get current price
+        current_price = get_current_price(stock)
+        if current_price is None:
+            logger.warning(f"IRON CONDOR DEBUG: Could not get current price for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: Could not get current price for {ticker}")
+            return None
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} current price: ${current_price}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} current price: ${current_price}")
+        
+        # Get expiration dates
+        exp_dates = stock.options
+        if not exp_dates:
+            logger.warning(f"IRON CONDOR DEBUG: No expiration dates found for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: No expiration dates found for {ticker}")
+            return None
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} available expiration dates: {exp_dates}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} available expiration dates: {exp_dates}")
+        
+        # Convert to datetime objects for sorting
+        date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+        sorted_dates = sorted(date_objs)
+        
+        # Filter for dates in the future
+        today = datetime.today().date()
+        future_dates = [d for d in sorted_dates if d > today]
+        
+        if not future_dates:
+            logger.warning(f"IRON CONDOR DEBUG: No future expiration dates found for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: No future expiration dates found for {ticker}")
+            return None
+        
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} future expiration dates: {[d.strftime('%Y-%m-%d') for d in future_dates]}")
+        
+        # Get the first expiration date after earnings
+        target_exp = future_dates[0]
+        target_exp_str = target_exp.strftime("%Y-%m-%d")
+        days_to_expiration = (target_exp - today).days
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} target expiration: {target_exp_str}, days to expiration: {days_to_expiration}")
+        
+        # Get options chain for the target expiration
+        try:
+            chain = stock.option_chain(target_exp_str)
+            calls = chain.calls
+            puts = chain.puts
+            
+            logger.info(f"IRON CONDOR DEBUG: {ticker} options chain retrieved for {target_exp_str}")
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} options chain retrieved for {target_exp_str}")
+            logger.info(f"IRON CONDOR DEBUG: {ticker} calls count: {len(calls)}, puts count: {len(puts)}")
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} calls count: {len(calls)}, puts count: {len(puts)}")
+            
+            if not calls.empty:
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} call strikes: {sorted(calls['strike'].unique().tolist())}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} call bid/ask sample: {calls[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if not puts.empty:
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} put strikes: {sorted(puts['strike'].unique().tolist())}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} put bid/ask sample: {puts[['strike', 'bid', 'ask', 'impliedVolatility']].head(3).to_dict('records')}")
+            
+            if calls.empty or puts.empty:
+                logger.warning(f"IRON CONDOR DEBUG: No options data found for {ticker} on {target_exp_str}")
+                logger.info(f"IRON CONDOR DEBUG: No options data found for {ticker} on {target_exp_str}")
+                return None
+        except Exception as e:
+            logger.error(f"IRON CONDOR DEBUG: Error getting options chain for {ticker} on {target_exp_str}: {str(e)}")
+            logger.warning(f"IRON CONDOR DEBUG: Error getting options chain for {ticker} on {target_exp_str}: {str(e)}")
+            return None
+        
+        # Calculate expected move based on straddle price
+        atm_call_idx = (calls['strike'] - current_price).abs().idxmin()
+        atm_put_idx = (puts['strike'] - current_price).abs().idxmin()
+        
+        atm_call = calls.loc[atm_call_idx]
+        atm_put = puts.loc[atm_put_idx]
+        
+        call_mid = (atm_call['bid'] + atm_call['ask']) / 2 if atm_call['bid'] > 0 and atm_call['ask'] > 0 else 0
+        put_mid = (atm_put['bid'] + atm_put['ask']) / 2 if atm_put['bid'] > 0 and atm_put['ask'] > 0 else 0
+        
+        straddle_price = call_mid + put_mid
+        expected_move_pct = straddle_price / current_price
+        expected_move_dollars = current_price * expected_move_pct
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} expected move: ${expected_move_dollars:.2f} ({expected_move_pct:.2%})")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} expected move: ${expected_move_dollars:.2f} ({expected_move_pct:.2%})")
+        
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} ATM call strike: ${atm_call['strike']}, bid: {atm_call['bid']}, ask: {atm_call['ask']}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} ATM put strike: ${atm_put['strike']}, bid: {atm_put['bid']}, ask: {atm_put['ask']}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} call mid: ${call_mid}, put mid: ${put_mid}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} straddle price: ${straddle_price}")
+        
+        # Filter for OTM options
+        otm_calls = calls[calls['strike'] > current_price]
+        otm_puts = puts[puts['strike'] < current_price]
+        
+        if otm_calls.empty or otm_puts.empty:
+            logger.warning(f"IRON CONDOR DEBUG: Not enough OTM options for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: Not enough OTM options for {ticker}")
+            return None
+            
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} OTM calls count: {len(otm_calls)}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} OTM puts count: {len(otm_puts)}")
+        
+        if not otm_calls.empty:
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} OTM call strikes: {sorted(otm_calls['strike'].unique().tolist())}")
+        
+        if not otm_puts.empty:
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} OTM put strikes: {sorted(otm_puts['strike'].unique().tolist())}")
+        
+        # Define target delta range for short options (making it more lenient)
+        min_short_delta = 0.10
+        max_short_delta = 0.45
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} Using delta range: {min_short_delta}-{max_short_delta}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Using delta range: {min_short_delta}-{max_short_delta}")
+        
+        # Define function to evaluate a single iron condor
+        def evaluate_iron_condor(call_short_idx, call_long_idx, put_short_idx, put_long_idx):
+            try:
+                # Get option details - CORRECTED INDEXING
+                # For OTM puts, index 0 = closest to money (highest strike)
+                # For OTM calls, index 0 = closest to money (lowest strike)
+                call_short = otm_calls.iloc[call_short_idx]
+                call_long = otm_calls.iloc[call_long_idx]
+                
+                put_short = otm_puts.iloc[put_long_idx]  # Lower strike (further OTM) - THIS IS THE SHORT PUT
+                put_long = otm_puts.iloc[put_short_idx]  # Higher strike (closer to money) - THIS IS THE LONG PUT
+                
+                # Calculate time to expiration in years
+                today = datetime.today().date()
+                expiry = datetime.strptime(target_exp_str, "%Y-%m-%d").date()
+                days_to_expiry = (expiry - today).days
+                time_to_expiry = days_to_expiry / 365.0
+                
+                # Use a standard risk-free rate (can be updated to use current treasury rates)
+                risk_free_rate = 0.05
+                
+                try:
+                    logger.warning(f"IRON CONDOR DEBUG: {ticker} Calculating greeks using Black-Scholes model")
+                    
+                    # Get implied volatilities from options data
+                    call_short_iv = call_short['impliedVolatility']
+                    call_long_iv = call_long['impliedVolatility']
+                    put_short_iv = put_short['impliedVolatility']
+                    put_long_iv = put_long['impliedVolatility']
+                    
+                    # Calculate greeks for each option
+                    call_short_greeks = calculate_option_greeks(
+                        S=current_price,
+                        K=call_short['strike'],
+                        T=time_to_expiry,
+                        r=risk_free_rate,
+                        sigma=call_short_iv,
+                        option_type='call'
+                    )
+                    
+                    call_long_greeks = calculate_option_greeks(
+                        S=current_price,
+                        K=call_long['strike'],
+                        T=time_to_expiry,
+                        r=risk_free_rate,
+                        sigma=call_long_iv,
+                        option_type='call'
+                    )
+                    
+                    put_short_greeks = calculate_option_greeks(
+                        S=current_price,
+                        K=put_short['strike'],
+                        T=time_to_expiry,
+                        r=risk_free_rate,
+                        sigma=put_short_iv,
+                        option_type='put'
+                    )
+                    
+                    put_long_greeks = calculate_option_greeks(
+                        S=current_price,
+                        K=put_long['strike'],
+                        T=time_to_expiry,
+                        r=risk_free_rate,
+                        sigma=put_long_iv,
+                        option_type='put'
+                    )
+                    
+                    # Get deltas (convert to absolute values)
+                    call_short_delta = abs(call_short_greeks['delta'])
+                    call_long_delta = abs(call_long_greeks['delta'])
+                    put_short_delta = abs(put_short_greeks['delta'])
+                    put_long_delta = abs(put_long_greeks['delta'])
+                    
+                    logger.warning(f"IRON CONDOR DEBUG: {ticker} Successfully calculated deltas using Black-Scholes - Call short: {call_short_delta:.4f}, Call long: {call_long_delta:.4f}, Put short: {put_short_delta:.4f}, Put long: {put_long_delta:.4f}")
+                    
+                except Exception as e:
+                    logger.warning(f"IRON CONDOR DEBUG: {ticker} Error calculating greeks using Black-Scholes: {str(e)}")
+                    
+                    # Fall back to API delta values if available
+                    if 'delta' in call_short and 'delta' in call_long and 'delta' in put_short and 'delta' in put_long:
+                        call_short_delta = abs(call_short['delta'])
+                        call_long_delta = abs(call_long['delta'])
+                        put_short_delta = abs(put_short['delta'])
+                        put_long_delta = abs(put_long['delta'])
+                        
+                        logger.warning(f"IRON CONDOR DEBUG: {ticker} Using API delta values - Call short: {call_short_delta:.4f}, Call long: {call_long_delta:.4f}, Put short: {put_short_delta:.4f}, Put long: {put_long_delta:.4f}")
+                    else:
+                        logger.warning(f"IRON CONDOR DEBUG: {ticker} Missing delta values for one or more options")
+                        return None
+                
+                # Check if deltas are within target range for short options
+                if not (min_short_delta <= call_short_delta <= max_short_delta and min_short_delta <= put_short_delta <= max_short_delta):
+                    return None
+                
+                # Check if options have appropriate delta relationship
+                # For calls: long (further OTM) should have lower delta than short (closer to money)
+                # For puts: long (closer to money) should have higher delta than short (further OTM)
+                # Note: Delta is always positive in our calculations (we use abs())
+                if not (call_long_delta <= call_short_delta * 1.1 and put_long_delta <= put_short_delta * 0.9):
+                    logger.debug(f"IRON CONDOR DEBUG: {ticker} Delta relationship check failed: call_long={call_long_delta}, call_short={call_short_delta}, put_long={put_long_delta}, put_short={put_short_delta}")
+                    return None
+                
+                # Get strikes
+                call_short_strike = call_short['strike']
+                call_long_strike = call_long['strike']
+                put_short_strike = put_short['strike']
+                put_long_strike = put_long['strike']
+                
+                # Check if strikes are in correct order for a short iron condor
+                # For put credit spreads: put_short is further OTM (LOWER price), put_long is closer to money (HIGHER price)
+                # For call credit spreads: call_short is closer to money (LOWER price), call_long is further OTM (HIGHER price)
+                # The correct ordering is: put_short < put_long < current_price < call_short < call_long
+                if not (put_long_strike < put_short_strike < current_price < call_short_strike < call_long_strike):
+                    logger.debug(f"IRON CONDOR DEBUG: {ticker} Strike order check failed: put_short={put_short_strike}, put_long={put_long_strike}, current_price={current_price}, call_short={call_short_strike}, call_long={call_long_strike}")
+                    return None
+                
+                # Calculate premiums (mid prices or 80% of ask when bid is zero)
+                call_short_premium = (call_short['bid'] + call_short['ask']) / 2 if call_short['bid'] > 0 and call_short['ask'] > 0 else call_short['ask'] * 0.8
+                call_long_premium = (call_long['bid'] + call_long['ask']) / 2 if call_long['bid'] > 0 and call_long['ask'] > 0 else call_long['ask'] * 0.8
+                put_short_premium = (put_short['bid'] + put_short['ask']) / 2 if put_short['bid'] > 0 and put_short['ask'] > 0 else put_short['ask'] * 0.8
+                put_long_premium = (put_long['bid'] + put_long['ask']) / 2 if put_long['bid'] > 0 and put_long['ask'] > 0 else put_long['ask'] * 0.8
+                
+                # Check if we have valid premiums
+                if call_short_premium <= 0 or call_long_premium <= 0 or put_short_premium <= 0 or put_long_premium <= 0:
+                    logger.debug(f"IRON CONDOR DEBUG: {ticker} Rejected due to invalid premiums: call_short={call_short_premium}, call_long={call_long_premium}, put_short={put_short_premium}, put_long={put_long_premium}")
+                    return None
+                
+                # Calculate net credit
+                call_spread_credit = call_short_premium - call_long_premium
+                put_spread_credit = put_short_premium - put_long_premium
+                net_credit = call_spread_credit + put_spread_credit
+                
+                # Check if net credit is positive
+                if net_credit <= 0:
+                    return None
+                
+                # Calculate max loss
+                call_spread_width = call_long_strike - call_short_strike
+                put_spread_width = put_short_strike - put_long_strike
+                max_width = max(call_spread_width, put_spread_width)
+                max_loss = max_width - net_credit
+                
+                # Calculate break-even points
+                break_even_low = put_short_strike - net_credit
+                break_even_high = call_short_strike + net_credit
+                
+                # Calculate probability of profit (approximate)
+                # Based on delta of short options
+                prob_profit = 1 - (call_short_delta + put_short_delta)
+                
+                # Calculate return on risk
+                return_on_risk = net_credit / max_loss
+                
+                # Calculate score components
+                premium_score = net_credit / current_price * 100  # Premium as percentage of stock price
+                width_score = 10 - (max_width / current_price * 100)  # Narrower spreads get higher scores
+                delta_score = prob_profit * 10  # Higher probability of profit gets higher score
+                
+                # Check if short strikes are outside expected move
+                expected_move_upper = current_price + expected_move_dollars
+                expected_move_lower = current_price - expected_move_dollars
+                
+                outside_expected_move = (call_short_strike > expected_move_upper and put_short_strike < expected_move_lower)
+                expected_move_score = 10 if outside_expected_move else 5
+                
+                # Calculate composite score
+                score = (
+                    premium_score * 0.3 +  # Weight premium capture (30%)
+                    delta_score * 0.3 +    # Weight probability of profit (30%)
+                    width_score * 0.2 +    # Weight width (20%)
+                    expected_move_score * 0.1 +  # Weight expected move (10%)
+                    (return_on_risk * 10) * 0.1  # Weight risk/reward ratio (10%)
+                )
+                
+                logger.info(f"IRON CONDOR DEBUG: {ticker} Evaluated iron condor - Score: {score:.2f}, Net Credit: ${net_credit:.2f}, Prob Profit: {prob_profit:.2%}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluated iron condor - Call spread: ${call_short_strike}-${call_long_strike}, Put spread: ${put_long_strike}-${put_short_strike}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluated iron condor - Score: {score:.2f}, Net Credit: ${net_credit:.2f}, Prob Profit: {prob_profit:.2%}")
+                
+                # Return iron condor details
+                return {
+                    "callSpread": {
+                        "shortStrike": float(call_short_strike),
+                        "longStrike": float(call_long_strike),
+                        "shortDelta": float(call_short_delta),
+                        "shortPremium": float(call_short_premium),
+                        "longPremium": float(call_long_premium)
+                    },
+                    "putSpread": {
+                        "shortStrike": float(put_short_strike),
+                        "longStrike": float(put_long_strike),
+                        "shortDelta": float(put_short_delta),
+                        "shortPremium": float(put_short_premium),
+                        "longPremium": float(put_long_premium)
+                    },
+                    "netCredit": float(net_credit),
+                    "maxLoss": float(max_loss),
+                    "breakEvenLow": float(break_even_low),
+                    "breakEvenHigh": float(break_even_high),
+                    "probProfit": float(prob_profit),
+                    "returnOnRisk": float(return_on_risk),
+                    "score": float(score)
+                }
+            except Exception as e:
+                logger.warning(f"IRON CONDOR DEBUG: Error evaluating iron condor: {str(e)}")
+                logger.info(f"IRON CONDOR DEBUG: Error evaluating iron condor: {str(e)}")
+                return None
+        
+        # Find all possible iron condors
+        iron_condors = []
+        
+        # Increase the number of options to evaluate to find more potential iron condors
+        max_options = 15
+        otm_calls_subset = otm_calls.head(min(len(otm_calls), max_options))
+        otm_puts_subset = otm_puts.head(min(len(otm_puts), max_options))
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(otm_calls_subset)} call options and {len(otm_puts_subset)} put options")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(otm_calls_subset)} call options and {len(otm_puts_subset)} put options")
+        
+        # Evaluate all possible combinations
+        for call_short_idx in range(len(otm_calls_subset) - 1):
+            for call_long_idx in range(call_short_idx + 1, len(otm_calls_subset)):
+                # For puts, we need put_short to be closer to the money (lower index in sorted array)
+                # and put_long to be further OTM (higher index in sorted array)
+                for put_short_idx in range(len(otm_puts_subset) - 1):
+                    for put_long_idx in range(put_short_idx + 1, len(otm_puts_subset)):
+                        result = evaluate_iron_condor(call_short_idx, call_long_idx, put_short_idx, put_long_idx)
+                        if result:
+                            iron_condors.append(result)
+        
+        if not iron_condors:
+            logger.warning(f"IRON CONDOR DEBUG: No suitable iron condors found for {ticker}")
+            logger.info(f"IRON CONDOR DEBUG: No suitable iron condors found for {ticker}")
+            return None
+        
+        # Sort by score
+        iron_condors.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Get top iron condors (increased from 5 to 25 for more flexibility)
+        top_iron_condors = iron_condors[:25]
+        
+        # Return result
+        result = {
+            'expectedMove': {
+                'percent': float(expected_move_pct),
+                'dollars': float(expected_move_dollars)
+            },
+            'daysToExpiration': days_to_expiration,
+            'topIronCondors': top_iron_condors
+        }
+        
+        logger.info(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
+        
+        # Log details of the top iron condor
+        if len(top_iron_condors) > 0:
+            top_condor = top_iron_condors[0]
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} Top iron condor details: " +
+                          f"Call spread: {top_condor['callSpread']['shortStrike']}-{top_condor['callSpread']['longStrike']}, " +
+                          f"Put spread: {top_condor['putSpread']['longStrike']}-{top_condor['putSpread']['shortStrike']}, " +
+                          f"Net credit: ${top_condor['netCredit']:.2f}, Score: {top_condor['score']:.2f}")
+        return result
+    
+    except Exception as e:
+        logger.error(f"IRON CONDOR DEBUG: Error finding optimal iron condors for {ticker}: {str(e)}")
+        logger.warning(f"IRON CONDOR DEBUG: Error finding optimal iron condors for {ticker}: {str(e)}")
+        import traceback
+        logger.error(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+        return None
+
 def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
     """
     Calculate Yang-Zhang volatility estimator.
@@ -719,6 +1556,53 @@ def analyze_options(ticker):
             optimal_spread = find_optimal_calendar_spread(ticker)
             if optimal_spread:
                 result["optimalCalendarSpread"] = optimal_spread
+            
+            # Find optimal naked options if all metrics pass
+            # Always try to find naked options for recommended stocks
+            logger.info(f"NAKED OPTIONS DEBUG: {ticker} Calling find_optimal_naked_options from analyze_options")
+            optimal_naked = find_optimal_naked_options(ticker)
+            
+            if optimal_naked:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} Found optimal naked options with {len(optimal_naked.get('topOptions', []))} options")
+            else:
+                logger.info(f"NAKED OPTIONS DEBUG: {ticker} No optimal naked options found")
+                
+            # Always set optimalNakedOptions for recommended stocks
+            result["optimalNakedOptions"] = optimal_naked
+            
+            # Find optimal iron condors if all metrics pass
+            logger.info(f"IRON CONDOR DEBUG: {ticker} Calling find_optimal_iron_condor from analyze_options")
+            logger.warning(f"IRON CONDOR DEBUG: {ticker} Calling find_optimal_iron_condor from analyze_options")
+            try:
+                optimal_iron_condors = find_optimal_iron_condor(ticker)
+                
+                if optimal_iron_condors:
+                    logger.info(f"IRON CONDOR DEBUG: {ticker} Found optimal iron condors with {len(optimal_iron_condors.get('topIronCondors', []))} condors")
+                    logger.warning(f"IRON CONDOR DEBUG: {ticker} Found optimal iron condors with {len(optimal_iron_condors.get('topIronCondors', []))} condors")
+                    # Log details of the top iron condor
+                    if len(optimal_iron_condors.get('topIronCondors', [])) > 0:
+                        top_condor = optimal_iron_condors['topIronCondors'][0]
+                        logger.info(f"IRON CONDOR DEBUG: {ticker} Top iron condor details: " +
+                                   f"Call spread: {top_condor['callSpread']['shortStrike']}-{top_condor['callSpread']['longStrike']}, " +
+                                   f"Put spread: {top_condor['putSpread']['longStrike']}-{top_condor['putSpread']['shortStrike']}, " +
+                                   f"Net credit: ${top_condor['netCredit']:.2f}, Score: {top_condor['score']:.2f}")
+                        logger.warning(f"IRON CONDOR DEBUG: {ticker} Top iron condor details: " +
+                                   f"Call spread: {top_condor['callSpread']['shortStrike']}-{top_condor['callSpread']['longStrike']}, " +
+                                   f"Put spread: {top_condor['putSpread']['longStrike']}-{top_condor['putSpread']['shortStrike']}, " +
+                                   f"Net credit: ${top_condor['netCredit']:.2f}, Score: {top_condor['score']:.2f}")
+                else:
+                    logger.info(f"IRON CONDOR DEBUG: {ticker} No optimal iron condors found")
+                    logger.warning(f"IRON CONDOR DEBUG: {ticker} No optimal iron condors found")
+            except Exception as e:
+                logger.error(f"IRON CONDOR DEBUG: {ticker} Error in find_optimal_iron_condor: {str(e)}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} Error in find_optimal_iron_condor: {str(e)}")
+                import traceback
+                logger.error(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+                logger.warning(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
+                optimal_iron_condors = None
+                
+            # Always set optimalIronCondors for recommended stocks
+            result["optimalIronCondors"] = optimal_iron_condors
         
         return result
     
