@@ -6,6 +6,7 @@ Extracted and refactored from the original calculator.py file.
 """
 
 import numpy as np
+from typing import Dict, List, Union, Any
 import logging
 import concurrent.futures
 import time
@@ -14,6 +15,7 @@ from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
 from scipy.stats import norm
 from app.data_fetcher import get_stock_data, get_options_data, get_current_price
+import yfinance as yf
 
 # Set up logging first
 logger = logging.getLogger(__name__)
@@ -191,56 +193,115 @@ def calculate_spread_cost(stock, front_month, back_month, strike):
         return 0.0
 
 
-def get_liquidity_score(stock, expiration, strike):
+def get_liquidity_score(stock, expiration, strike, option_type='call'):
+    # Import numpy at the top of the function to ensure it's available
+    import numpy as np
     """
-    Calculate a liquidity score for an option.
+    Calculate a comprehensive liquidity score for an option.
     
     Args:
         stock (Ticker): yfinance Ticker object
         expiration (str): Option expiration date in YYYY-MM-DD format
         strike (float): Strike price
+        option_type (str): 'call' or 'put'
         
     Returns:
-        float: Liquidity score (higher is better)
+        dict: Liquidity details including:
+            - score: Overall liquidity score (0-10, higher is better)
+            - spread_pct: Bid-ask spread as percentage of option price
+            - volume: Trading volume
+            - open_interest: Open interest
+            - has_zero_bid: Whether the option has a zero bid
     """
+    # Import numpy at the top of the function to ensure it's available
+    import numpy as np
     try:
         chain = stock.option_chain(expiration)
-        calls = chain.calls
+        options_chain = chain.calls if option_type.lower() == 'call' else chain.puts
         
-        if calls.empty:
-            return 0.0
+        if options_chain.empty:
+            return {
+                'score': 0.0,
+                'spread_pct': 1.0,
+                'volume': 0,
+                'open_interest': 0,
+                'has_zero_bid': True
+            }
         
         # Find the option with the given strike
-        options = calls[calls['strike'] == strike]
+        options = options_chain[options_chain['strike'] == strike]
         
         if options.empty:
-            return 0.0
+            return {
+                'score': 0.0,
+                'spread_pct': 1.0,
+                'volume': 0,
+                'open_interest': 0,
+                'has_zero_bid': True
+            }
         
         option = options.iloc[0]
         
         # Calculate bid-ask spread as a percentage of the mid price
         bid = option['bid']
         ask = option['ask']
+        has_zero_bid = bid == 0
         
-        if bid == 0 or ask == 0:
-            return 0.0
+        # If both bid and ask are zero, this is extremely illiquid
+        if ask == 0:
+            return {
+                'score': 0.0,
+                'spread_pct': 1.0,
+                'volume': 0,
+                'open_interest': 0,
+                'has_zero_bid': True
+            }
+        
+        # If bid is zero but ask exists, use a very small bid for calculation
+        if bid == 0:
+            bid = ask * 0.01  # Use 1% of ask as a proxy for a very poor bid
         
         mid = (bid + ask) / 2.0
         spread_pct = (ask - bid) / mid
         
         # Volume and open interest factors
-        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 1
-        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 1
+        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 0
+        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 0
         
-        # Liquidity score: inverse of spread percentage, weighted by volume and open interest
-        # Normalize to a 0-10 scale where 10 is most liquid
-        # Less punitive liquidity scoring - using square root instead of log10 for volume and open interest
-        liquidity_score = (1 / spread_pct) * np.sqrt(volume) * np.sqrt(open_interest)
+        # Base liquidity score from spread percentage (tighter spread = better liquidity)
+        base_score = 10.0 * (1.0 / (1.0 + (spread_pct * 10)))
         
-        # Cap and normalize
-        return min(10.0, max(0.0, liquidity_score / 100.0))
+        # Volume factor (more volume = better liquidity)
+        volume_factor = min(1.0, np.log10(volume + 1) / 3.0)
+        
+        # Open interest factor (more open interest = better liquidity)
+        oi_factor = min(1.0, np.log10(open_interest + 1) / 4.0)
+        
+        # Zero bid penalty
+        zero_bid_penalty = 0.7 if has_zero_bid else 1.0
+        
+        # Calculate final score with weights
+        # 60% spread, 20% volume, 20% open interest, then apply zero bid penalty
+        liquidity_score = (base_score * 0.6 +
+                          (volume_factor * 10.0) * 0.2 +
+                          (oi_factor * 10.0) * 0.2) * zero_bid_penalty
+        
+        return {
+            'score': min(10.0, max(0.0, liquidity_score)),
+            'spread_pct': float(spread_pct),
+            'volume': int(volume),
+            'open_interest': int(open_interest),
+            'has_zero_bid': has_zero_bid
+        }
     except Exception as e:
-        return 0.0
+        logger.error(f"Error calculating liquidity score: {str(e)}")
+        return {
+            'score': 0.0,
+            'spread_pct': 1.0,
+            'volume': 0,
+            'open_interest': 0,
+            'has_zero_bid': True
+        }
 
 
 def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_liquidity,
@@ -1061,6 +1122,28 @@ def find_optimal_iron_condor(ticker):
                 put_short = otm_puts.iloc[put_long_idx]  # Lower strike (further OTM) - THIS IS THE SHORT PUT
                 put_long = otm_puts.iloc[put_short_idx]  # Higher strike (closer to money) - THIS IS THE LONG PUT
                 
+                # Calculate liquidity scores for each leg
+                call_short_liquidity = get_liquidity_score(stock, target_exp_str, call_short['strike'], 'call')
+                call_long_liquidity = get_liquidity_score(stock, target_exp_str, call_long['strike'], 'call')
+                put_short_liquidity = get_liquidity_score(stock, target_exp_str, put_short['strike'], 'put')
+                put_long_liquidity = get_liquidity_score(stock, target_exp_str, put_long['strike'], 'put')
+                
+                # Calculate overall liquidity score (weighted average with more weight on short options)
+                overall_liquidity_score = (
+                    call_short_liquidity['score'] * 0.35 +
+                    put_short_liquidity['score'] * 0.35 +
+                    call_long_liquidity['score'] * 0.15 +
+                    put_long_liquidity['score'] * 0.15
+                )
+                
+                # Flag for zero bids
+                has_zero_bids = (
+                    call_short_liquidity['has_zero_bid'] or
+                    call_long_liquidity['has_zero_bid'] or
+                    put_short_liquidity['has_zero_bid'] or
+                    put_long_liquidity['has_zero_bid']
+                )
+                
                 # Calculate time to expiration in years
                 today = datetime.today().date()
                 expiry = datetime.strptime(target_exp_str, "%Y-%m-%d").date()
@@ -1195,9 +1278,20 @@ def find_optimal_iron_condor(ticker):
                 break_even_low = put_short_strike - net_credit
                 break_even_high = call_short_strike + net_credit
                 
-                # Calculate probability of profit (approximate)
+                # Calculate standard probability of profit (approximate)
                 # Based on delta of short options
                 prob_profit = 1 - (call_short_delta + put_short_delta)
+                
+                # Get IV30/RV30 ratio and term structure slope for volatility crush calculation
+                iv30_rv30 = get_iv30_rv30_ratio(ticker)
+                ts_slope = get_term_structure_slope(ticker)
+                
+                # Calculate enhanced probability of profit that accounts for volatility crush
+                enhanced_prob_profit = calculate_simplified_enhanced_probability(
+                    prob_profit,
+                    iv30_rv30,
+                    ts_slope
+                )
                 
                 # Calculate return on risk
                 return_on_risk = net_credit / max_loss
@@ -1227,30 +1321,54 @@ def find_optimal_iron_condor(ticker):
                 logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluated iron condor - Call spread: ${call_short_strike}-${call_long_strike}, Put spread: ${put_long_strike}-${put_short_strike}")
                 logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluated iron condor - Score: {score:.2f}, Net Credit: ${net_credit:.2f}, Prob Profit: {prob_profit:.2%}")
                 
+                # Convert NumPy types to Python native types for JSON serialization
+                def convert_numpy_types(obj):
+                    if isinstance(obj, dict):
+                        return {k: convert_numpy_types(v) for k, v in obj.items()}
+                    elif isinstance(obj, (list, tuple)):
+                        return [convert_numpy_types(item) for item in obj]
+                    elif isinstance(obj, np.bool_):
+                        return bool(obj)
+                    elif isinstance(obj, np.integer):
+                        return int(obj)
+                    elif isinstance(obj, np.floating):
+                        return float(obj)
+                    else:
+                        return obj
+                
                 # Return iron condor details
-                return {
+                result = {
                     "callSpread": {
                         "shortStrike": float(call_short_strike),
                         "longStrike": float(call_long_strike),
                         "shortDelta": float(call_short_delta),
                         "shortPremium": float(call_short_premium),
-                        "longPremium": float(call_long_premium)
+                        "longPremium": float(call_long_premium),
+                        "shortLiquidity": call_short_liquidity,
+                        "longLiquidity": call_long_liquidity
                     },
                     "putSpread": {
                         "shortStrike": float(put_short_strike),
                         "longStrike": float(put_long_strike),
                         "shortDelta": float(put_short_delta),
                         "shortPremium": float(put_short_premium),
-                        "longPremium": float(put_long_premium)
+                        "longPremium": float(put_long_premium),
+                        "shortLiquidity": put_short_liquidity,
+                        "longLiquidity": put_long_liquidity
                     },
                     "netCredit": float(net_credit),
                     "maxLoss": float(max_loss),
                     "breakEvenLow": float(break_even_low),
                     "breakEvenHigh": float(break_even_high),
                     "probProfit": float(prob_profit),
+                    "enhancedProbProfit": enhanced_prob_profit,
                     "returnOnRisk": float(return_on_risk),
-                    "score": float(score)
+                    "score": float(score),
+                    "liquidityScore": float(overall_liquidity_score),
+                    "hasZeroBids": bool(has_zero_bids)
                 }
+                
+                return convert_numpy_types(result)
             except Exception as e:
                 logger.warning(f"IRON CONDOR DEBUG: Error evaluating iron condor: {str(e)}")
                 logger.info(f"IRON CONDOR DEBUG: Error evaluating iron condor: {str(e)}")
@@ -1283,21 +1401,68 @@ def find_optimal_iron_condor(ticker):
             logger.info(f"IRON CONDOR DEBUG: No suitable iron condors found for {ticker}")
             return None
         
-        # Sort by score
+        # Sort iron condors by score
         iron_condors.sort(key=lambda x: x['score'], reverse=True)
         
         # Get top iron condors (increased from 5 to 25 for more flexibility)
         top_iron_condors = iron_condors[:25]
         
+        # Find the best alternative play with good liquidity
+        # This will be used when the top mathematical play has liquidity issues
+        next_best_play = None
+        
+        # Define minimum liquidity threshold
+        MIN_LIQUIDITY_SCORE = 4.5
+        
+        # If the top iron condor has liquidity issues, find an alternative
+        if top_iron_condors and len(top_iron_condors) > 1:
+            top_condor = top_iron_condors[0]
+            
+            # Check if top condor has liquidity issues
+            if top_condor['liquidityScore'] < MIN_LIQUIDITY_SCORE or top_condor['hasZeroBids']:
+                # Look for an alternative with better liquidity
+                for condor in iron_condors[1:]:
+                    # If top condor has zero bids, prioritize finding any alternative without zero bids
+                    if top_condor['hasZeroBids']:
+                        if (not condor['hasZeroBids'] and
+                            condor['score'] > top_condor['score'] * 0.7):  # At least 70% as good as top play
+                            next_best_play = condor
+                            break
+                    # Otherwise use the liquidity score threshold
+                    elif (condor['liquidityScore'] >= MIN_LIQUIDITY_SCORE and
+                          not condor['hasZeroBids'] and
+                          condor['score'] > top_condor['score'] * 0.7):  # At least 70% as good as top play
+                        next_best_play = condor
+                        break
+        
         # Return result
+        # Convert NumPy types to Python native types for JSON serialization
+        def convert_numpy_types(obj):
+            if isinstance(obj, dict):
+                return {k: convert_numpy_types(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_numpy_types(item) for item in obj]
+            elif isinstance(obj, np.bool_):
+                return bool(obj)
+            elif isinstance(obj, np.integer):
+                return int(obj)
+            elif isinstance(obj, np.floating):
+                return float(obj)
+            else:
+                return obj
+        
         result = {
             'expectedMove': {
                 'percent': float(expected_move_pct),
                 'dollars': float(expected_move_dollars)
             },
             'daysToExpiration': days_to_expiration,
-            'topIronCondors': top_iron_condors
+            'topIronCondors': top_iron_condors,
+            'nextBestPlay': next_best_play
         }
+        
+        # Convert any NumPy types to Python native types
+        result = convert_numpy_types(result)
         
         logger.info(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
         logger.warning(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
@@ -1318,6 +1483,290 @@ def find_optimal_iron_condor(ticker):
         logger.error(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
         logger.warning(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
         return None
+
+def get_iv30_rv30_ratio(ticker):
+    """
+    Calculate the IV30/RV30 ratio for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        float: IV30/RV30 ratio, or 1.5 as a default if calculation fails
+    """
+    try:
+        # Get stock data
+        stock = yf.Ticker(ticker)
+        
+        # Get historical price data for realized volatility calculation
+        price_history = stock.history(period='3mo')
+        
+        # Calculate realized volatility using Yang-Zhang estimator
+        rv30 = yang_zhang(price_history)
+        
+        # Get option chain for closest expiration
+        expirations = stock.options
+        if not expirations:
+            return 1.5  # Default if no options data available
+            
+        # Get implied volatility term structure
+        ivs = []
+        dtes = []
+        today = datetime.today().date()
+        
+        for exp_date in expirations[:min(4, len(expirations))]:
+            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            days_to_exp = (exp_date_obj - today).days
+            
+            if days_to_exp <= 0:
+                continue
+                
+            try:
+                # Get ATM IV
+                options = stock.option_chain(exp_date)
+                
+                # Get current price
+                current_price = stock.history(period='1d')['Close'].iloc[-1]
+                
+                # Find ATM options
+                calls = options.calls
+                puts = options.puts
+                
+                calls['strike_diff'] = abs(calls['strike'] - current_price)
+                puts['strike_diff'] = abs(puts['strike'] - current_price)
+                
+                atm_call = calls.loc[calls['strike_diff'].idxmin()]
+                atm_put = puts.loc[puts['strike_diff'].idxmin()]
+                
+                # Average the IVs
+                atm_iv = (atm_call['impliedVolatility'] + atm_put['impliedVolatility']) / 2
+                
+                if atm_iv > 0:
+                    ivs.append(atm_iv)
+                    dtes.append(days_to_exp)
+            except Exception:
+                continue
+                
+        # If we have at least 2 points, build term structure
+        if len(ivs) >= 2:
+            from scipy.interpolate import CubicSpline
+            term_spline = CubicSpline(dtes, ivs)
+            
+            # Get 30-day implied volatility
+            iv30 = term_spline(30)
+            
+            # Calculate IV30/RV30 ratio
+            if rv30 > 0:
+                return iv30 / rv30
+                
+        # Default value if calculation fails
+        return 1.5
+        
+    except Exception as e:
+        logger.warning(f"Error calculating IV30/RV30 ratio for {ticker}: {str(e)}")
+        return 1.5  # Default value
+
+def get_term_structure_slope(ticker):
+    """
+    Calculate the term structure slope for a given ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        float: Term structure slope, or -0.005 as a default if calculation fails
+    """
+    try:
+        # Get stock data
+        stock = yf.Ticker(ticker)
+        
+        # Get option chain for closest expiration
+        expirations = stock.options
+        if not expirations:
+            return -0.005  # Default if no options data available
+            
+        # Get implied volatility term structure
+        ivs = []
+        dtes = []
+        today = datetime.today().date()
+        
+        for exp_date in expirations[:min(4, len(expirations))]:
+            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            days_to_exp = (exp_date_obj - today).days
+            
+            if days_to_exp <= 0:
+                continue
+                
+            try:
+                # Get ATM IV
+                options = stock.option_chain(exp_date)
+                
+                # Get current price
+                current_price = stock.history(period='1d')['Close'].iloc[-1]
+                
+                # Find ATM options
+                calls = options.calls
+                puts = options.puts
+                
+                calls['strike_diff'] = abs(calls['strike'] - current_price)
+                puts['strike_diff'] = abs(puts['strike'] - current_price)
+                
+                atm_call = calls.loc[calls['strike_diff'].idxmin()]
+                atm_put = puts.loc[puts['strike_diff'].idxmin()]
+                
+                # Average the IVs
+                atm_iv = (atm_call['impliedVolatility'] + atm_put['impliedVolatility']) / 2
+                
+                if atm_iv > 0:
+                    ivs.append(atm_iv)
+                    dtes.append(days_to_exp)
+            except Exception:
+                continue
+                
+        # If we have at least 2 points, calculate slope
+        if len(ivs) >= 2 and 0 in dtes:
+            # Calculate slope between 0 and 45 days
+            from scipy.interpolate import CubicSpline
+            term_spline = CubicSpline(dtes, ivs)
+            
+            # Calculate slope as (IV45 - IV0) / 45
+            iv0 = term_spline(0)
+            iv45 = term_spline(45)
+            
+            return (iv45 - iv0) / 45
+                
+        # Default value if calculation fails
+        return -0.005
+        
+    except Exception as e:
+        logger.warning(f"Error calculating term structure slope for {ticker}: {str(e)}")
+        return -0.005  # Default value
+
+def calculate_simplified_enhanced_probability(standard_probability, iv30_rv30, ts_slope):
+    """
+    Calculate enhanced probability using only iv30/rv30 and ts_slope.
+    
+    Args:
+        standard_probability (float): Standard delta-based probability
+        iv30_rv30 (float): IV30/RV30 ratio
+        ts_slope (float): Term structure slope
+        
+    Returns:
+        dict: Enhanced probability details
+    """
+    try:
+        # iv30/rv30 effect - higher ratio suggests more volatility crush potential
+        # Typical screening threshold is iv30/rv30 >= 1.25
+        iv_rv_boost = 0.0
+        if iv30_rv30 >= 1.25:
+            # Scale from 0-30% boost as ratio increases from 1.25 to 2.5+
+            iv_rv_boost = min(0.3, (iv30_rv30 - 1.25) * 0.24)
+        
+        # ts_slope effect - more negative slope suggests more term structure decay
+        # Typical screening threshold is ts_slope <= -0.00406
+        slope_boost = 0.0
+        if ts_slope <= -0.00406:
+            # Scale from 0-25% boost as slope decreases from -0.00406 to -0.02+
+            slope_boost = min(0.25, (-ts_slope - 0.00406) * 12.5)
+        
+        # Combine the boosts (multiplicatively to avoid excessive boost)
+        # This ensures both factors contribute but individual boosts are capped
+        combined_boost = (1 + iv_rv_boost) * (1 + slope_boost) - 1
+        
+        # Cap the maximum boost at 50%
+        combined_boost = min(0.5, combined_boost)
+        
+        # Apply boost to standard probability, with a maximum of 95%
+        enhanced_probability = standard_probability * (1 + combined_boost)
+        enhanced_probability = min(0.95, enhanced_probability)
+        
+        # Calculate confidence interval
+        confidence_low = max(0.05, enhanced_probability * 0.9)
+        confidence_high = min(0.95, enhanced_probability * 1.1)
+        
+        # Return in the same format as before for compatibility
+        return {
+            'ensemble_probability': float(enhanced_probability),
+            'confidence_interval': {
+                'low': float(confidence_low),
+                'high': float(confidence_high)
+            },
+            'component_probabilities': {
+                'iv_based': float(standard_probability),
+                'iv_rv_boost': float(iv_rv_boost),
+                'slope_boost': float(slope_boost),
+                'combined_boost': float(combined_boost)
+            }
+        }
+    except Exception as e:
+        logger.warning(f"Error calculating simplified enhanced probability: {str(e)}")
+        # Fallback to standard probability
+        return {
+            'ensemble_probability': float(standard_probability),
+            'confidence_interval': {
+                'low': float(max(0.05, standard_probability * 0.9)),
+                'high': float(min(0.95, standard_probability * 1.1))
+            },
+            'component_probabilities': {
+                'iv_based': float(standard_probability),
+                'iv_rv_boost': 0.0,
+                'slope_boost': 0.0,
+                'combined_boost': 0.0
+            }
+        }
+
+def build_term_structure(days_to_expiration, implied_volatilities):
+    """
+    Build a term structure model using cubic spline interpolation.
+    
+    Args:
+        days_to_expiration (list): List of days to expiration
+        implied_volatilities (list): List of implied volatilities
+        
+    Returns:
+        function: Spline function that can be called with any DTE
+    """
+    from scipy.interpolate import CubicSpline
+    
+    # Create the spline
+    cs = CubicSpline(days_to_expiration, implied_volatilities)
+    
+    return cs
+
+def get_atm_iv(stock, expiration_date, current_price):
+    """
+    Get the at-the-money implied volatility for a given expiration date.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        expiration_date (str): Expiration date in YYYY-MM-DD format
+        current_price (float): Current stock price
+        
+    Returns:
+        float: At-the-money implied volatility
+    """
+    try:
+        # Get option chain for the expiration date
+        options = stock.option_chain(expiration_date)
+        
+        # Get calls and puts
+        calls = options.calls
+        puts = options.puts
+        
+        # Find the closest strike to current price for calls
+        calls['strike_diff'] = abs(calls['strike'] - current_price)
+        atm_call = calls.loc[calls['strike_diff'].idxmin()]
+        
+        # Find the closest strike to current price for puts
+        puts['strike_diff'] = abs(puts['strike'] - current_price)
+        atm_put = puts.loc[puts['strike_diff'].idxmin()]
+        
+        # Average the IVs
+        atm_iv = (atm_call['impliedVolatility'] + atm_put['impliedVolatility']) / 2
+        
+        return atm_iv
+    except Exception:
+        return 0.0
 
 def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
     """

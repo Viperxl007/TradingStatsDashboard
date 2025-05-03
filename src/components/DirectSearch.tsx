@@ -37,6 +37,7 @@ import TradingViewWidget from './TradingViewWidget';
 import EarningsHistoryChart from './EarningsHistoryChart';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
+import CalendarSpreadDisplay from './CalendarSpreadDisplay';
 
 declare global {
   interface Window {
@@ -267,44 +268,30 @@ const DirectSearch: React.FC = () => {
                     </Flex>
                   </Stack>
                   
-                  {/* Optimal Spread Section - Always show if optimalCalendarSpread is available */}
+                  {/* Calendar Spread Section - Always show if optimalCalendarSpread is available */}
                   {optionsData.analysisResult.optimalCalendarSpread && (
                     <>
                       <Divider my={4} />
-                      <Heading size="sm" mb={3}>
-                        Optimal Spread
+                      <Box mt={4}>
+                        <CalendarSpreadDisplay
+                          ticker={optionsData.analysisResult.ticker}
+                          calendarSpread={optionsData.analysisResult.optimalCalendarSpread}
+                          expectedMove={{
+                            percent: parseFloat(optionsData.analysisResult.expectedMove.replace('%', '')) / 100,
+                            dollars: parseFloat(optionsData.analysisResult.expectedMove.replace('%', '')) * optionsData.analysisResult.currentPrice / 100
+                          }}
+                          daysToExpiration={30} // Approximate, would be provided by backend in real implementation
+                          compact={true}
+                        />
                         {optionsData.analysisResult.optimalCalendarSpread.metricsPass === "false" && (
-                          <Badge ml={2} colorScheme="orange">Metrics Not Met</Badge>
+                          <Alert status="warning" mt={2} size="sm">
+                            <AlertIcon />
+                            <Text fontSize="sm">
+                              Note: This ticker does not meet all the recommended metrics for a calendar spread.
+                            </Text>
+                          </Alert>
                         )}
-                      </Heading>
-                      <Stack spacing={3}>
-                        <Flex align="center">
-                          <Text fontWeight="medium">Strike Price:</Text>
-                          <Text ml={2}>${optionsData.analysisResult.optimalCalendarSpread.strike.toFixed(2)}</Text>
-                        </Flex>
-                        <Flex align="center">
-                          <Text fontWeight="medium">Front Month:</Text>
-                          <Text ml={2}>{new Date(optionsData.analysisResult.optimalCalendarSpread.frontMonth).toLocaleDateString()}</Text>
-                        </Flex>
-                        <Flex align="center">
-                          <Text fontWeight="medium">Back Month:</Text>
-                          <Text ml={2}>{new Date(optionsData.analysisResult.optimalCalendarSpread.backMonth).toLocaleDateString()}</Text>
-                        </Flex>
-                        <Flex align="center">
-                          <Text fontWeight="medium">Spread Cost:</Text>
-                          <Text ml={2}>${optionsData.analysisResult.optimalCalendarSpread.spreadCost.toFixed(2)}</Text>
-                        </Flex>
-                        <Flex align="center">
-                          <Text fontWeight="medium">IV Differential:</Text>
-                          <Text ml={2}>{(optionsData.analysisResult.optimalCalendarSpread.ivDifferential * 100).toFixed(2)}%</Text>
-                        </Flex>
-                        <Text fontSize="sm" fontStyle="italic" mt={2}>
-                          This is the algorithmically identified optimal calendar spread based on liquidity, IV differential, and cost efficiency.
-                          {optionsData.analysisResult.optimalCalendarSpread.metricsPass === "false" && (
-                            <Text as="span" color="orange.500"> Note: This ticker does not meet all the recommended metrics for a calendar spread.</Text>
-                          )}
-                        </Text>
-                      </Stack>
+                      </Box>
                     </>
                   )}
                   
@@ -354,7 +341,8 @@ const DirectSearch: React.FC = () => {
                           ironCondors={optionsData.analysisResult.optimalIronCondors || {
                             expectedMove: { percent: 0, dollars: 0 },
                             daysToExpiration: 0,
-                            topIronCondors: []
+                            topIronCondors: [],
+                            nextBestPlay: null
                           }}
                           compact={true}
                         />

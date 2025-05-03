@@ -213,6 +213,17 @@ export interface DataState {
 }
 
 /**
+ * Liquidity details for an option
+ */
+export interface LiquidityDetails {
+  score: number;               // Overall liquidity score (0-10)
+  spread_pct: number;          // Bid-ask spread as percentage of option price
+  volume: number;              // Trading volume
+  open_interest: number;       // Open interest
+  has_zero_bid: boolean;       // Whether the option has a zero bid
+}
+
+/**
  * Iron condor spread leg details
  */
 export interface IronCondorSpreadLeg {
@@ -221,6 +232,25 @@ export interface IronCondorSpreadLeg {
   shortDelta: number;          // Delta of short option
   shortPremium: number;        // Premium of short option
   longPremium: number;         // Premium of long option
+  shortLiquidity: LiquidityDetails; // Liquidity details for short option
+  longLiquidity: LiquidityDetails;  // Liquidity details for long option
+}
+
+/**
+ * Enhanced probability of profit details that account for volatility crush
+ */
+export interface EnhancedProbability {
+  ensemble_probability: number;     // Weighted average of all probability estimates
+  confidence_interval: {
+    low: number;                    // Lower bound of confidence interval
+    high: number;                   // Upper bound of confidence interval
+  };
+  component_probabilities: {
+    iv_based: number;               // Standard delta-based probability
+    expected_move_based: number;    // Probability based on expected move
+    term_structure_based: number;   // Probability based on term structure
+    historical_vol_based: number;   // Probability based on historical volatility
+  };
 }
 
 /**
@@ -233,9 +263,12 @@ export interface IronCondor {
   maxLoss: number;                  // Maximum possible loss
   breakEvenLow: number;             // Lower break-even price
   breakEvenHigh: number;            // Higher break-even price
-  probProfit: number;               // Probability of profit
+  probProfit: number;               // Standard probability of profit
+  enhancedProbProfit?: EnhancedProbability; // Enhanced probability accounting for volatility crush
   returnOnRisk: number;             // Return on risk (net credit / max loss)
   score: number;                    // Algorithmic score
+  liquidityScore: number;           // Overall liquidity score (0-10)
+  hasZeroBids: boolean;             // Whether any leg has zero bids
 }
 
 /**
@@ -248,4 +281,5 @@ export interface OptimalIronCondors {
   };
   daysToExpiration: number;      // Days to expiration
   topIronCondors: IronCondor[];  // Top iron condor opportunities
+  nextBestPlay: IronCondor | null; // Alternative play with better liquidity
 }
