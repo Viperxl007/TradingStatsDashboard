@@ -1,24 +1,28 @@
 import React from 'react';
 import { Box, Tooltip, Flex, Text } from '@chakra-ui/react';
 
-interface ScoreThermometerProps {
-  score: number;
+interface LiquidityThermometerProps {
+  liquidityScore: number;
+  hasZeroBids?: boolean;
   size?: 'sm' | 'md' | 'lg';
 }
 
 /**
- * ScoreThermometer Component
+ * LiquidityThermometer Component
  * 
- * Displays a thermometer visualization for a score value with a color gradient
- * from red (poor score) to yellow (moderate score) to green (high score).
- *
- * Score ranges:
- * - Below 1.0: Poor (red)
- * - 1.0-2.0: Moderate (yellow)
- * - 2.0-3.0: Strong (light green)
- * - Above 3.0: Exceptional (green)
+ * Displays a thermometer visualization for a liquidity score with a color gradient
+ * from red (poor liquidity) to yellow (moderate liquidity) to green (high liquidity).
+ * 
+ * Liquidity ranges:
+ * - Below 3.0: Poor (red) - Wide spreads, low volume, or zero bids
+ * - 3.0-7.0: Moderate (yellow) - Acceptable spreads and volume
+ * - Above 7.0: High (green) - Tight spreads, high volume
  */
-const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' }) => {
+const LiquidityThermometer: React.FC<LiquidityThermometerProps> = ({ 
+  liquidityScore, 
+  hasZeroBids = false,
+  size = 'md' 
+}) => {
   // Determine dimensions based on size
   const getSize = () => {
     switch (size) {
@@ -34,24 +38,25 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
 
   const { width, height, fontSize, indicatorSize } = getSize();
 
-  // Calculate position and color based on score
+  // Calculate position and color based on liquidity score
   const getPositionAndColor = () => {
-    // Clamp score between 0 and 4 for positioning
-    const clampedScore = Math.max(0, Math.min(4, score));
+    // If there are zero bids, force the lowest score
+    const effectiveScore = hasZeroBids ? 0 : liquidityScore;
+    
+    // Clamp score between 0 and 10 for positioning
+    const clampedScore = Math.max(0, Math.min(10, effectiveScore));
     
     // Position as percentage (0 to 100%)
-    const position = (clampedScore / 4) * 100;
+    const position = (clampedScore / 10) * 100;
     
-    // Color based on score ranges
+    // Color based on liquidity ranges
     let color;
-    if (score < 1.0) {
-      color = 'red.500'; // Poor
-    } else if (score < 2.0) {
-      color = 'yellow.500'; // Moderate
-    } else if (score < 3.0) {
-      color = 'green.300'; // Strong
+    if (hasZeroBids || effectiveScore < 3.0) {
+      color = 'red.500'; // Poor liquidity
+    } else if (effectiveScore < 7.0) {
+      color = 'yellow.500'; // Moderate liquidity
     } else {
-      color = 'green.500'; // Exceptional
+      color = 'green.500'; // High liquidity
     }
     
     return { position, color };
@@ -59,14 +64,22 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
 
   const { position, color } = getPositionAndColor();
 
+  // Get liquidity description
+  const getLiquidityDescription = () => {
+    if (hasZeroBids) {
+      return 'Poor liquidity - Contains zero bids';
+    } else if (liquidityScore < 3.0) {
+      return 'Poor liquidity - Wide spreads, low volume';
+    } else if (liquidityScore < 7.0) {
+      return 'Moderate liquidity - Acceptable spreads and volume';
+    } else {
+      return 'High liquidity - Tight spreads, good volume';
+    }
+  };
+
   return (
     <Tooltip 
-      label={`Strategy Score: ${score.toFixed(2)} - ${
-        score < 1.0 ? 'Poor opportunity' :
-        score < 2.0 ? 'Moderate opportunity' :
-        score < 3.0 ? 'Strong opportunity' :
-        'Exceptional opportunity'
-      }`}
+      label={`Liquidity: ${liquidityScore.toFixed(1)} - ${getLiquidityDescription()}`}
       placement="top"
     >
       <Flex direction="column" alignItems="center">
@@ -88,7 +101,7 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
             bgGradient="linear(to-r, red.500, yellow.500, green.500)"
           />
           
-          {/* Score indicator */}
+          {/* Liquidity indicator */}
           <Box
             position="absolute"
             top="50%"
@@ -103,11 +116,11 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
           />
         </Box>
         <Text fontSize={fontSize} mt="1" fontWeight="bold" color={color}>
-          {score.toFixed(2)}
+          {hasZeroBids ? "Zero Bids" : liquidityScore.toFixed(1)}
         </Text>
       </Flex>
     </Tooltip>
   );
 };
 
-export default ScoreThermometer;
+export default LiquidityThermometer;

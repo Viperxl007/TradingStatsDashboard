@@ -36,6 +36,7 @@ import { scanEarningsToday, scanEarningsByDate } from '../services/optionsServic
 import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
+import CalendarSpreadDisplay from './CalendarSpreadDisplay';
 
 /**
  * ScanResults Component
@@ -353,7 +354,37 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             </HStack>
           </Flex>
           
-          {/* Display naked options details for selected ticker - MOVED ABOVE TABLE */}
+          {/* Display calendar spread details for selected ticker */}
+          {strategyType === 'calendar' && selectedTicker && (
+            <Box
+              borderWidth="2px"
+              borderRadius="lg"
+              borderColor="brand.500"
+              bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+              boxShadow="lg"
+              mb={6}
+              overflow="hidden"
+            >
+              {filteredResults
+                .filter(result => result.ticker === selectedTicker && result.optimalCalendarSpread)
+                .map(result => (
+                  <CalendarSpreadDisplay
+                    key={result.ticker}
+                    ticker={result.ticker}
+                    calendarSpread={result.optimalCalendarSpread!}
+                    expectedMove={{
+                      percent: parseFloat(result.expectedMove.replace('%', '')) / 100,
+                      dollars: parseFloat(result.expectedMove.replace('%', '')) * result.currentPrice / 100
+                    }}
+                    daysToExpiration={30} // Approximate, would be provided by backend in real implementation
+                    compact={true}
+                  />
+                ))
+              }
+            </Box>
+          )}
+          
+          {/* Display naked options details for selected ticker */}
           {strategyType === 'naked' && selectedTicker && (
             <Box
               borderWidth="2px"
@@ -378,6 +409,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             </Box>
           )}
           
+          {/* Display iron condor details for selected ticker */}
           {strategyType === 'ironCondor' && selectedTicker && (
             <Box
               borderWidth="2px"
@@ -463,6 +495,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                   {strategyType === 'naked' && (
                     <Th>Naked Options</Th>
                   )}
+                  {strategyType === 'calendar' && (
+                    <Th>Calendar Spreads</Th>
+                  )}
                   {strategyType === 'ironCondor' && (
                     <Th>Iron Condors</Th>
                   )}
@@ -474,6 +509,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                     key={result.ticker}
                     onClick={() => handleRowClick(result.ticker)}
                     cursor={
+                      (strategyType === 'calendar' && result.optimalCalendarSpread) ||
                       (strategyType === 'naked' && result.optimalNakedOptions) ||
                       (strategyType === 'ironCondor' && result.optimalIronCondors)
                         ? 'pointer'
@@ -483,6 +519,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                       ? (colorMode === 'dark' ? 'brand.900' : 'brand.50')
                       : undefined}
                     _hover={
+                      (strategyType === 'calendar' && result.optimalCalendarSpread) ||
                       (strategyType === 'naked' && result.optimalNakedOptions) ||
                       (strategyType === 'ironCondor' && result.optimalIronCondors)
                         ? { bg: colorMode === 'dark' ? 'brand.800' : 'brand.50' }
@@ -537,6 +574,15 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                     {strategyType === 'naked' && (
                       <Td>
                         {result.optimalNakedOptions ? (
+                          <Badge colorScheme="green" fontSize="sm" px={2} py={1}>Available</Badge>
+                        ) : (
+                          <Badge colorScheme="gray" fontSize="sm" px={2} py={1}>None</Badge>
+                        )}
+                      </Td>
+                    )}
+                    {strategyType === 'calendar' && (
+                      <Td>
+                        {result.optimalCalendarSpread ? (
                           <Badge colorScheme="green" fontSize="sm" px={2} py={1}>Available</Badge>
                         ) : (
                           <Badge colorScheme="gray" fontSize="sm" px={2} py={1}>None</Badge>
