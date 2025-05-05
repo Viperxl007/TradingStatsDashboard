@@ -12,6 +12,23 @@ import logging
 from datetime import datetime, timedelta
 import json
 import importlib.util
+import concurrent.futures
+import threading
+import queue
+from functools import wraps
+
+# Import configuration
+try:
+    from config import YF_RATE_LIMIT, PARALLEL_PROCESSING, QUICK_FILTER
+    logger = logging.getLogger(__name__)
+    logger.info("Loaded configuration from config.py")
+except ImportError:
+    # Default configuration if config.py is not found
+    logger = logging.getLogger(__name__)
+    logger.warning("config.py not found, using default configuration")
+    YF_RATE_LIMIT = {"rate": 5, "per": 1.0, "burst": 10}
+    PARALLEL_PROCESSING = {"min_workers": 2, "max_workers": 16, "api_calls_per_ticker": 8, "target_completion_time": (30, 60)}
+    QUICK_FILTER = {"min_price": 2.50, "min_volume": 1500000}
 
 # Add app directory to path to allow importing from app
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -826,9 +843,98 @@ def build_term_structure(days, ivs):
 
     return term_spline
 
+# Rate limiter for API calls
+class RateLimiter:
+    """
+    Rate limiter to prevent hitting API rate limits.
+    
+    This class implements a token bucket algorithm to limit the rate of API calls.
+    It allows for bursts of requests up to a maximum number, but enforces an
+    average rate over time.
+    """
+    def __init__(self, rate=5, per=1.0, burst=10):
+        """
+        Initialize the rate limiter.
+        
+        Args:
+            rate (float): Number of requests allowed per time period
+            per (float): Time period in seconds
+            burst (int): Maximum burst size (token bucket capacity)
+        """
+        self.rate = rate  # requests per second
+        self.per = per    # seconds
+        self.tokens = burst  # initial tokens
+        self.capacity = burst  # maximum tokens
+        self.last_refill = time.time()
+        self.lock = threading.RLock()
+        
+    def _refill(self):
+        """Refill tokens based on elapsed time."""
+        now = time.time()
+        elapsed = now - self.last_refill
+        new_tokens = elapsed * (self.rate / self.per)
+        self.tokens = min(self.capacity, self.tokens + new_tokens)
+        self.last_refill = now
+        
+    def acquire(self, block=True, timeout=None):
+        """
+        Acquire a token from the bucket.
+        
+        Args:
+            block (bool): Whether to block until a token is available
+            timeout (float): Maximum time to wait for a token
+            
+        Returns:
+            bool: True if a token was acquired, False otherwise
+        """
+        start_time = time.time()
+        
+        while True:
+            with self.lock:
+                self._refill()
+                
+                if self.tokens >= 1:
+                    self.tokens -= 1
+                    return True
+                
+                if not block:
+                    return False
+                
+                if timeout is not None and time.time() - start_time > timeout:
+                    return False
+            
+            # Wait a bit before trying again
+            time.sleep(0.05)
+    
+    def __call__(self, func):
+        """
+        Decorator to rate-limit a function.
+        
+        Args:
+            func: The function to rate-limit
+            
+        Returns:
+            The rate-limited function
+        """
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            self.acquire(block=True)
+            return func(*args, **kwargs)
+        return wrapper
+
+# Create a rate limiter for yfinance API calls
+# Create rate limiter for yfinance API calls using configuration
+yf_rate_limiter = RateLimiter(
+    rate=YF_RATE_LIMIT["rate"],
+    per=YF_RATE_LIMIT["per"],
+    burst=YF_RATE_LIMIT["burst"]
+)
+_yf_api_lock = threading.RLock()
+
 def get_current_price(ticker):
     """
     Get the current price for a stock.
+    Thread-safe implementation with rate limiting and retry logic.
     
     Args:
         ticker: yfinance Ticker object
@@ -836,19 +942,38 @@ def get_current_price(ticker):
     Returns:
         float: Current price or None if there's an error
     """
-    try:
-        todays_data = ticker.history(period='1d')
-        if todays_data.empty:
-            logger.warning(f"No price data available for {ticker.ticker}")
-            return None
-        return todays_data['Close'].iloc[0]
-    except Exception as e:
-        logger.warning(f"Error getting current price for {ticker.ticker}: {str(e)}")
-        return None
+    max_retries = 3
+    retry_delay = 1  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Acquire a token from the rate limiter
+            if not yf_rate_limiter.acquire(block=True, timeout=10):
+                logger.warning(f"Rate limit timeout for {ticker.ticker} - could not acquire token within 10 seconds")
+                if attempt < max_retries - 1:
+                    continue
+                else:
+                    return None
+            
+            # Use a lock to prevent too many simultaneous API calls
+            with _yf_api_lock:
+                todays_data = ticker.history(period='1d')
+                if todays_data.empty:
+                    logger.warning(f"No price data available for {ticker.ticker}")
+                    return None
+                return todays_data['Close'].iloc[0]
+        except Exception as e:
+            if attempt < max_retries - 1:
+                logger.warning(f"Error getting current price for {ticker.ticker} (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying...")
+                time.sleep(retry_delay)
+            else:
+                logger.warning(f"Error getting current price for {ticker.ticker} after {max_retries} attempts: {str(e)}")
+                return None
 
 def analyze_options(ticker_symbol, is_scan_mode=False):
     """
     Analyze options data for a given ticker and provide a recommendation.
+    Optimized for parallel execution with thread safety and retry logic.
     
     Args:
         ticker_symbol (str): The ticker symbol to analyze
@@ -859,36 +984,52 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
         if not ticker_symbol:
             return {"error": "No stock symbol provided."}
         
-        # Get stock and options data
-        stock = yf.Ticker(ticker_symbol)
+        # Get stock data with thread safety
+        with _yf_api_lock:
+            stock = yf.Ticker(ticker_symbol)
         
         # Get current price early to filter out low-priced stocks
         current_price = get_current_price(stock)
         
         # Skip stocks with price under $2.50
-        if current_price is not None and current_price < 2.50:
+        if current_price is None:
+            return {"error": "Could not retrieve current price."}
+        elif current_price < 2.50:
             logger.info(f"{ticker_symbol}: Skipping analysis - price ${current_price} is below $2.50 minimum threshold")
             return {"error": f"Stock price (${current_price}) is below the minimum threshold of $2.50"}
-            
-        if len(stock.options) == 0:
-            return {"error": f"No options found for stock symbol '{ticker_symbol}'."}
         
-        # Filter expiration dates
-        exp_dates = list(stock.options)
+        # Get options data with thread safety
+        with _yf_api_lock:
+            if len(stock.options) == 0:
+                return {"error": f"No options found for stock symbol '{ticker_symbol}'."}
+            
+            # Filter expiration dates
+            exp_dates = list(stock.options)
+        
         try:
             exp_dates = filter_dates(exp_dates)
         except Exception:
             return {"error": "Not enough option data."}
         
-        # Get options chains for each expiration date
+        # Get options chains for each expiration date with thread safety and retry logic
         options_chains = {}
         for exp_date in exp_dates:
-            options_chains[exp_date] = stock.option_chain(exp_date)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    with _yf_api_lock:
+                        options_chains[exp_date] = stock.option_chain(exp_date)
+                    break
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        logger.warning(f"Error getting option chain for {ticker_symbol} {exp_date} (attempt {attempt+1}/{max_retries}): {str(e)}. Retrying...")
+                        time.sleep(1)
+                    else:
+                        logger.error(f"Failed to get option chain for {ticker_symbol} {exp_date} after {max_retries} attempts")
+                        return {"error": f"Failed to get option data for {exp_date}: {str(e)}"}
         
-        # Get current price
-        underlying_price = get_current_price(stock)
-        if underlying_price is None:
-            return {"error": "No market price found."}
+        # Use the current price we already retrieved
+        underlying_price = current_price
         
         # Calculate ATM IV for each expiration
         atm_iv = {}
@@ -1029,8 +1170,17 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
             # Also search for optimal naked options in direct search mode
             logger.info(f"{ticker_symbol}: Direct search mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
             
-            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer
-            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
+            # Import the find_optimal_naked_options function from options_analyzer
+            # and the optimized iron condor implementation
+            from app.options_analyzer import find_optimal_naked_options
+            try:
+                # Try to import the optimized iron condor implementation
+                from app.optimized_iron_condor import find_optimal_iron_condor
+                logger.info(f"{ticker_symbol}: Using optimized iron condor implementation")
+            except ImportError:
+                # Fall back to the original implementation if the optimized one is not available
+                from app.options_analyzer import find_optimal_iron_condor
+                logger.info(f"{ticker_symbol}: Using original iron condor implementation")
             
             # Find optimal naked options
             optimal_naked = find_optimal_naked_options(ticker_symbol)
@@ -1055,8 +1205,17 @@ def analyze_options(ticker_symbol, is_scan_mode=False):
             # This is important for the screener tab to show naked options
             logger.info(f"{ticker_symbol}: Scan mode - Searching for optimal naked options (metrics pass: {avg_volume_pass and iv30_rv30_pass and ts_slope_pass})")
             
-            # Import the find_optimal_naked_options and find_optimal_iron_condor functions from options_analyzer if not already imported
-            from app.options_analyzer import find_optimal_naked_options, find_optimal_iron_condor
+            # Import the find_optimal_naked_options function from options_analyzer
+            # and the optimized iron condor implementation if not already imported
+            from app.options_analyzer import find_optimal_naked_options
+            try:
+                # Try to import the optimized iron condor implementation
+                from app.optimized_iron_condor import find_optimal_iron_condor
+                logger.info(f"{ticker_symbol}: Using optimized iron condor implementation in scan mode")
+            except ImportError:
+                # Fall back to the original implementation if the optimized one is not available
+                from app.options_analyzer import find_optimal_iron_condor
+                logger.info(f"{ticker_symbol}: Using original iron condor implementation in scan mode")
             
             if avg_volume_pass and iv30_rv30_pass and ts_slope_pass:
                 # Find optimal naked options
@@ -1359,6 +1518,66 @@ def get_earnings_calendar(date_str=None):
         logger.error(f"Error fetching earnings calendar: {str(e)}")
         raise Exception(f"Error fetching earnings calendar: {str(e)}")
 
+
+def quick_filter_ticker(ticker_symbol):
+    """
+    Quickly filter tickers based on price and volume criteria.
+    Rate-limited implementation to prevent hitting API limits.
+    
+    Args:
+        ticker_symbol (str): The ticker symbol to filter
+        
+    Returns:
+        bool: True if the ticker passes the quick filter, False otherwise
+    """
+    try:
+        logger.info(f"Quick filtering ticker: {ticker_symbol}")
+        
+        # Get stock data with rate limiting
+        if not yf_rate_limiter.acquire(block=True, timeout=10):
+            logger.warning(f"Rate limit timeout for {ticker_symbol} - skipping quick filter")
+            return False
+            
+        with _yf_api_lock:
+            stock = yf.Ticker(ticker_symbol)
+        
+        # Check price
+        current_price = get_current_price(stock)
+        min_price = QUICK_FILTER["min_price"]
+        if current_price is None or current_price < min_price:
+            logger.info(f"{ticker_symbol}: Failed quick filter - price ${current_price} is below ${min_price} minimum threshold")
+            return False
+            
+        # Check volume
+        try:
+            # Acquire a token from the rate limiter
+            if not yf_rate_limiter.acquire(block=True, timeout=10):
+                logger.warning(f"Rate limit timeout for {ticker_symbol} volume check - skipping")
+                return False
+                
+            with _yf_api_lock:
+                price_history = stock.history(period='5d')
+                
+            if price_history.empty:
+                logger.info(f"{ticker_symbol}: Failed quick filter - no price history available")
+                return False
+                
+            avg_volume = price_history['Volume'].mean()
+            min_volume = QUICK_FILTER["min_volume"]
+            if avg_volume < min_volume:
+                logger.info(f"{ticker_symbol}: Failed quick filter - average volume {avg_volume} is below {min_volume:,} threshold")
+                return False
+                
+            logger.info(f"{ticker_symbol}: Passed quick filter - price: ${current_price}, volume: {avg_volume}")
+            return True
+        except Exception as e:
+            logger.warning(f"Error checking volume for {ticker_symbol}: {str(e)}")
+            return False
+            
+    except Exception as e:
+        logger.warning(f"Error in quick filter for {ticker_symbol}: {str(e)}")
+        return False
+
 # API Routes
 @app.route('/api/health', methods=['GET'])
 def health_check():
@@ -1389,9 +1608,107 @@ def analyze_ticker(ticker):
             "timestamp": datetime.now().timestamp()
         }), 500
 
+def process_ticker(earning):
+    """
+    Process a single ticker for the earnings scan.
+    This function is designed to be used with ThreadPoolExecutor.
+    
+    Args:
+        earning (dict): Earnings data for a ticker
+        
+    Returns:
+        dict: Analysis result for the ticker
+    """
+    ticker = earning.get('ticker')
+    if not ticker:
+        logger.warning(f"Skipping earning without ticker: {earning}")
+        return None
+        
+    logger.info(f"Processing ticker: {ticker}, company: {earning.get('companyName', '')}")
+    
+    try:
+        # First apply quick filter
+        if not quick_filter_ticker(ticker):
+            logger.info(f"{ticker} did not pass quick filter, skipping detailed analysis")
+            return {
+                "ticker": ticker,
+                "companyName": earning.get('companyName', ''),
+                "reportTime": earning.get('reportTime', ''),
+                "currentPrice": None,
+                "metrics": {
+                    "avgVolume": None,
+                    "avgVolumePass": "false",
+                    "iv30Rv30": None,
+                    "iv30Rv30Pass": "false",
+                    "tsSlope": None,
+                    "tsSlopePass": "false"
+                },
+                "expectedMove": "N/A",
+                "recommendation": "Filtered Out",
+                "error": "Did not pass quick filter criteria",
+                "timestamp": datetime.now().timestamp()
+            }
+        
+        # If it passes quick filter, perform detailed analysis
+        logger.info(f"{ticker} passed quick filter, performing detailed analysis")
+        analysis = analyze_options(ticker, is_scan_mode=True)
+        
+        if "error" not in analysis:
+            # Add company name from earnings data
+            analysis['companyName'] = earning.get('companyName', '')
+            analysis['reportTime'] = earning.get('reportTime', '')
+            logger.info(f"Successfully analyzed {ticker}")
+            return analysis
+        else:
+            # Include failed analysis with error message but with valid structure
+            error_msg = analysis["error"]
+            logger.warning(f"Analysis error for {ticker}: {error_msg}")
+            
+            # Create a placeholder result with the error but valid structure
+            return {
+                "ticker": ticker,
+                "companyName": earning.get('companyName', ''),
+                "reportTime": earning.get('reportTime', ''),
+                "currentPrice": None,
+                "metrics": {
+                    "avgVolume": None,
+                    "avgVolumePass": "false",
+                    "iv30Rv30": None,
+                    "iv30Rv30Pass": "false",
+                    "tsSlope": None,
+                    "tsSlopePass": "false"
+                },
+                "expectedMove": "N/A",
+                "recommendation": "No Data",
+                "error": error_msg,
+                "timestamp": datetime.now().timestamp()
+            }
+    except Exception as e:
+        logger.warning(f"Error analyzing {ticker}: {str(e)}")
+        # Include failed analysis with error message but with valid structure
+        return {
+            "ticker": ticker,
+            "companyName": earning.get('companyName', ''),
+            "reportTime": earning.get('reportTime', ''),
+            "currentPrice": None,
+            "metrics": {
+                "avgVolume": None,
+                "avgVolumePass": "false",
+                "iv30Rv30": None,
+                "iv30Rv30Pass": "false",
+                "tsSlope": None,
+                "tsSlopePass": "false"
+            },
+            "expectedMove": "N/A",
+            "recommendation": "No Data",
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }
+
+
 @app.route('/api/scan/earnings', methods=['GET'])
 def scan_earnings():
-    """Scan stocks with earnings announcements for options analysis."""
+    """Scan stocks with earnings announcements for options analysis using parallel processing."""
     try:
         # Get date parameter if provided
         date_str = request.args.get('date')
@@ -1437,34 +1754,63 @@ def scan_earnings():
             }), 500
         
         # Log the earnings data for debugging
-        logger.info(f"Processing {len(earnings)} earnings announcements")
+        logger.info(f"Processing {len(earnings)} earnings announcements in parallel")
         for i, earning in enumerate(earnings[:5]):  # Log first 5 for debugging
             logger.info(f"Earning {i+1}: {earning}")
         
-        # Analyze each ticker
+        # Process tickers in parallel using ThreadPoolExecutor with rate limiting
         results = []
-        for earning in earnings:
-            ticker = earning.get('ticker')
-            if not ticker:
-                logger.warning(f"Skipping earning without ticker: {earning}")
-                continue
+        
+        # Calculate optimal number of workers based on rate limits
+        # Yahoo Finance has undocumented rate limits, but we'll be conservative
+        rate_per_second = yf_rate_limiter.rate / yf_rate_limiter.per  # Requests per second
+        
+        # Each ticker analysis makes multiple API calls, so adjust accordingly
+        api_calls_per_ticker = PARALLEL_PROCESSING["api_calls_per_ticker"]
+        
+        # Calculate how many tickers we can process per second
+        tickers_per_second = rate_per_second / api_calls_per_ticker
+        
+        # Set max_workers to process all tickers within a reasonable time
+        # but not exceed our rate limits
+        min_time, max_time = PARALLEL_PROCESSING["target_completion_time"]
+        target_completion_time = min(max_time, max(min_time, len(earnings) / 2))
+        optimal_workers = int(tickers_per_second * target_completion_time)
+        
+        # Apply reasonable bounds
+        min_workers = PARALLEL_PROCESSING["min_workers"]
+        max_workers = min(PARALLEL_PROCESSING["max_workers"], len(earnings))
+        
+        # Use the calculated number of workers within bounds
+        num_workers = max(min_workers, min(optimal_workers, max_workers))
+        
+        logger.info(f"Starting parallel processing with {num_workers} workers (rate: {rate_per_second:.1f} req/s, " +
+                   f"estimated {api_calls_per_ticker} API calls per ticker)")
+        
+        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all tasks
+            future_to_ticker = {executor.submit(process_ticker, earning): earning.get('ticker') for earning in earnings}
+            
+            # Process results as they complete
+            completed = 0
+            total = len(future_to_ticker)
+            
+            for future in concurrent.futures.as_completed(future_to_ticker):
+                ticker = future_to_ticker[future]
+                completed += 1
                 
-            logger.info(f"Analyzing ticker: {ticker}, company: {earning.get('companyName', '')}")
-            try:
-                # Call analyze_options with is_scan_mode=True
-                analysis = analyze_options(ticker, is_scan_mode=True)
-                if "error" not in analysis:
-                    # Add company name from earnings data
-                    analysis['companyName'] = earning.get('companyName', '')
-                    analysis['reportTime'] = earning.get('reportTime', '')
-                    results.append(analysis)
-                    logger.info(f"Successfully analyzed {ticker}")
-                else:
-                    # Include failed analysis with error message but with valid structure
-                    error_msg = analysis["error"]
-                    logger.warning(f"Analysis error for {ticker}: {error_msg}")
-                    
-                    # Create a placeholder result with the error but valid structure
+                if completed % 5 == 0 or completed == total:
+                    logger.info(f"Progress: {completed}/{total} tickers processed ({(completed/total*100):.1f}%)")
+                
+                try:
+                    result = future.result()
+                    if result is not None:
+                        results.append(result)
+                        logger.info(f"Completed analysis for {ticker}")
+                except Exception as e:
+                    logger.error(f"Unhandled exception in thread for {ticker}: {str(e)}")
+                    # Add error result
+                    earning = next((e for e in earnings if e.get('ticker') == ticker), {})
                     results.append({
                         "ticker": ticker,
                         "companyName": earning.get('companyName', ''),
@@ -1480,42 +1826,26 @@ def scan_earnings():
                         },
                         "expectedMove": "N/A",
                         "recommendation": "No Data",
-                        "error": error_msg,
+                        "error": f"Thread error: {str(e)}",
                         "timestamp": datetime.now().timestamp()
                     })
-            except Exception as e:
-                logger.warning(f"Error analyzing {ticker}: {str(e)}")
-                # Include failed analysis with error message but with valid structure
-                results.append({
-                    "ticker": ticker,
-                    "companyName": earning.get('companyName', ''),
-                    "reportTime": earning.get('reportTime', ''),
-                    "currentPrice": None,
-                    "metrics": {
-                        "avgVolume": None,
-                        "avgVolumePass": "false",
-                        "iv30Rv30": None,
-                        "iv30Rv30Pass": "false",
-                        "tsSlope": None,
-                        "tsSlopePass": "false"
-                    },
-                    "expectedMove": "N/A",
-                    "recommendation": "No Data",
-                    "error": str(e),
-                    "timestamp": datetime.now().timestamp()
-                })
         
-        # Filter out results with no data
-        filtered_results = [result for result in results if result.get("recommendation") != "No Data"]
+        # Filter out results with no data or filtered out
+        filtered_results = [result for result in results if result.get("recommendation") not in ["No Data", "Filtered Out"]]
         
         # Log the results
+        filtered_out_count = len([r for r in results if r.get("recommendation") == "Filtered Out"])
+        no_data_count = len([r for r in results if r.get("recommendation") == "No Data"])
+        
         logger.info(f"Scan complete. Found {len(filtered_results)} valid results out of {len(earnings)} earnings announcements")
-        logger.info(f"Filtered out {len(results) - len(filtered_results)} results with no data")
+        logger.info(f"Quick filtered: {filtered_out_count}, No data: {no_data_count}")
         
         return jsonify({
             "date": date_str or datetime.now().strftime('%Y-%m-%d'),
             "count": len(filtered_results),
             "results": filtered_results,
+            "filtered_out": filtered_out_count,
+            "no_data": no_data_count,
             "timestamp": datetime.now().timestamp()
         })
     except Exception as e:
