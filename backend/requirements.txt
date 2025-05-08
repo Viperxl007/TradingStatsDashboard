@@ -1,13 +1,13 @@
 # Core dependencies
 Flask>=2.0.1
 Flask-CORS>=3.0.10
-yfinance>=0.1.70
+yfinance>=0.2.59
 scipy>=1.11.0
 numpy>=1.21.4
 requests>=2.27.1
 finance-calendars==0.0.7
 pandas>=1.3.0
-yoptions>=1.0.0  # For accurate options greeks calculations
+yoptions>=0.0.4  # For accurate options greeks calculations
 
 # Optional dependencies - will use fallbacks if not available
 python-dotenv>=0.19.2; python_version < '3.12'

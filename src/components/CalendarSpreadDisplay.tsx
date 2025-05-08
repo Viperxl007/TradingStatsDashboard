@@ -87,8 +87,47 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
   // Calculate enhanced probability with volatility crush consideration
   const enhancedProbability = Math.min(0.95, standardProbability * 1.06);
   
-  // Calculate liquidity score (mock value, would be provided by backend in real implementation)
-  const liquidityScore = 8.2;
+  // Get liquidity scores from the backend data
+  // Handle both object and number formats for backward compatibility
+  const frontLiquidityScore = typeof calendarSpread.frontLiquidity === 'number'
+    ? calendarSpread.frontLiquidity
+    : (calendarSpread.frontLiquidity?.score || 0);
+  
+  const backLiquidityScore = typeof calendarSpread.backLiquidity === 'number'
+    ? calendarSpread.backLiquidity
+    : (calendarSpread.backLiquidity?.score || 0);
+  
+  // Create liquidity detail objects with default values if they don't exist
+  const frontLiquidity = typeof calendarSpread.frontLiquidity === 'object' && calendarSpread.frontLiquidity
+    ? calendarSpread.frontLiquidity
+    : {
+        score: frontLiquidityScore,
+        spread_pct: 0.05,
+        volume: 0,
+        open_interest: 0,
+        has_zero_bid: false,
+        spread_dollars: 0.05
+      };
+  
+  const backLiquidity = typeof calendarSpread.backLiquidity === 'object' && calendarSpread.backLiquidity
+    ? calendarSpread.backLiquidity
+    : {
+        score: backLiquidityScore,
+        spread_pct: 0.05,
+        volume: 0,
+        open_interest: 0,
+        has_zero_bid: false,
+        spread_dollars: 0.05
+      };
+  
+  // Create combined liquidity if it doesn't exist
+  const combinedLiquidity = calendarSpread.combinedLiquidity || {
+    score: (frontLiquidityScore + backLiquidityScore) / 2,
+    front_liquidity: frontLiquidity,
+    back_liquidity: backLiquidity,
+    spread_impact: 0.1, // Default value
+    has_zero_bids: frontLiquidity.has_zero_bid || backLiquidity.has_zero_bid
+  };
   
   // Calculate front month and back month IVs based on IV differential
   // This is an approximation - in a real implementation, we would get these from the API
@@ -115,7 +154,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         borderColor="brand.500"
         pb={2}
       >
-        {ticker} Calendar Spread Strategy
+        {ticker} {calendarSpread.optionType?.toUpperCase() || 'Call'} Calendar Spread Strategy
       </Heading>
       
       <Divider mb={4} />
@@ -131,8 +170,8 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         <Flex direction={["column", "row"]} justify="space-between" mb={4}>
           <Stat mb={3}>
             <StatLabel>Expected Move</StatLabel>
-            <StatNumber>{(expectedMove.percent * 100).toFixed(2)}%</StatNumber>
-            <StatHelpText>${expectedMove.dollars.toFixed(2)}</StatHelpText>
+            <StatNumber>{(expectedMove?.percent || 0) * 100 > 0 ? ((expectedMove?.percent || 0) * 100).toFixed(2) : "0.00"}%</StatNumber>
+            <StatHelpText>${(expectedMove?.dollars || 0).toFixed(2)}</StatHelpText>
           </Stat>
           
           <Stat>
@@ -148,10 +187,10 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
               <ScoreThermometer score={calendarSpread.score} size="sm" />
             </Flex>
             <Flex alignItems="center">
-              <Text mr={2} fontSize="sm" fontWeight="bold">Liquidity:</Text>
-              <LiquidityThermometer 
-                liquidityScore={liquidityScore} 
-                hasZeroBids={false}
+              <Text mr={2} fontSize="sm" fontWeight="bold">Overall Liquidity:</Text>
+              <LiquidityThermometer
+                liquidityScore={combinedLiquidity?.score || 0}
+                hasZeroBids={combinedLiquidity?.has_zero_bids || false}
                 size="sm"
               />
             </Flex>
@@ -163,14 +202,14 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
             <Text fontWeight="bold" mb={2}>Front Month</Text>
             <Text fontSize="lg" fontWeight="bold">{new Date(calendarSpread.frontMonth).toLocaleDateString()}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(frontMonthIV * 100).toFixed(2)}%</Text>
-            <Text fontSize="sm">Short Call</Text>
+            <Text fontSize="sm">Short {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Back Month</Text>
             <Text fontSize="lg" fontWeight="bold">{new Date(calendarSpread.backMonth).toLocaleDateString()}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(backMonthIV * 100).toFixed(2)}%</Text>
-            <Text fontSize="sm">Long Call</Text>
+            <Text fontSize="sm">Long {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
@@ -225,6 +264,90 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Flex>
         
         <Heading as="h4" size="sm" mb={2}>
+          Liquidity Details
+        </Heading>
+        
+        <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
+          <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
+            <Text fontWeight="bold" mb={2}>Front Month Liquidity</Text>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Bid/Ask:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                ${frontLiquidity.spread_dollars.toFixed(2)} ({(frontLiquidity.spread_pct * 100).toFixed(0)}%)
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Volume:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                {frontLiquidity.volume > 0 ? frontLiquidity.volume.toLocaleString() : "N/A"}
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Open Interest:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                {frontLiquidity.open_interest > 0 ? frontLiquidity.open_interest.toLocaleString() : "N/A"}
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Score:</Text>
+              <Text fontSize="sm" fontWeight="bold" color={frontLiquidity.score >= 7 ? "green.400" : frontLiquidity.score >= 3 ? "yellow.400" : "red.400"}>
+                {frontLiquidity.score.toFixed(1)}/10
+              </Text>
+            </Flex>
+          </Box>
+          
+          <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
+            <Text fontWeight="bold" mb={2}>Back Month Liquidity</Text>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Bid/Ask:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                ${backLiquidity.spread_dollars.toFixed(2)} ({(backLiquidity.spread_pct * 100).toFixed(0)}%)
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Volume:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                {backLiquidity.volume > 0 ? backLiquidity.volume.toLocaleString() : "N/A"}
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Open Interest:</Text>
+              <Text fontSize="sm" fontWeight="bold">
+                {backLiquidity.open_interest > 0 ? backLiquidity.open_interest.toLocaleString() : "N/A"}
+              </Text>
+            </Flex>
+            <Flex justifyContent="space-between">
+              <Text fontSize="sm">Score:</Text>
+              <Text fontSize="sm" fontWeight="bold" color={backLiquidity.score >= 7 ? "green.400" : backLiquidity.score >= 3 ? "yellow.400" : "red.400"}>
+                {backLiquidity.score.toFixed(1)}/10
+              </Text>
+            </Flex>
+          </Box>
+        </Grid>
+        
+        <Box mt={3} p={2} borderRadius="md"
+             bg={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ?
+                useColorModeValue('red.50', 'rgba(245, 101, 101, 0.1)') :
+                useColorModeValue('green.50', 'rgba(72, 187, 120, 0.1)')
+             }
+             borderWidth="1px"
+             borderColor={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.200" : "green.200"}>
+          <Flex justifyContent="space-between">
+            <Text fontSize="sm" fontWeight="bold">Spread Impact:</Text>
+            <Text fontSize="sm"
+                  fontWeight="bold"
+                  color={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.500" : "green.500"}>
+              {((combinedLiquidity?.spread_impact || 0.1) * 100).toFixed(0)}% of cost
+            </Text>
+          </Flex>
+          <Text fontSize="xs" color={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.500" : "green.500"}>
+            {combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ?
+              "Warning: High spread impact may reduce profitability" :
+              "Good: Low spread impact on trade cost"}
+          </Text>
+        </Box>
+        
+        <Heading as="h4" size="sm" mb={2} mt={4}>
           Probability Profile
         </Heading>
         

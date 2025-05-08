@@ -101,6 +101,14 @@ export interface OptionsMetrics {
 /**
  * Optimal calendar spread details
  */
+export interface CalendarSpreadLiquidity {
+  score: number;                 // Overall liquidity score (0-10)
+  front_liquidity: LiquidityDetails; // Liquidity details for front month option
+  back_liquidity: LiquidityDetails;  // Liquidity details for back month option
+  spread_impact: number;         // How much of spread cost is consumed by bid-ask spreads
+  has_zero_bids: boolean;        // Whether either leg has zero bids
+}
+
 export interface OptimalCalendarSpread {
   strike: number;                // Strike price for the spread
   frontMonth: string;            // Front month expiration date
@@ -109,6 +117,10 @@ export interface OptimalCalendarSpread {
   ivDifferential: number;        // IV differential between months
   score: number;                 // Algorithmic score of the spread
   metricsPass?: string;          // Whether all metrics pass thresholds ("true" or "false")
+  frontLiquidity: LiquidityDetails; // Liquidity details for front month option
+  backLiquidity: LiquidityDetails;  // Liquidity details for back month option
+  combinedLiquidity?: CalendarSpreadLiquidity; // Combined liquidity details for the spread
+  optionType?: 'call' | 'put';   // Type of option used in the spread
 }
 
 /**
@@ -221,6 +233,7 @@ export interface LiquidityDetails {
   volume: number;              // Trading volume
   open_interest: number;       // Open interest
   has_zero_bid: boolean;       // Whether the option has a zero bid
+  spread_dollars: number;      // Absolute spread in dollars
 }
 
 /**

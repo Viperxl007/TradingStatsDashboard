@@ -19,7 +19,7 @@ from functools import wraps
 
 # Import configuration
 try:
-    from config import YF_RATE_LIMIT, PARALLEL_PROCESSING, QUICK_FILTER
+    from config import YF_RATE_LIMIT, SEQUENTIAL_PROCESSING, QUICK_FILTER
     logger = logging.getLogger(__name__)
     logger.info("Loaded configuration from config.py")
 except ImportError:
@@ -27,7 +27,12 @@ except ImportError:
     logger = logging.getLogger(__name__)
     logger.warning("config.py not found, using default configuration")
     YF_RATE_LIMIT = {"rate": 5, "per": 1.0, "burst": 10}
-    PARALLEL_PROCESSING = {"min_workers": 2, "max_workers": 16, "api_calls_per_ticker": 8, "target_completion_time": (30, 60)}
+    SEQUENTIAL_PROCESSING = {
+        "api_calls_per_ticker": 8,
+        "requests_per_minute": 60,
+        "max_consecutive_requests": 10,
+        "pause_duration": 2.0
+    }
     QUICK_FILTER = {"min_price": 2.50, "min_volume": 1500000}
 
 # Add app directory to path to allow importing from app
@@ -61,7 +66,7 @@ if missing_packages:
     sys.exit(1)
 
 # Import required packages
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, Response
 from flask_cors import CORS
 import yfinance as yf
 import numpy as np
@@ -141,7 +146,7 @@ def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True
 
 def get_liquidity_score(stock, expiration, strike):
     """
-    Calculate a liquidity score for an option.
+    Calculate a liquidity score for an option and return detailed liquidity information.
     
     Args:
         stock (Ticker): yfinance Ticker object
@@ -149,7 +154,7 @@ def get_liquidity_score(stock, expiration, strike):
         strike (float): Strike price
         
     Returns:
-        float: Liquidity score (higher is better)
+        dict: Dictionary containing liquidity details including score, spread_pct, volume, open_interest, etc.
     """
     try:
         chain = stock.option_chain(expiration)
@@ -157,40 +162,81 @@ def get_liquidity_score(stock, expiration, strike):
         
         if calls.empty:
             logger.debug(f"No calls data for {expiration} at strike {strike}")
-            return 0.0
+            return {
+                "score": 0.0,
+                "spread_pct": 0.0,
+                "volume": 0,
+                "open_interest": 0,
+                "has_zero_bid": True,
+                "spread_dollars": 0.0
+            }
         
         # Find the option with the given strike
         options = calls[calls['strike'] == strike]
         
         if options.empty:
             logger.debug(f"No options at strike {strike} for {expiration}")
-            return 0.0
+            return {
+                "score": 0.0,
+                "spread_pct": 0.0,
+                "volume": 0,
+                "open_interest": 0,
+                "has_zero_bid": True,
+                "spread_dollars": 0.0
+            }
         
         option = options.iloc[0]
         
         # Calculate bid-ask spread as a percentage of the mid price
-        bid = option['bid']
-        ask = option['ask']
+        bid = float(option['bid'])
+        ask = float(option['ask'])
+        has_zero_bid = bool(bid == 0)  # Convert to standard Python boolean
         
+        # Get volume and open interest
+        volume = int(option['volume']) if 'volume' in option and not pd.isna(option['volume']) else 0
+        open_interest = int(option['openInterest']) if 'openInterest' in option and not pd.isna(option['openInterest']) else 0
+        
+        # If bid or ask is zero, return minimal liquidity
         if bid == 0 or ask == 0:
             logger.debug(f"Bid or ask is zero for {expiration} at strike {strike}")
-            return 0.0
+            return {
+                "score": 0.0,
+                "spread_pct": 1.0,  # 100% spread
+                "volume": volume,
+                "open_interest": open_interest,
+                "has_zero_bid": bool(has_zero_bid),  # Ensure it's a standard Python boolean
+                "spread_dollars": float(ask)
+            }
         
         mid = (bid + ask) / 2.0
         spread_pct = (ask - bid) / mid
-        
-        # Volume and open interest factors
-        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 1
-        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 1
+        spread_dollars = ask - bid
         
         # Less punitive liquidity scoring - using square root instead of log10
-        liquidity_score = (1 / spread_pct) * np.sqrt(volume) * np.sqrt(open_interest)
+        liquidity_score = (1 / spread_pct) * np.sqrt(max(1, volume)) * np.sqrt(max(1, open_interest))
         
         # Cap and normalize
-        return min(10.0, max(0.0, liquidity_score / 100.0))
+        score = min(10.0, max(0.0, liquidity_score / 100.0))
+        
+        # Return detailed liquidity information with all values converted to standard Python types
+        return {
+            "score": float(score),
+            "spread_pct": float(spread_pct),
+            "volume": int(volume),
+            "open_interest": int(open_interest),
+            "has_zero_bid": bool(has_zero_bid),  # Ensure it's a standard Python boolean
+            "spread_dollars": float(spread_dollars)
+        }
     except Exception as e:
         logger.debug(f"Error calculating liquidity score: {str(e)}")
-        return 0.0
+        return {
+            "score": 0.0,
+            "spread_pct": 0.0,
+            "volume": 0,
+            "open_interest": 0,
+            "has_zero_bid": True,
+            "spread_dollars": 0.0
+        }
 
 def get_atm_iv(stock, expiration, strike):
     """
@@ -451,9 +497,25 @@ def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_l
                           days_to_front_expiration=14):
     """
     Calculate a composite score for a potential calendar spread.
+    
+    Args:
+        iv_differential (float): IV differential between front and back month
+        spread_cost (float): Cost of the spread
+        front_liquidity (float or dict): Liquidity score or details for front month
+        back_liquidity (float or dict): Liquidity score or details for back month
+        strike_distance_from_atm (float): Distance from ATM in dollars
+        days_between_expirations (int): Days between front and back month expirations
+        days_to_front_expiration (int): Days to front month expiration
+        
+    Returns:
+        float: Composite score for the spread
     """
+    # Extract liquidity scores if objects were passed
+    front_liquidity_score = front_liquidity["score"] if isinstance(front_liquidity, dict) else front_liquidity
+    back_liquidity_score = back_liquidity["score"] if isinstance(back_liquidity, dict) else back_liquidity
+    
     logger.debug(f"Calculating spread score with: iv_diff={iv_differential}, cost={spread_cost}, " +
-                f"liquidity={front_liquidity}/{back_liquidity}, distance={strike_distance_from_atm}, " +
+                f"liquidity={front_liquidity_score}/{back_liquidity_score}, distance={strike_distance_from_atm}, " +
                 f"days_between={days_between_expirations}, days_to_front={days_to_front_expiration}")
     
     # Avoid division by zero
@@ -468,7 +530,7 @@ def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_l
     cost_efficiency = iv_differential / spread_cost
     
     # Liquidity factor (average of front and back month)
-    liquidity_score = (front_liquidity + back_liquidity) / 2.0
+    liquidity_score = (front_liquidity_score + back_liquidity_score) / 2.0
     
     # Delta neutrality factor (closer to ATM is better)
     delta_neutrality = 1.0 / (1.0 + strike_distance_from_atm)
@@ -726,14 +788,23 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], ts
                 front_liquidity = get_liquidity_score(stock, front_month, strike)
                 back_liquidity = get_liquidity_score(stock, back_month, strike)
                 
-                logger.debug(f"{ticker} strike ${strike}: Liquidity scores - front: {front_liquidity}, back: {back_liquidity}")
+                # Calculate combined liquidity metrics
+                combined_liquidity = {
+                    "score": float((front_liquidity["score"] + back_liquidity["score"]) / 2),
+                    "front_liquidity": front_liquidity,
+                    "back_liquidity": back_liquidity,
+                    "spread_impact": float((front_liquidity["spread_dollars"] + back_liquidity["spread_dollars"]) / spread_cost if spread_cost > 0 else 0),
+                    "has_zero_bids": bool(front_liquidity["has_zero_bid"] or back_liquidity["has_zero_bid"])
+                }
+                
+                logger.debug(f"{ticker} strike ${strike}: Liquidity scores - front: {front_liquidity['score']}, back: {back_liquidity['score']}")
                 
                 # Calculate a composite score
                 score = calculate_spread_score(
                     iv_differential,
                     spread_cost,
-                    front_liquidity,
-                    back_liquidity,
+                    front_liquidity["score"],
+                    back_liquidity["score"],
                     strike_distance_from_atm=abs(strike - current_price),
                     days_between_expirations=days_between_expirations,
                     days_to_front_expiration=days_to_front_expiration
@@ -754,11 +825,13 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], ts
                         'ivDifferential': float(iv_differential),
                         'frontIv': float(front_iv),
                         'backIv': float(back_iv),
-                        'frontLiquidity': float(front_liquidity),
-                        'backLiquidity': float(back_liquidity),
+                        'frontLiquidity': front_liquidity,
+                        'backLiquidity': back_liquidity,
+                        'combinedLiquidity': combined_liquidity,
                         'daysBetweenExpirations': days_between_expirations,
                         'daysToFrontExpiration': days_to_front_expiration,
-                        'score': float(score)
+                        'score': float(score),
+                        'optionType': 'call'  # Default to call options for now
                     }
         
         # Set a minimum threshold score (lowered from 5.0 to 1.0)
@@ -846,13 +919,14 @@ def build_term_structure(days, ivs):
 # Rate limiter for API calls
 class RateLimiter:
     """
-    Rate limiter to prevent hitting API rate limits.
+    Enhanced rate limiter to prevent hitting API rate limits.
     
     This class implements a token bucket algorithm to limit the rate of API calls.
     It allows for bursts of requests up to a maximum number, but enforces an
-    average rate over time.
+    average rate over time. It also supports pausing after a certain number of
+    consecutive requests to avoid triggering rate limits.
     """
-    def __init__(self, rate=5, per=1.0, burst=10):
+    def __init__(self, rate=5, per=1.0, burst=10, max_consecutive=10, pause_duration=2.0):
         """
         Initialize the rate limiter.
         
@@ -860,13 +934,18 @@ class RateLimiter:
             rate (float): Number of requests allowed per time period
             per (float): Time period in seconds
             burst (int): Maximum burst size (token bucket capacity)
+            max_consecutive (int): Maximum number of consecutive requests before pausing
+            pause_duration (float): Duration to pause after max consecutive requests in seconds
         """
-        self.rate = rate  # requests per second
-        self.per = per    # seconds
+        self.rate = rate  # requests per time period
+        self.per = per    # time period in seconds
         self.tokens = burst  # initial tokens
         self.capacity = burst  # maximum tokens
         self.last_refill = time.time()
         self.lock = threading.RLock()
+        self.consecutive_requests = 0
+        self.max_consecutive = max_consecutive
+        self.pause_duration = pause_duration
         
     def _refill(self):
         """Refill tokens based on elapsed time."""
@@ -875,6 +954,33 @@ class RateLimiter:
         new_tokens = elapsed * (self.rate / self.per)
         self.tokens = min(self.capacity, self.tokens + new_tokens)
         self.last_refill = now
+        
+    def update_config(self, rate=None, per=None, burst=None, max_consecutive=None, pause_duration=None):
+        """
+        Update rate limiter configuration.
+        
+        Args:
+            rate (float, optional): New rate value
+            per (float, optional): New per value
+            burst (int, optional): New burst value
+            max_consecutive (int, optional): New max consecutive requests value
+            pause_duration (float, optional): New pause duration value
+        """
+        with self.lock:
+            if rate is not None:
+                self.rate = rate
+            if per is not None:
+                self.per = per
+            if burst is not None:
+                self.capacity = burst
+                # Don't immediately give all tokens, just update the capacity
+            if max_consecutive is not None:
+                self.max_consecutive = max_consecutive
+            if pause_duration is not None:
+                self.pause_duration = pause_duration
+            
+            logger.info(f"Rate limiter updated: {self.rate} req/{self.per}s, burst={self.capacity}, " +
+                       f"max_consecutive={self.max_consecutive}, pause={self.pause_duration}s")
         
     def acquire(self, block=True, timeout=None):
         """
@@ -889,22 +995,35 @@ class RateLimiter:
         """
         start_time = time.time()
         
+        # Check if we need to pause due to consecutive requests
+        with self.lock:
+            if self.consecutive_requests >= self.max_consecutive:
+                logger.info(f"Pausing for {self.pause_duration}s after {self.consecutive_requests} consecutive requests")
+                time.sleep(self.pause_duration)
+                self.consecutive_requests = 0
+        
         while True:
             with self.lock:
                 self._refill()
                 
                 if self.tokens >= 1:
                     self.tokens -= 1
+                    self.consecutive_requests += 1
                     return True
                 
                 if not block:
                     return False
                 
                 if timeout is not None and time.time() - start_time > timeout:
+                    logger.warning(f"Rate limit timeout after {timeout}s")
                     return False
+                
+                # Calculate wait time based on token refill rate
+                wait_time = (1 - self.tokens) * (self.per / self.rate)
+                logger.debug(f"Waiting {wait_time:.2f}s for token refill")
             
-            # Wait a bit before trying again
-            time.sleep(0.05)
+            # Wait for tokens to refill
+            time.sleep(min(wait_time, 0.5))  # Cap wait time to avoid long sleeps
     
     def __call__(self, func):
         """
@@ -922,14 +1041,53 @@ class RateLimiter:
             return func(*args, **kwargs)
         return wrapper
 
+# Function to update rate limiter configuration
+def update_rate_limiter_config():
+    """Update the rate limiter configuration based on the current settings."""
+    # Calculate rate and per values from requests_per_minute
+    requests_per_minute = SEQUENTIAL_PROCESSING.get("requests_per_minute", 60)
+    rate = requests_per_minute / 60.0  # Convert to requests per second
+    per = 1.0  # Keep time period as 1 second for simplicity
+    
+    # Get other configuration values
+    burst = YF_RATE_LIMIT.get("burst", 10)
+    max_consecutive = SEQUENTIAL_PROCESSING.get("max_consecutive_requests", 10)
+    pause_duration = SEQUENTIAL_PROCESSING.get("pause_duration", 2.0)
+    
+    # Update the rate limiter
+    yf_rate_limiter.update_config(
+        rate=rate,
+        per=per,
+        burst=burst,
+        max_consecutive=max_consecutive,
+        pause_duration=pause_duration
+    )
+    
+    logger.info(f"Rate limiter updated: {requests_per_minute} requests/minute " +
+               f"({rate:.2f} req/s), burst={burst}, max_consecutive={max_consecutive}, " +
+               f"pause={pause_duration}s")
+
 # Create a rate limiter for yfinance API calls
-# Create rate limiter for yfinance API calls using configuration
+# Calculate initial rate from requests_per_minute
+requests_per_minute = SEQUENTIAL_PROCESSING.get("requests_per_minute", 60)
+rate = requests_per_minute / 60.0  # Convert to requests per second
+
 yf_rate_limiter = RateLimiter(
-    rate=YF_RATE_LIMIT["rate"],
-    per=YF_RATE_LIMIT["per"],
-    burst=YF_RATE_LIMIT["burst"]
+    rate=rate,
+    per=1.0,  # Keep time period as 1 second for simplicity
+    burst=YF_RATE_LIMIT["burst"],
+    max_consecutive=SEQUENTIAL_PROCESSING.get("max_consecutive_requests", 10),
+    pause_duration=SEQUENTIAL_PROCESSING.get("pause_duration", 2.0)
 )
+
+# Create a lock for thread-safe API access (still needed for some operations)
 _yf_api_lock = threading.RLock()
+
+# Log the rate limiter configuration
+logger.info(f"Yahoo Finance rate limiter configured with {requests_per_minute} " +
+           f"requests per minute ({rate:.2f} req/s), burst size {YF_RATE_LIMIT['burst']}, " +
+           f"max consecutive {SEQUENTIAL_PROCESSING.get('max_consecutive_requests', 10)}, " +
+           f"pause duration {SEQUENTIAL_PROCESSING.get('pause_duration', 2.0)}s")
 
 def get_current_price(ticker):
     """
@@ -1708,7 +1866,7 @@ def process_ticker(earning):
 
 @app.route('/api/scan/earnings', methods=['GET'])
 def scan_earnings():
-    """Scan stocks with earnings announcements for options analysis using parallel processing."""
+    """Scan stocks with earnings announcements for options analysis using sequential processing."""
     try:
         # Get date parameter if provided
         date_str = request.args.get('date')
@@ -1754,100 +1912,111 @@ def scan_earnings():
             }), 500
         
         # Log the earnings data for debugging
-        logger.info(f"Processing {len(earnings)} earnings announcements in parallel")
+        logger.info(f"Processing {len(earnings)} earnings announcements sequentially")
         for i, earning in enumerate(earnings[:5]):  # Log first 5 for debugging
             logger.info(f"Earning {i+1}: {earning}")
         
-        # Process tickers in parallel using ThreadPoolExecutor with rate limiting
+        # Process tickers sequentially with rate limiting
         results = []
         
-        # Calculate optimal number of workers based on rate limits
-        # Yahoo Finance has undocumented rate limits, but we'll be conservative
+        # Get rate limiting configuration
         rate_per_second = yf_rate_limiter.rate / yf_rate_limiter.per  # Requests per second
+        api_calls_per_ticker = SEQUENTIAL_PROCESSING["api_calls_per_ticker"]
         
-        # Each ticker analysis makes multiple API calls, so adjust accordingly
-        api_calls_per_ticker = PARALLEL_PROCESSING["api_calls_per_ticker"]
-        
-        # Calculate how many tickers we can process per second
-        tickers_per_second = rate_per_second / api_calls_per_ticker
-        
-        # Set max_workers to process all tickers within a reasonable time
-        # but not exceed our rate limits
-        min_time, max_time = PARALLEL_PROCESSING["target_completion_time"]
-        target_completion_time = min(max_time, max(min_time, len(earnings) / 2))
-        optimal_workers = int(tickers_per_second * target_completion_time)
-        
-        # Apply reasonable bounds
-        min_workers = PARALLEL_PROCESSING["min_workers"]
-        max_workers = min(PARALLEL_PROCESSING["max_workers"], len(earnings))
-        
-        # Use the calculated number of workers within bounds
-        num_workers = max(min_workers, min(optimal_workers, max_workers))
-        
-        logger.info(f"Starting parallel processing with {num_workers} workers (rate: {rate_per_second:.1f} req/s, " +
+        logger.info(f"Starting sequential processing (rate: {rate_per_second:.1f} req/s, " +
                    f"estimated {api_calls_per_ticker} API calls per ticker)")
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all tasks
-            future_to_ticker = {executor.submit(process_ticker, earning): earning.get('ticker') for earning in earnings}
+        # Process each ticker sequentially
+        completed = 0
+        total = len(earnings)
+        filtered_out = 0
+        no_data = 0
+        
+        # Create a response object with streaming capability
+        def generate():
+            nonlocal completed, filtered_out, no_data, results
             
-            # Process results as they complete
-            completed = 0
-            total = len(future_to_ticker)
+            # Send initial progress information
+            progress_data = {
+                "status": "in_progress",
+                "progress": {
+                    "completed": completed,
+                    "total": total,
+                    "percent": 0,
+                    "filtered_out": filtered_out,
+                    "no_data": no_data
+                },
+                "results": [],
+                "timestamp": datetime.now().timestamp()
+            }
+            yield f"data: {json.dumps(progress_data)}\n\n"
             
-            for future in concurrent.futures.as_completed(future_to_ticker):
-                ticker = future_to_ticker[future]
+            # Process each ticker
+            for earning in earnings:
+                ticker = earning.get('ticker')
+                if not ticker:
+                    logger.warning(f"Skipping earning without ticker: {earning}")
+                    continue
+                    
                 completed += 1
                 
                 if completed % 5 == 0 or completed == total:
                     logger.info(f"Progress: {completed}/{total} tickers processed ({(completed/total*100):.1f}%)")
+                    
+                    # Send progress update
+                    progress_data = {
+                        "status": "in_progress",
+                        "progress": {
+                            "completed": completed,
+                            "total": total,
+                            "percent": round((completed/total*100), 1),
+                            "filtered_out": filtered_out,
+                            "no_data": no_data
+                        },
+                        "results": results,
+                        "timestamp": datetime.now().timestamp()
+                    }
+                    yield f"data: {json.dumps(progress_data)}\n\n"
                 
                 try:
-                    result = future.result()
+                    result = process_ticker(earning)
                     if result is not None:
-                        results.append(result)
-                        logger.info(f"Completed analysis for {ticker}")
+                        # Skip both "Filtered Out" and "No Data" tickers
+                        if result.get("recommendation") == "Filtered Out":
+                            filtered_out += 1
+                            logger.info(f"Filtered out {ticker} - not adding to results")
+                        elif result.get("recommendation") == "No Data":
+                            no_data += 1
+                            logger.info(f"Skipping {ticker} with No Data - not adding to results")
+                        else:
+                            # Only add tickers with valid recommendations
+                            results.append(result)
+                            logger.info(f"Completed analysis for {ticker} and added to results")
                 except Exception as e:
-                    logger.error(f"Unhandled exception in thread for {ticker}: {str(e)}")
-                    # Add error result
-                    earning = next((e for e in earnings if e.get('ticker') == ticker), {})
-                    results.append({
-                        "ticker": ticker,
-                        "companyName": earning.get('companyName', ''),
-                        "reportTime": earning.get('reportTime', ''),
-                        "currentPrice": None,
-                        "metrics": {
-                            "avgVolume": None,
-                            "avgVolumePass": "false",
-                            "iv30Rv30": None,
-                            "iv30Rv30Pass": "false",
-                            "tsSlope": None,
-                            "tsSlopePass": "false"
-                        },
-                        "expectedMove": "N/A",
-                        "recommendation": "No Data",
-                        "error": f"Thread error: {str(e)}",
-                        "timestamp": datetime.now().timestamp()
-                    })
+                    logger.error(f"Unhandled exception for {ticker}: {str(e)}")
+                    # Count as no data but don't add to results
+                    no_data += 1
+            
+            # Filter out results with no data or filtered out
+            filtered_results = [result for result in results if result.get("recommendation") not in ["No Data", "Filtered Out"]]
+            
+            # Send final results
+            final_data = {
+                "status": "complete",
+                "date": date_str or datetime.now().strftime('%Y-%m-%d'),
+                "count": len(filtered_results),
+                "results": filtered_results,
+                "filtered_out": filtered_out,
+                "no_data": no_data,
+                "timestamp": datetime.now().timestamp()
+            }
+            yield f"data: {json.dumps(final_data)}\n\n"
+            
+            logger.info(f"Scan complete. Found {len(filtered_results)} valid results out of {total} earnings announcements")
+            logger.info(f"Quick filtered: {filtered_out}, No data: {no_data}")
         
-        # Filter out results with no data or filtered out
-        filtered_results = [result for result in results if result.get("recommendation") not in ["No Data", "Filtered Out"]]
-        
-        # Log the results
-        filtered_out_count = len([r for r in results if r.get("recommendation") == "Filtered Out"])
-        no_data_count = len([r for r in results if r.get("recommendation") == "No Data"])
-        
-        logger.info(f"Scan complete. Found {len(filtered_results)} valid results out of {len(earnings)} earnings announcements")
-        logger.info(f"Quick filtered: {filtered_out_count}, No data: {no_data_count}")
-        
-        return jsonify({
-            "date": date_str or datetime.now().strftime('%Y-%m-%d'),
-            "count": len(filtered_results),
-            "results": filtered_results,
-            "filtered_out": filtered_out_count,
-            "no_data": no_data_count,
-            "timestamp": datetime.now().timestamp()
-        })
+        # Return a streaming response
+        return Response(generate(), mimetype='text/event-stream')
     except Exception as e:
         logger.error(f"Error scanning earnings: {str(e)}")
         return jsonify({

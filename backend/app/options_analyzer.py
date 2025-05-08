@@ -146,7 +146,7 @@ def get_atm_iv(stock, expiration, strike):
         return 0.0
 
 
-def calculate_spread_cost(stock, front_month, back_month, strike):
+def calculate_spread_cost(stock, front_month, back_month, strike, option_type='call'):
     """
     Calculate the cost of a calendar spread.
     
@@ -155,6 +155,7 @@ def calculate_spread_cost(stock, front_month, back_month, strike):
         front_month (str): Front month expiration in YYYY-MM-DD format
         back_month (str): Back month expiration in YYYY-MM-DD format
         strike (float): Strike price
+        option_type (str): 'call' or 'put'
         
     Returns:
         float: Cost of the calendar spread
@@ -162,18 +163,18 @@ def calculate_spread_cost(stock, front_month, back_month, strike):
     try:
         # Get front month option
         front_chain = stock.option_chain(front_month)
-        front_calls = front_chain.calls
+        front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
         
         # Get back month option
         back_chain = stock.option_chain(back_month)
-        back_calls = back_chain.calls
+        back_options = back_chain.calls if option_type.lower() == 'call' else back_chain.puts
         
-        if front_calls.empty or back_calls.empty:
+        if front_options.empty or back_options.empty:
             return 0.0
         
         # Find the options with the given strike
-        front_options = front_calls[front_calls['strike'] == strike]
-        back_options = back_calls[back_calls['strike'] == strike]
+        front_options = front_options[front_options['strike'] == strike]
+        back_options = back_options[back_options['strike'] == strike]
         
         if front_options.empty or back_options.empty:
             return 0.0
@@ -193,9 +194,163 @@ def calculate_spread_cost(stock, front_month, back_month, strike):
         return 0.0
 
 
-def get_liquidity_score(stock, expiration, strike, option_type='call'):
-    # Import numpy at the top of the function to ensure it's available
+def get_improved_liquidity_score(option, option_price=None):
+    """
+    Calculate a more realistic liquidity score for an option that better reflects trading challenges.
+    
+    Args:
+        option (dict): Option data containing bid, ask, volume, openInterest
+        option_price (float, optional): Current mid price of the option, if different from (bid+ask)/2
+        
+    Returns:
+        dict: Liquidity details including:
+            - score: Overall liquidity score (0-10, higher is better)
+            - spread_pct: Bid-ask spread as percentage of option price
+            - volume: Trading volume
+            - open_interest: Open interest
+            - has_zero_bid: Whether the option has a zero bid
+            - spread_dollars: Absolute spread in dollars
+    """
     import numpy as np
+    
+    try:
+        # Extract basic values
+        bid = option['bid'] if 'bid' in option else 0.0
+        ask = option['ask'] if 'ask' in option else 0.0
+        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 0
+        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 0
+        
+        # Flag for zero bids
+        has_zero_bid = bid <= 0.001  # Consider very small bids effectively zero
+        
+        # Calculate mid price
+        mid_price = (bid + ask) / 2.0 if not has_zero_bid else option_price or ask / 2.0
+        
+        # If both bid and ask are zero or extremely low, this is an extremely illiquid option
+        if ask <= 0.001 or mid_price <= 0.001:
+            return {
+                'score': 0.0,
+                'spread_pct': 1.0,
+                'volume': 0,
+                'open_interest': 0,
+                'has_zero_bid': True,
+                'spread_dollars': 0.0
+            }
+        
+        # Calculate absolute spread
+        spread_dollars = ask - bid
+        
+        # Calculate percentage spread - more heavily penalize wide spreads
+        spread_pct = spread_dollars / mid_price
+        
+        # More aggressive penalty for wide spreads
+        # Old formula: base_score = 10.0 * (1.0 / (1.0 + (spread_pct * 10)))
+        # New formula is more punishing for wide spreads
+        spread_factor = 1.0 / (1.0 + (spread_pct * 20))
+        
+        # Volume factor with more pragmatic scaling
+        # Volume below 100 is penalized more heavily
+        volume_factor = min(1.0, np.sqrt(volume / 500))
+        
+        # Open interest factor
+        # We want at least 500+ open interest for good liquidity
+        oi_factor = min(1.0, np.sqrt(open_interest / 500))
+        
+        # For low-priced options (under $0.20), penalize more as they're harder to trade efficiently
+        low_price_penalty = 0.7 if mid_price < 0.20 else 1.0
+        
+        # Apply more severe penalty for zero bids - realistically these are very hard to trade
+        zero_bid_penalty = 0.3 if has_zero_bid else 1.0
+        
+        # Absolute spread penalty - spreads over $0.10 become increasingly difficult in practice
+        abs_spread_penalty = 1.0 if spread_dollars < 0.10 else 1.0 / (1.0 + (spread_dollars - 0.10) * 5)
+        
+        # Calculate final score with revised weights
+        # 70% spread factors, 15% volume, 15% open interest
+        liquidity_score = (
+            (spread_factor * abs_spread_penalty * 0.7) +
+            (volume_factor * 0.15) +
+            (oi_factor * 0.15)
+        ) * low_price_penalty * zero_bid_penalty
+        
+        # Scale to 0-10
+        final_score = 10.0 * liquidity_score
+        
+        return {
+            'score': min(10.0, max(0.0, final_score)),
+            'spread_pct': float(spread_pct),
+            'volume': int(volume),
+            'open_interest': int(open_interest),
+            'has_zero_bid': has_zero_bid,
+            'spread_dollars': float(spread_dollars)
+        }
+    except Exception as e:
+        # Fallback to worst liquidity score on error
+        return {
+            'score': 0.0,
+            'spread_pct': 1.0,
+            'volume': 0,
+            'open_interest': 0,
+            'has_zero_bid': True,
+            'spread_dollars': 0.0
+        }
+
+
+def calculate_calendar_spread_liquidity(front_month_liquidity, back_month_liquidity, spread_cost):
+    """
+    Calculate a combined liquidity score for a calendar spread.
+    
+    Args:
+        front_month_liquidity (dict): Liquidity details for front month option
+        back_month_liquidity (dict): Liquidity details for back month option
+        spread_cost (float): Cost of the calendar spread
+        
+    Returns:
+        dict: Combined liquidity details for the calendar spread
+    """
+    # Front month is more important as it's harder to roll/exit
+    front_weight = 0.6
+    back_weight = 0.4
+    
+    # Calculate combined score with weighting
+    combined_score = (
+        front_month_liquidity['score'] * front_weight +
+        back_month_liquidity['score'] * back_weight
+    )
+    
+    # Calculate combined spread percentage relative to spread cost
+    # This shows how much of your edge might be lost to bid-ask spread
+    total_spread_dollars = (
+        front_month_liquidity['spread_dollars'] +
+        back_month_liquidity['spread_dollars']
+    )
+    
+    # Calculate how much of the spread cost is consumed by the bid-ask spread
+    # This is a key metric for calendar spreads - if too high, the trade isn't viable
+    spread_impact = total_spread_dollars / spread_cost if spread_cost > 0 else 1.0
+    
+    # Apply severe penalty if spreads eat more than 30% of the spread cost
+    viability_factor = 1.0 if spread_impact < 0.3 else 1.0 / (1.0 + (spread_impact - 0.3) * 5)
+    
+    # Penalize severely if either leg has zero bids
+    zero_bid_penalty = 0.3 if (
+        front_month_liquidity['has_zero_bid'] or
+        back_month_liquidity['has_zero_bid']
+    ) else 1.0
+    
+    # Apply penalties to the combined score
+    adjusted_score = combined_score * viability_factor * zero_bid_penalty
+    
+    return {
+        'score': min(10.0, max(0.0, adjusted_score)),
+        'front_liquidity': front_month_liquidity,
+        'back_liquidity': back_month_liquidity,
+        'spread_impact': float(spread_impact),
+        'has_zero_bids': front_month_liquidity['has_zero_bid'] or back_month_liquidity['has_zero_bid']
+    }
+
+
+def get_liquidity_score(stock, expiration, strike, option_type='call'):
     """
     Calculate a comprehensive liquidity score for an option.
     
@@ -212,9 +367,8 @@ def get_liquidity_score(stock, expiration, strike, option_type='call'):
             - volume: Trading volume
             - open_interest: Open interest
             - has_zero_bid: Whether the option has a zero bid
+            - spread_dollars: Absolute spread in dollars
     """
-    # Import numpy at the top of the function to ensure it's available
-    import numpy as np
     try:
         chain = stock.option_chain(expiration)
         options_chain = chain.calls if option_type.lower() == 'call' else chain.puts
@@ -225,7 +379,8 @@ def get_liquidity_score(stock, expiration, strike, option_type='call'):
                 'spread_pct': 1.0,
                 'volume': 0,
                 'open_interest': 0,
-                'has_zero_bid': True
+                'has_zero_bid': True,
+                'spread_dollars': 0.0
             }
         
         # Find the option with the given strike
@@ -237,62 +392,17 @@ def get_liquidity_score(stock, expiration, strike, option_type='call'):
                 'spread_pct': 1.0,
                 'volume': 0,
                 'open_interest': 0,
-                'has_zero_bid': True
+                'has_zero_bid': True,
+                'spread_dollars': 0.0
             }
         
         option = options.iloc[0]
         
-        # Calculate bid-ask spread as a percentage of the mid price
-        bid = option['bid']
-        ask = option['ask']
-        has_zero_bid = bid == 0
+        # Convert pandas Series to dict for the improved liquidity calculation
+        option_dict = option.to_dict()
         
-        # If both bid and ask are zero, this is extremely illiquid
-        if ask == 0:
-            return {
-                'score': 0.0,
-                'spread_pct': 1.0,
-                'volume': 0,
-                'open_interest': 0,
-                'has_zero_bid': True
-            }
-        
-        # If bid is zero but ask exists, use a very small bid for calculation
-        if bid == 0:
-            bid = ask * 0.01  # Use 1% of ask as a proxy for a very poor bid
-        
-        mid = (bid + ask) / 2.0
-        spread_pct = (ask - bid) / mid
-        
-        # Volume and open interest factors
-        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 0
-        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 0
-        
-        # Base liquidity score from spread percentage (tighter spread = better liquidity)
-        base_score = 10.0 * (1.0 / (1.0 + (spread_pct * 10)))
-        
-        # Volume factor (more volume = better liquidity)
-        volume_factor = min(1.0, np.log10(volume + 1) / 3.0)
-        
-        # Open interest factor (more open interest = better liquidity)
-        oi_factor = min(1.0, np.log10(open_interest + 1) / 4.0)
-        
-        # Zero bid penalty
-        zero_bid_penalty = 0.7 if has_zero_bid else 1.0
-        
-        # Calculate final score with weights
-        # 60% spread, 20% volume, 20% open interest, then apply zero bid penalty
-        liquidity_score = (base_score * 0.6 +
-                          (volume_factor * 10.0) * 0.2 +
-                          (oi_factor * 10.0) * 0.2) * zero_bid_penalty
-        
-        return {
-            'score': min(10.0, max(0.0, liquidity_score)),
-            'spread_pct': float(spread_pct),
-            'volume': int(volume),
-            'open_interest': int(open_interest),
-            'has_zero_bid': has_zero_bid
-        }
+        # Use the improved liquidity score calculation
+        return get_improved_liquidity_score(option_dict)
     except Exception as e:
         logger.error(f"Error calculating liquidity score: {str(e)}")
         return {
@@ -300,9 +410,9 @@ def get_liquidity_score(stock, expiration, strike, option_type='call'):
             'spread_pct': 1.0,
             'volume': 0,
             'open_interest': 0,
-            'has_zero_bid': True
+            'has_zero_bid': True,
+            'spread_dollars': 0.0
         }
-
 
 def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_liquidity,
                           strike_distance_from_atm, days_between_expirations=30,
@@ -432,7 +542,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
         
         # Define a function to evaluate a single spread combination
         def evaluate_spread(params):
-            days_out, strike = params
+            days_out, strike, option_type = params
             
             target_date = today + timedelta(days=days_out)
             
@@ -449,7 +559,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             
             # Skip if we couldn't get IV data
             if front_iv == 0 or back_iv == 0:
-                logger.debug(f"{ticker} strike ${strike}: Skipping due to missing IV data - front_iv: {front_iv}, back_iv: {back_iv}")
+                logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to missing IV data - front_iv: {front_iv}, back_iv: {back_iv}")
                 return None
             
             # IV differential (front month should be higher)
@@ -458,33 +568,40 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             # Allow small negative IV differentials (front month can be slightly lower)
             # Skip only if the differential is significantly negative
             if iv_differential < -0.1:
-                logger.debug(f"{ticker} strike ${strike}: Skipping due to low IV differential: {iv_differential}")
+                logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to low IV differential: {iv_differential}")
                 return None
             
             # Get pricing information
-            spread_cost = calculate_spread_cost(stock, front_month, back_month, strike)
+            spread_cost = calculate_spread_cost(stock, front_month, back_month, strike, option_type)
             
             # Skip if spread cost is invalid
             if spread_cost <= 0:
-                logger.debug(f"{ticker} strike ${strike}: Skipping due to invalid spread cost: {spread_cost}")
+                logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to invalid spread cost: {spread_cost}")
                 return None
             
             # Calculate liquidity metrics
-            front_liquidity = get_liquidity_score(stock, front_month, strike)
-            back_liquidity = get_liquidity_score(stock, back_month, strike)
+            front_liquidity = get_liquidity_score(stock, front_month, strike, option_type)
+            back_liquidity = get_liquidity_score(stock, back_month, strike, option_type)
+            
+            # Calculate combined liquidity score for the calendar spread
+            combined_liquidity = calculate_calendar_spread_liquidity(
+                front_liquidity,
+                back_liquidity,
+                spread_cost
+            )
             
             # Calculate a composite score
             score = calculate_spread_score(
                 iv_differential,
                 spread_cost,
-                front_liquidity,
-                back_liquidity,
+                combined_liquidity['score'],  # Use the combined liquidity score
+                combined_liquidity['score'],  # Use the same score for both params
                 strike_distance_from_atm=abs(strike - current_price),
                 days_between_expirations=days_between_expirations,
                 days_to_front_expiration=days_to_front_expiration
             )
             
-            logger.debug(f"{ticker} strike ${strike}, back month {back_month}: Calculated score: {score}")
+            logger.debug(f"{ticker} {option_type} strike ${strike}, back month {back_month}: Calculated score: {score}")
             
             return {
                 'score': float(score),
@@ -496,11 +613,13 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
                     'ivDifferential': float(iv_differential),
                     'frontIv': float(front_iv),
                     'backIv': float(back_iv),
-                    'frontLiquidity': float(front_liquidity),
-                    'backLiquidity': float(back_liquidity),
+                    'frontLiquidity': front_liquidity,
+                    'backLiquidity': back_liquidity,
+                    'combinedLiquidity': combined_liquidity,
                     'daysBetweenExpirations': days_between_expirations,
                     'daysToFrontExpiration': days_to_front_expiration,
-                    'score': float(score)
+                    'score': float(score),
+                    'optionType': option_type
                 }
             }
         
@@ -508,8 +627,13 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
         strikes = get_strikes_near_price(stock, front_month, current_price, range_percent=15)
         logger.info(f"{ticker} considering {len(strikes)} strikes near price: {strikes}")
         
-        # Create a list of all combinations to evaluate
-        combinations = [(days_out, strike) for days_out in back_month_exp_options for strike in strikes]
+        # Create a list of all combinations to evaluate - include both calls and puts
+        combinations = [
+            (days_out, strike, option_type)
+            for days_out in back_month_exp_options
+            for strike in strikes
+            for option_type in ['call', 'put']
+        ]
         
         # Use ThreadPoolExecutor to parallelize the evaluation
         best_spread = None
@@ -526,11 +650,11 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
                     if result and result['score'] > best_score:
                         best_score = result['score']
                         best_spread = result['spread']
-                        days_out, strike = future_to_combo[future]
-                        logger.info(f"{ticker} strike ${strike}, days out {days_out}: New best score: {best_score}")
+                        days_out, strike, option_type = future_to_combo[future]
+                        logger.info(f"{ticker} {option_type} strike ${strike}, days out {days_out}: New best score: {best_score}")
                 except Exception as e:
-                    days_out, strike = future_to_combo[future]
-                    logger.warning(f"Error evaluating spread for {ticker} strike ${strike}, days out {days_out}: {str(e)}")
+                    days_out, strike, option_type = future_to_combo[future]
+                    logger.warning(f"Error evaluating spread for {ticker} {option_type} strike ${strike}, days out {days_out}: {str(e)}")
         
         # Set a minimum threshold score (lowered from 5.0)
         MINIMUM_VIABLE_SCORE = 3.0

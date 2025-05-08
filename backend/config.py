@@ -17,19 +17,19 @@ YF_RATE_LIMIT = {
     "burst": 10
 }
 
-# Parallel processing configuration
-PARALLEL_PROCESSING = {
-    # Minimum number of worker threads
-    "min_workers": 2,
-    
-    # Maximum number of worker threads
-    "max_workers": 16,
-    
+# Sequential processing configuration
+SEQUENTIAL_PROCESSING = {
     # Estimated API calls per ticker analysis
     "api_calls_per_ticker": 8,
     
-    # Target completion time range in seconds (min, max)
-    "target_completion_time": (30, 60)
+    # Requests per minute limit
+    "requests_per_minute": 70,
+    
+    # Maximum consecutive requests before pause
+    "max_consecutive_requests": 10,
+    
+    # Pause duration in seconds after max consecutive requests
+    "pause_duration": 1.0
 }
 
 # Quick filter thresholds
