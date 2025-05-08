@@ -51,6 +51,8 @@ export const analyzeOptions = async (ticker: string): Promise<OptionsAnalysisRes
  * 
  * @returns Promise with scan results
  */
+// This function is no longer used directly - the EventSource is created in the component
+// It's kept for backward compatibility
 export const scanEarningsToday = async (): Promise<OptionsAnalysisResult[]> => {
   try {
     const response = await fetch(`${API_BASE_URL}/scan/earnings`);
@@ -74,6 +76,8 @@ export const scanEarningsToday = async (): Promise<OptionsAnalysisResult[]> => {
  * @param date Date in YYYY-MM-DD format
  * @returns Promise with scan results
  */
+// This function is no longer used directly - the EventSource is created in the component
+// It's kept for backward compatibility
 export const scanEarningsByDate = async (date: string): Promise<OptionsAnalysisResult[]> => {
   try {
     const response = await fetch(`${API_BASE_URL}/scan/earnings?date=${date}`);

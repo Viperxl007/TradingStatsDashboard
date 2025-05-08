@@ -67,22 +67,77 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   
   const { optionsData } = state;
 
+  // State for tracking scan progress
+  const [scanProgress, setScanProgress] = useState<{
+    completed: number;
+    total: number;
+    percent: number;
+    filtered_out: number;
+    no_data: number;
+  } | null>(null);
+  
   const handleScanToday = async () => {
     try {
       dispatch(scanEarningsStart());
-      const results = await scanEarningsToday();
-      dispatch(scanEarningsSuccess(results));
+      setScanProgress(null);
       
-      toast({
-        title: 'Scan Complete',
-        description: `Analyzed ${results.length} stocks with earnings today`,
-        status: 'success',
-        duration: 5000,
-        isClosable: true,
-      });
+      // Use EventSource for server-sent events
+      const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
+      
+      eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.status === 'in_progress') {
+          // Update progress information
+          setScanProgress(data.progress);
+          
+          // If we have partial results, update them
+          if (data.results && data.results.length > 0) {
+            dispatch(scanEarningsSuccess(data.results));
+          }
+        } else if (data.status === 'complete') {
+          // Scan is complete
+          dispatch(scanEarningsSuccess(data.results));
+          
+          // Keep the progress info for a moment before clearing it
+          setTimeout(() => {
+            setScanProgress(null);
+          }, 2000);
+          
+          // Close the event source
+          eventSource.close();
+          
+          toast({
+            title: 'Scan Complete',
+            description: `Analyzed ${data.count} stocks with earnings today`,
+            status: 'success',
+            duration: 5000,
+            isClosable: true,
+          });
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('EventSource error:', error);
+        eventSource.close();
+        
+        const errorMessage = 'Connection to server lost';
+        dispatch(scanEarningsError(errorMessage));
+        setScanProgress(null);
+        
+        toast({
+          title: 'Scan Failed',
+          description: errorMessage,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
+      };
+      
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       dispatch(scanEarningsError(errorMessage));
+      setScanProgress(null);
       
       toast({
         title: 'Scan Failed',
@@ -108,19 +163,65 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     
     try {
       dispatch(scanEarningsStart(customDate));
-      const results = await scanEarningsByDate(customDate);
-      dispatch(scanEarningsSuccess(results));
+      setScanProgress(null);
       
-      toast({
-        title: 'Scan Complete',
-        description: `Analyzed ${results.length} stocks with earnings on ${customDate}`,
-        status: 'success',
-        duration: 5000,
-        isClosable: true,
-      });
+      // Use EventSource for server-sent events
+      const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
+      
+      eventSource.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.status === 'in_progress') {
+          // Update progress information
+          setScanProgress(data.progress);
+          
+          // If we have partial results, update them
+          if (data.results && data.results.length > 0) {
+            dispatch(scanEarningsSuccess(data.results));
+          }
+        } else if (data.status === 'complete') {
+          // Scan is complete
+          dispatch(scanEarningsSuccess(data.results));
+          
+          // Keep the progress info for a moment before clearing it
+          setTimeout(() => {
+            setScanProgress(null);
+          }, 2000);
+          
+          // Close the event source
+          eventSource.close();
+          
+          toast({
+            title: 'Scan Complete',
+            description: `Analyzed ${data.count} stocks with earnings on ${customDate}`,
+            status: 'success',
+            duration: 5000,
+            isClosable: true,
+          });
+        }
+      };
+      
+      eventSource.onerror = (error) => {
+        console.error('EventSource error:', error);
+        eventSource.close();
+        
+        const errorMessage = 'Connection to server lost';
+        dispatch(scanEarningsError(errorMessage));
+        setScanProgress(null);
+        
+        toast({
+          title: 'Scan Failed',
+          description: errorMessage,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
+      };
+      
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       dispatch(scanEarningsError(errorMessage));
+      setScanProgress(null);
       
       toast({
         title: 'Scan Failed',
@@ -191,15 +292,21 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   // Filter and sort results
   const filteredResults = optionsData.scanResults
     .filter(result => {
+      // Skip filtered out tickers completely
+      // We check for the string representation since TypeScript doesn't know about "FILTERED OUT"
+      if (String(result.recommendation) === 'FILTERED OUT') {
+        return false;
+      }
+      
       // Filter by search query
-      const matchesSearch = 
-        !searchQuery || 
+      const matchesSearch =
+        !searchQuery ||
         result.ticker.toLowerCase().includes(searchQuery.toLowerCase()) ||
         (result.companyName && result.companyName.toLowerCase().includes(searchQuery.toLowerCase()));
       
       // Filter by recommendation
-      const matchesRecommendation = 
-        filterRecommendation === 'all' || 
+      const matchesRecommendation =
+        filterRecommendation === 'all' ||
         result.recommendation === filterRecommendation;
       
       return matchesSearch && matchesRecommendation;
@@ -300,11 +407,67 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         </Flex>
       </Box>
 
-      {optionsData.isLoading && (
-        <Flex justify="center" align="center" my={10}>
-          <Spinner size="xl" color="brand.500" mr={4} />
-          <Text>Scanning earnings and analyzing options data...</Text>
-        </Flex>
+      {/* Always show scan progress when it exists, regardless of loading state */}
+      {scanProgress && (
+        <Box my={4} p={4} borderWidth="1px" borderRadius="md" borderColor={colorMode === 'dark' ? 'gray.700' : 'gray.200'}>
+          <Flex justify="space-between" mb={2}>
+            <Text fontWeight="medium">
+              Processing tickers: {scanProgress.completed} of {scanProgress.total} ({scanProgress.percent}%)
+            </Text>
+            <Text color="gray.500">
+              Filtered: {scanProgress.filtered_out} | No data: {scanProgress.no_data}
+            </Text>
+          </Flex>
+          
+          <Box position="relative" pt={1}>
+            <Box
+              w="100%"
+              h="8px"
+              bg={colorMode === 'dark' ? 'gray.700' : 'gray.200'}
+              borderRadius="full"
+            >
+              <Box
+                h="100%"
+                bg="brand.500"
+                borderRadius="full"
+                transition="width 0.3s ease-in-out"
+                w={`${scanProgress.percent}%`}
+              />
+            </Box>
+            
+            {/* Animated pulse effect at the end of the progress bar */}
+            {scanProgress.percent < 100 && (
+              <Box
+                position="absolute"
+                top="1px"
+                left={`${scanProgress.percent}%`}
+                transform="translateX(-50%)"
+                w="16px"
+                h="8px"
+                borderRadius="full"
+                bg="brand.400"
+                opacity="0.8"
+                animation="pulse 1.5s infinite"
+              />
+            )}
+          </Box>
+          
+          <Text mt={2} fontSize="sm" color="gray.500">
+            {scanProgress.completed < scanProgress.total
+              ? "Analyzing options data... Results will update as they become available."
+              : "Finalizing results..."}
+          </Text>
+        </Box>
+      )}
+
+      {/* Show loading spinner only when no progress data is available */}
+      {optionsData.isLoading && !scanProgress && (
+        <Box my={10}>
+          <Flex justify="center" align="center">
+            <Spinner size="xl" color="brand.500" mr={4} />
+            <Text>Scanning earnings and analyzing options data...</Text>
+          </Flex>
+        </Box>
       )}
 
       {optionsData.error && (
