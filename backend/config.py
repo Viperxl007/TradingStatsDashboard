@@ -8,7 +8,7 @@ including rate limiting parameters for API calls.
 # Rate limiting configuration for Yahoo Finance API calls
 YF_RATE_LIMIT = {
     # Number of requests allowed per time period
-    "rate": 5,
+    "rate": 8,
     
     # Time period in seconds
     "per": 1.0,

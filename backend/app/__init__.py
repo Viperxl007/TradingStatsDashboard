@@ -1,6 +1,11 @@
 from flask import Flask
 from flask_cors import CORS
 import os
+import logging
+from app.utils import CustomJSONEncoder
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 def create_app(test_config=None):
     # Create and configure the app
@@ -8,6 +13,9 @@ def create_app(test_config=None):
     
     # Enable CORS
     CORS(app)
+    
+    # Configure Flask to properly handle JSON serialization
+    app.json_encoder = CustomJSONEncoder
     
     # Set default configuration
     app.config.from_mapping(
@@ -27,6 +35,14 @@ def create_app(test_config=None):
         os.makedirs(app.instance_path)
     except OSError:
         pass
+
+    # Initialize rate limiter
+    try:
+        from app.rate_limiter import update_rate_limiter_config
+        update_rate_limiter_config()
+        logger.info("Rate limiter initialized")
+    except Exception as e:
+        logger.warning(f"Failed to initialize rate limiter: {str(e)}")
 
     # Register blueprints
     from app.routes import api_bp

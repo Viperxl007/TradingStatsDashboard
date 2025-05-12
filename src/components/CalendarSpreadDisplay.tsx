@@ -71,21 +71,25 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
   };
   
-  // Calculate estimated max profit (typically around 2-3x the spread cost for calendar spreads)
-  const estimatedMaxProfit = calendarSpread.spreadCost * 2.8;
+  // Use the estimated max profit from the backend or calculate it as fallback
+  const estimatedMaxProfit = calendarSpread.estimatedMaxProfit ||
+    calendarSpread.spreadCost * 2.8; // Fallback for backward compatibility
   
-  // Calculate return on risk
-  const returnOnRisk = estimatedMaxProfit / calendarSpread.spreadCost;
+  // Use the return on risk from the backend or calculate it as fallback
+  const returnOnRisk = calendarSpread.returnOnRisk ||
+    (estimatedMaxProfit / calendarSpread.spreadCost);
   
   // Calculate break-even points (approximate)
   const breakEvenLower = calendarSpread.strike - calendarSpread.spreadCost;
   const breakEvenUpper = calendarSpread.strike + calendarSpread.spreadCost;
   
-  // Calculate standard probability (approximate based on IV differential)
-  const standardProbability = Math.min(0.95, 0.5 + (calendarSpread.ivDifferential * 0.5));
+  // Use the probability from the backend or calculate it as fallback
+  const standardProbability = calendarSpread.probabilityOfProfit ||
+    Math.min(0.95, 0.5 + (calendarSpread.ivDifferential * 0.5));
   
-  // Calculate enhanced probability with volatility crush consideration
-  const enhancedProbability = Math.min(0.95, standardProbability * 1.06);
+  // Use the enhanced probability from the backend or calculate it as fallback
+  const enhancedProbability = calendarSpread.enhancedProbability ||
+    Math.min(0.95, standardProbability * 1.06);
   
   // Get liquidity scores from the backend data
   // Handle both object and number formats for backward compatibility
@@ -129,10 +133,15 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
     has_zero_bids: frontLiquidity.has_zero_bid || backLiquidity.has_zero_bid
   };
   
-  // Calculate front month and back month IVs based on IV differential
-  // This is an approximation - in a real implementation, we would get these from the API
-  const backMonthIV = 0.39; // 39%
-  const frontMonthIV = backMonthIV * (1 + calendarSpread.ivDifferential);
+  // Use actual IV values from the API if available
+  const frontMonthIV = calendarSpread.frontIv !== undefined ? calendarSpread.frontIv : 0.39; // Default to 39% if not available
+  const backMonthIV = calendarSpread.backIv !== undefined ? calendarSpread.backIv : (frontMonthIV / (1 + calendarSpread.ivDifferential));
+  
+  // Calculate strike distance from current price as percentage
+  // We need to use the current price from the expected move calculation
+  const currentPrice = expectedMove?.dollars ? expectedMove.dollars / expectedMove.percent : 0;
+  const strikeDistancePercent = currentPrice ? ((calendarSpread.strike / currentPrice) - 1) * 100 : 0;
+  const isStrikeOutsideExpectedMove = Math.abs(strikeDistancePercent) > (expectedMove?.percent || 0) * 100;
   
   return (
     <Box
@@ -181,10 +190,16 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Flex>
         
         <Flex justifyContent="space-between" alignItems="center" mb={4}>
-          <Flex alignItems="center" gap={4}>
+          <Flex alignItems="center" gap={4} flexWrap="wrap">
             <Flex alignItems="center">
               <Text mr={2} fontSize="sm" fontWeight="bold">Strategy Score:</Text>
               <ScoreThermometer score={calendarSpread.score} size="sm" />
+              <Text ml={2} fontSize="sm" fontWeight="bold">
+                {calendarSpread.score.toFixed(0)}/100
+              </Text>
+              <Tooltip label="Normalized score (0-100) based on IV differential, cost efficiency, liquidity, and other factors">
+                <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
+              </Tooltip>
             </Flex>
             <Flex alignItems="center">
               <Text mr={2} fontSize="sm" fontWeight="bold">Overall Liquidity:</Text>
@@ -193,6 +208,9 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
                 hasZeroBids={combinedLiquidity?.has_zero_bids || false}
                 size="sm"
               />
+              <Text ml={2} fontSize="sm">
+                {(combinedLiquidity?.score || 0).toFixed(1)}/10
+              </Text>
             </Flex>
           </Flex>
         </Flex>
@@ -215,11 +233,51 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Strike Price</Text>
             <Text fontSize="lg" fontWeight="bold">${calendarSpread.strike.toFixed(2)}</Text>
+            
+            {/* Show strike distance from current price */}
+            {currentPrice > 0 && (
+              <Text
+                fontSize="sm"
+                color={Math.abs(strikeDistancePercent) > 15 ? "yellow.500" : "inherit"}
+              >
+                {strikeDistancePercent > 0
+                  ? `${strikeDistancePercent.toFixed(1)}% above current price`
+                  : `${Math.abs(strikeDistancePercent).toFixed(1)}% below current price`}
+              </Text>
+            )}
+            
+            {/* Show whether strike is outside expected move */}
+            {isStrikeOutsideExpectedMove && (
+              <Text fontSize="xs" color="green.500" mt={1}>
+                Outside expected move range
+                <Tooltip label="Strike price is outside the expected price movement, which may improve probability of profit">
+                  <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
+                </Tooltip>
+              </Text>
+            )}
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>IV Differential</Text>
             <Text fontSize="lg" fontWeight="bold" color="green.400">{(calendarSpread.ivDifferential * 100).toFixed(2)}%</Text>
+            
+            {/* Display IV Quality if available */}
+            {calendarSpread.ivQuality && (
+              <Text
+                fontSize="sm"
+                fontWeight="semibold"
+                color={
+                  calendarSpread.ivQuality === "Excellent" ? "green.500" :
+                  calendarSpread.ivQuality === "Good" ? "blue.500" :
+                  "gray.500"
+                }
+              >
+                {calendarSpread.ivQuality}
+                <Tooltip label="IV differential quality rating based on thresholds: Excellent (≥15%), Good (≥10%), Below threshold (<10%)">
+                  <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
+                </Tooltip>
+              </Text>
+            )}
           </Box>
         </Grid>
         
@@ -229,8 +287,29 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         
         <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
-            <Text fontWeight="bold" mb={2}>Spread Cost</Text>
-            <Text fontSize="lg" fontWeight="bold">${calendarSpread.spreadCost.toFixed(2)}</Text>
+            <Flex alignItems="center">
+              <Text fontWeight="bold" mb={2}>Spread Cost</Text>
+              {calendarSpread.spreadCost < 0.20 && (
+                <Tooltip label="Very low spread costs often indicate pricing inefficiencies rather than opportunities">
+                  <Box ml={1} mb={2}>
+                    <Icon as={FiInfo} color="yellow.500" />
+                  </Box>
+                </Tooltip>
+              )}
+            </Flex>
+            <Text
+              fontSize="lg"
+              fontWeight="bold"
+              color={calendarSpread.spreadCost < 0.15 ? "yellow.500" : "inherit"}
+            >
+              ${calendarSpread.spreadCost.toFixed(2)}
+              {calendarSpread.spreadCost < 0.15 && " ⚠️"}
+            </Text>
+            {calendarSpread.spreadCost < 0.15 && (
+              <Text fontSize="xs" color="yellow.500">
+                Warning: Extremely low cost may indicate pricing anomalies
+              </Text>
+            )}
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
@@ -244,8 +323,39 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
-            <Text fontWeight="bold" mb={2}>Return on Risk</Text>
+            <Flex alignItems="center">
+              <Text fontWeight="bold" mb={2}>Return on Risk</Text>
+              <Tooltip label="Theoretical maximum return based on model calculations">
+                <Box ml={1} mb={2}>
+                  <Icon as={FiInfo} />
+                </Box>
+              </Tooltip>
+            </Flex>
             <Text fontSize="lg" fontWeight="bold" color="green.400">{(returnOnRisk * 100).toFixed(0)}%</Text>
+            
+            {/* Add risk-adjusted return */}
+            <Flex alignItems="center" mt={2}>
+              <Text fontSize="sm" fontWeight="bold">Risk-Adjusted:</Text>
+              <Tooltip label="Factors in spread impact, liquidity constraints, and execution probability">
+                <Box ml={1}>
+                  <Icon as={FiInfo} fontSize="xs" />
+                </Box>
+              </Tooltip>
+            </Flex>
+            <Text
+              fontSize="md"
+              fontWeight="bold"
+              color={
+                returnOnRisk * (1 - (combinedLiquidity?.spread_impact || 0.1)) *
+                (Math.min(1, (combinedLiquidity?.score || 5) / 10)) > 0.5
+                  ? "green.400"
+                  : "yellow.500"
+              }
+            >
+              {(returnOnRisk *
+                (1 - (combinedLiquidity?.spread_impact || 0.1)) *
+                (Math.min(1, (combinedLiquidity?.score || 5) / 10)) * 100).toFixed(0)}%
+            </Text>
           </Box>
         </Grid>
         
@@ -266,6 +376,28 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         <Heading as="h4" size="sm" mb={2}>
           Liquidity Details
         </Heading>
+        
+        {/* Add liquidity warning if either leg has poor liquidity */}
+        {(frontLiquidity.score < 4.0 || backLiquidity.score < 4.0) && (
+          <Box p={2} mb={3} borderRadius="md" bg={useColorModeValue('yellow.50', 'rgba(236, 201, 75, 0.1)')} borderWidth="1px" borderColor="yellow.200">
+            <Flex alignItems="center">
+              <Text fontSize="sm" fontWeight="bold" color="yellow.600">Liquidity Warning</Text>
+              <Tooltip label="Low liquidity makes execution difficult and increases slippage">
+                <span><Icon as={FiInfo} ml={1} color="yellow.600" /></span>
+              </Tooltip>
+            </Flex>
+            <Text fontSize="xs" color="yellow.600" mt={1}>
+              {frontLiquidity.score < 4.0 && backLiquidity.score < 4.0
+                ? "Both legs have poor liquidity - execution may be difficult"
+                : frontLiquidity.score < 4.0
+                  ? "Front month has poor liquidity - may be difficult to close position"
+                  : "Back month has poor liquidity - may be difficult to establish position"}
+            </Text>
+            <Text fontSize="xs" color="yellow.600" mt={1}>
+              Minimum recommended liquidity: 4.0/10
+            </Text>
+          </Box>
+        )}
         
         <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
@@ -325,25 +457,47 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           </Box>
         </Grid>
         
-        <Box mt={3} p={2} borderRadius="md"
+        <Box mt={3} p={3} borderRadius="md"
              bg={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ?
                 useColorModeValue('red.50', 'rgba(245, 101, 101, 0.1)') :
                 useColorModeValue('green.50', 'rgba(72, 187, 120, 0.1)')
              }
              borderWidth="1px"
              borderColor={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.200" : "green.200"}>
-          <Flex justifyContent="space-between">
-            <Text fontSize="sm" fontWeight="bold">Spread Impact:</Text>
+          <Flex justifyContent="space-between" alignItems="center">
+            <Flex alignItems="center">
+              <Text fontSize="sm" fontWeight="bold">Spread Impact:</Text>
+              <Tooltip label="The percentage of your spread cost consumed by bid-ask spreads. Higher values make execution difficult and reduce profitability.">
+                <span><Icon as={FiInfo} ml={1} /></span>
+              </Tooltip>
+            </Flex>
             <Text fontSize="sm"
                   fontWeight="bold"
                   color={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.500" : "green.500"}>
               {((combinedLiquidity?.spread_impact || 0.1) * 100).toFixed(0)}% of cost
             </Text>
           </Flex>
-          <Text fontSize="xs" color={combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? "red.500" : "green.500"}>
-            {combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ?
-              "Warning: High spread impact may reduce profitability" :
-              "Good: Low spread impact on trade cost"}
+          
+          {combinedLiquidity && combinedLiquidity.spread_impact > 0.3 ? (
+            <>
+              <Text fontSize="xs" color="red.500" fontWeight="bold" mt={1}>
+                Warning: High spread impact significantly reduces profitability
+              </Text>
+              <Text fontSize="xs" color="red.500" mt={1}>
+                {combinedLiquidity.spread_impact > 0.5 ?
+                  "Execution may be impractical despite theoretical score" :
+                  "Consider only if other metrics are exceptionally strong"}
+              </Text>
+            </>
+          ) : (
+            <Text fontSize="xs" color="green.500" mt={1}>
+              Good: Low spread impact on trade cost
+            </Text>
+          )}
+          
+          <Text fontSize="xs" mt={1} fontStyle="italic">
+            Realistic ROI: ~{(returnOnRisk * (1 - (combinedLiquidity?.spread_impact || 0.1)) * 100).toFixed(0)}%
+            (adjusted for spread impact)
           </Text>
         </Box>
         
@@ -352,19 +506,35 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Heading>
         
         <Box mb={4}>
-          <Text fontSize="sm">Standard Probability: {(standardProbability * 100).toFixed(2)}%</Text>
-          
-          <Box mt={1} p={2} borderRadius="md" bg={useColorModeValue('green.50', 'rgba(72, 187, 120, 0.1)')} borderWidth="1px" borderColor="green.200">
-            <Text fontSize="sm" fontWeight="bold" color="green.500">
-              Enhanced Probability: {(enhancedProbability * 100).toFixed(2)}%
-            </Text>
-            <Text fontSize="xs" color="green.500">
-              Range: {(enhancedProbability * 0.9 * 100).toFixed(0)}% - {(enhancedProbability * 1.1 * 100).toFixed(0)}%
-            </Text>
-            <Text fontSize="xs" color="green.500" mt={1}>
-              Accounts for post-earnings volatility crush
-            </Text>
-          </Box>
+          {calendarSpread.monteCarloResults ? (
+            <Box p={2} borderRadius="md" bg={useColorModeValue('blue.50', 'rgba(66, 153, 225, 0.1)')} borderWidth="1px" borderColor="blue.200">
+              <Text fontSize="sm" fontWeight="bold" color="blue.500">
+                Monte Carlo Probability: {(calendarSpread.monteCarloResults.probabilityOfProfit * 100).toFixed(2)}%
+              </Text>
+              <Text fontSize="xs" color="blue.500">
+                Based on {calendarSpread.monteCarloResults.expectedProfit >= 0 ? "positive" : "negative"} expected profit of ${calendarSpread.monteCarloResults.expectedProfit.toFixed(2)}
+              </Text>
+              <Text fontSize="xs" color="blue.500" mt={1}>
+                Simulates price movement and volatility crush after earnings
+              </Text>
+            </Box>
+          ) : (
+            <>
+              <Text fontSize="sm">Standard Probability: {(standardProbability * 100).toFixed(2)}%</Text>
+              
+              <Box mt={1} p={2} borderRadius="md" bg={useColorModeValue('green.50', 'rgba(72, 187, 120, 0.1)')} borderWidth="1px" borderColor="green.200">
+                <Text fontSize="sm" fontWeight="bold" color="green.500">
+                  Enhanced Probability: {(enhancedProbability * 100).toFixed(2)}%
+                </Text>
+                <Text fontSize="xs" color="green.500">
+                  Range: {(enhancedProbability * 0.9 * 100).toFixed(0)}% - {(enhancedProbability * 1.1 * 100).toFixed(0)}%
+                </Text>
+                <Text fontSize="xs" color="green.500" mt={1}>
+                  Accounts for post-earnings volatility crush
+                </Text>
+              </Box>
+            </>
+          )}
         </Box>
       </Box>
     </Box>

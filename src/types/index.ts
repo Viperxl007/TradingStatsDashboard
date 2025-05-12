@@ -115,12 +115,41 @@ export interface OptimalCalendarSpread {
   backMonth: string;             // Back month expiration date
   spreadCost: number;            // Cost of the spread
   ivDifferential: number;        // IV differential between months
+  ivQuality?: string;            // IV differential quality rating (Excellent, Good, Below threshold)
   score: number;                 // Algorithmic score of the spread
+  frontIv?: number;              // Front month implied volatility
+  backIv?: number;               // Back month implied volatility
   metricsPass?: string;          // Whether all metrics pass thresholds ("true" or "false")
   frontLiquidity: LiquidityDetails; // Liquidity details for front month option
   backLiquidity: LiquidityDetails;  // Liquidity details for back month option
   combinedLiquidity?: CalendarSpreadLiquidity; // Combined liquidity details for the spread
   optionType?: 'call' | 'put';   // Type of option used in the spread
+  // New fields from backend calculations
+  estimatedMaxProfit?: number;   // Estimated maximum profit
+  returnOnRisk?: number;         // Return on risk (profit / cost)
+  probabilityOfProfit?: number;  // Probability of profit
+  enhancedProbability?: number;  // Enhanced probability with volatility crush
+  realisticReturnOnRisk?: number; // More realistic return on risk calculation
+  spreadImpact?: number;         // Impact of bid-ask spreads on profitability
+  // Monte Carlo simulation results
+  monteCarloResults?: {
+    probabilityOfProfit: number; // Monte Carlo probability of profit
+    expectedProfit: number;      // Expected profit from simulation
+    maxProfit: number;           // Maximum profit from simulation
+    returnOnRisk: number;        // Return on risk from simulation
+    maxReturn: number;           // Maximum return from simulation
+  };
+  // IV crush model
+  ivCrushModel?: {
+    preEarningsFrontIv: number;  // Front month IV before earnings
+    preEarningsBackIv: number;   // Back month IV before earnings
+    postEarningsFrontIv: number; // Front month IV after earnings
+    postEarningsBackIv: number;  // Back month IV after earnings
+    ivCrushAmount: {
+      front: number;             // Amount of IV crush in front month
+      back: number;              // Amount of IV crush in back month
+    };
+  };
 }
 
 /**
@@ -159,16 +188,29 @@ export interface OptimalNakedOptions {
 /**
  * Options analysis result
  */
+/**
+ * Strategy availability information
+ */
+export interface StrategyAvailability {
+  calendar_available: boolean;   // Whether calendar spreads are available
+  naked_available: boolean;      // Whether naked options are available
+  iron_condor_available: boolean; // Whether iron condors are available
+}
+
+/**
+ * Options analysis result
+ */
 export interface OptionsAnalysisResult {
   ticker: string;                // Stock ticker symbol
   companyName?: string;          // Company name (optional)
   currentPrice: number;          // Current stock price
   metrics: OptionsMetrics;       // Analysis metrics
   expectedMove: string;          // Expected move percentage
-  recommendation: 'Recommended' | 'Consider' | 'Avoid'; // Analysis recommendation
+  recommendation: 'Recommended' | 'Consider' | 'Avoid' | 'FILTERED OUT'; // Analysis recommendation
   reportTime?: 'BMO' | 'AMC' | 'DMH'; // Earnings report time (optional)
   timestamp: number;             // Timestamp of the analysis
   error?: string;                // Error message if analysis failed
+  strategyAvailability?: StrategyAvailability; // Strategy availability information
   optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
   optimalNakedOptions?: OptimalNakedOptions;    // Optimal naked options (if available)
   optimalIronCondors?: OptimalIronCondors;      // Optimal iron condors (if available)

@@ -56,6 +56,7 @@ const DirectSearch: React.FC = () => {
   const { state, dispatch } = useData();
   const [ticker, setTicker] = useState<string>('');
   const [tradingViewLoaded, setTradingViewLoaded] = useState<boolean>(false);
+  const [analysisStartTime, setAnalysisStartTime] = useState<number | null>(null);
   const { optionsData } = state;
   
   // Check if TradingView script is loaded
@@ -86,11 +87,15 @@ const DirectSearch: React.FC = () => {
     
     try {
       dispatch(analyzeOptionsStart(ticker));
-      const result = await analyzeOptions(ticker);
+      setAnalysisStartTime(Date.now());
+      
+      const result = await analyzeOptions(ticker, true); // Set runFullAnalysis to true
       dispatch(analyzeOptionsSuccess(result));
+      setAnalysisStartTime(null);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
       dispatch(analyzeOptionsError(errorMessage));
+      setAnalysisStartTime(null);
     }
   };
 
@@ -150,9 +155,30 @@ const DirectSearch: React.FC = () => {
       </Box>
 
       {optionsData.isLoading && (
-        <Flex justify="center" align="center" my={10}>
-          <Spinner size="xl" color="brand.500" mr={4} />
-          <Text>Analyzing options data...</Text>
+        <Flex justify="center" align="center" direction="column" my={10}>
+          <Flex align="center" mb={4}>
+            <Spinner size="xl" color="brand.500" mr={4} />
+            <Text fontSize="lg">Analyzing options data...</Text>
+          </Flex>
+          
+          {analysisStartTime && (
+            <Box textAlign="center">
+              <Text fontSize="sm" color="gray.500">
+                Elapsed time: {Math.floor((Date.now() - analysisStartTime) / 1000)} seconds
+              </Text>
+              {Date.now() - analysisStartTime > 15000 && (
+                <Alert status="info" mt={2} borderRadius="md">
+                  <AlertIcon />
+                  <Box>
+                    <AlertTitle>Analysis in progress</AlertTitle>
+                    <AlertDescription>
+                      Iron condor analysis may take some time to complete, especially for complex calculations. Please be patient.
+                    </AlertDescription>
+                  </Box>
+                </Alert>
+              )}
+            </Box>
+          )}
         </Flex>
       )}
 
@@ -268,11 +294,11 @@ const DirectSearch: React.FC = () => {
                     </Flex>
                   </Stack>
                   
-                  {/* Calendar Spread Section - Always show if optimalCalendarSpread is available */}
-                  {optionsData.analysisResult.optimalCalendarSpread && (
-                    <>
-                      <Divider my={4} />
-                      <Box mt={4}>
+                  {/* Calendar Spread Section - Always show, with message if no viable spreads found */}
+                  <Divider my={4} />
+                  <Box mt={4}>
+                    {optionsData.analysisResult.optimalCalendarSpread ? (
+                      <>
                         <CalendarSpreadDisplay
                           ticker={optionsData.analysisResult.ticker}
                           calendarSpread={optionsData.analysisResult.optimalCalendarSpread}
@@ -291,9 +317,44 @@ const DirectSearch: React.FC = () => {
                             </Text>
                           </Alert>
                         )}
+                      </>
+                    ) : (
+                      <Box
+                        borderWidth="2px"
+                        borderRadius="lg"
+                        borderColor="brand.500"
+                        bg={colorMode === 'dark' ? 'gray.800' : 'white'}
+                        boxShadow="lg"
+                        overflow="hidden"
+                        p={4}
+                      >
+                        <Heading
+                          size="sm"
+                          mb={4}
+                          color="white"
+                          textAlign="center"
+                          borderBottom="2px solid"
+                          borderColor="brand.500"
+                          pb={2}
+                        >
+                          {optionsData.analysisResult.ticker} Calendar Spread Strategy
+                        </Heading>
+                        
+                        <Divider mb={4} />
+                        
+                        <Flex direction="column" align="center" justify="center" py={6}>
+                          <Heading as="h4" size="md" color="red.500" mb={2}>
+                            No Suitable Calendar Spreads Found
+                          </Heading>
+                          
+                          <Text align="center" maxWidth="500px">
+                            No calendar spreads met the minimum criteria for spread cost, liquidity, or overall quality score.
+                            Common reasons include insufficient spread cost (minimum $0.15) or low liquidity.
+                          </Text>
+                        </Flex>
                       </Box>
-                    </>
-                  )}
+                    )}
+                  </Box>
                   
                   {/* Strategy Sections - Always show both Naked Options and Iron Condors */}
                   <Divider my={4} />

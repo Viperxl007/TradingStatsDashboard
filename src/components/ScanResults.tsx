@@ -32,7 +32,7 @@ import {
 } from '@chakra-ui/react';
 import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle } from 'react-icons/fi';
 import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
-import { scanEarningsToday, scanEarningsByDate } from '../services/optionsService';
+import { scanEarningsToday, scanEarningsByDate, analyzeOptions } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
@@ -85,35 +85,40 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
       
       eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        if (data.status === 'in_progress') {
-          // Update progress information
-          setScanProgress(data.progress);
+        try {
+          const data = JSON.parse(event.data);
+          console.log("SSE data received:", data);
           
-          // If we have partial results, update them
-          if (data.results && data.results.length > 0) {
+          if (data.status === 'in_progress') {
+            // Update progress information
+            setScanProgress(data.progress);
+            
+            // If we have partial results, update them
+            if (data.results && data.results.length > 0) {
+              dispatch(scanEarningsSuccess(data.results));
+            }
+          } else if (data.status === 'complete') {
+            // Scan is complete
             dispatch(scanEarningsSuccess(data.results));
+            
+            // Keep the progress info for a moment before clearing it
+            setTimeout(() => {
+              setScanProgress(null);
+            }, 2000);
+            
+            // Close the event source
+            eventSource.close();
+            
+            toast({
+              title: 'Scan Complete',
+              description: `Analyzed ${data.count} stocks with earnings today`,
+              status: 'success',
+              duration: 5000,
+              isClosable: true,
+            });
           }
-        } else if (data.status === 'complete') {
-          // Scan is complete
-          dispatch(scanEarningsSuccess(data.results));
-          
-          // Keep the progress info for a moment before clearing it
-          setTimeout(() => {
-            setScanProgress(null);
-          }, 2000);
-          
-          // Close the event source
-          eventSource.close();
-          
-          toast({
-            title: 'Scan Complete',
-            description: `Analyzed ${data.count} stocks with earnings today`,
-            status: 'success',
-            duration: 5000,
-            isClosable: true,
-          });
+        } catch (error) {
+          console.error("Error parsing SSE data:", error, "Raw data:", event.data);
         }
       };
       
@@ -121,7 +126,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         console.error('EventSource error:', error);
         eventSource.close();
         
-        const errorMessage = 'Connection to server lost';
+        const errorMessage = 'Connection to server lost. Please try again.';
         dispatch(scanEarningsError(errorMessage));
         setScanProgress(null);
         
@@ -132,6 +137,11 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           duration: 5000,
           isClosable: true,
         });
+      };
+      
+      // Add event listener for open event
+      eventSource.onopen = () => {
+        console.log('EventSource connection opened');
       };
       
     } catch (error) {
@@ -169,35 +179,40 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
       
       eventSource.onmessage = (event) => {
-        const data = JSON.parse(event.data);
-        
-        if (data.status === 'in_progress') {
-          // Update progress information
-          setScanProgress(data.progress);
+        try {
+          const data = JSON.parse(event.data);
+          console.log("SSE data received:", data);
           
-          // If we have partial results, update them
-          if (data.results && data.results.length > 0) {
+          if (data.status === 'in_progress') {
+            // Update progress information
+            setScanProgress(data.progress);
+            
+            // If we have partial results, update them
+            if (data.results && data.results.length > 0) {
+              dispatch(scanEarningsSuccess(data.results));
+            }
+          } else if (data.status === 'complete') {
+            // Scan is complete
             dispatch(scanEarningsSuccess(data.results));
+            
+            // Keep the progress info for a moment before clearing it
+            setTimeout(() => {
+              setScanProgress(null);
+            }, 2000);
+            
+            // Close the event source
+            eventSource.close();
+            
+            toast({
+              title: 'Scan Complete',
+              description: `Analyzed ${data.count} stocks with earnings on ${customDate}`,
+              status: 'success',
+              duration: 5000,
+              isClosable: true,
+            });
           }
-        } else if (data.status === 'complete') {
-          // Scan is complete
-          dispatch(scanEarningsSuccess(data.results));
-          
-          // Keep the progress info for a moment before clearing it
-          setTimeout(() => {
-            setScanProgress(null);
-          }, 2000);
-          
-          // Close the event source
-          eventSource.close();
-          
-          toast({
-            title: 'Scan Complete',
-            description: `Analyzed ${data.count} stocks with earnings on ${customDate}`,
-            status: 'success',
-            duration: 5000,
-            isClosable: true,
-          });
+        } catch (error) {
+          console.error("Error parsing SSE data:", error, "Raw data:", event.data);
         }
       };
       
@@ -205,7 +220,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         console.error('EventSource error:', error);
         eventSource.close();
         
-        const errorMessage = 'Connection to server lost';
+        const errorMessage = 'Connection to server lost. Please try again.';
         dispatch(scanEarningsError(errorMessage));
         setScanProgress(null);
         
@@ -216,6 +231,11 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           duration: 5000,
           isClosable: true,
         });
+      };
+      
+      // Add event listener for open event
+      eventSource.onopen = () => {
+        console.log('EventSource connection opened');
       };
       
     } catch (error) {
@@ -255,23 +275,54 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     }
   };
 
-  const handleRowClick = (ticker: string) => {
-    if (strategyType === 'naked' || strategyType === 'ironCondor') {
-      const newSelectedTicker = selectedTicker === ticker ? null : ticker;
-      setSelectedTicker(newSelectedTicker);
-      
-      // Scroll to the options display if a ticker is selected
-      if (newSelectedTicker) {
-        // Add a small delay to ensure the component is rendered
+  const handleRowClick = async (ticker: string) => {
+    // Toggle selection if clicking the same ticker
+    const newSelectedTicker = selectedTicker === ticker ? null : ticker;
+    setSelectedTicker(newSelectedTicker);
+    
+    // If a ticker is selected, run full analysis for the selected strategy
+    if (newSelectedTicker) {
+      try {
+        // Show loading state
+        dispatch(scanEarningsStart());
+        
+        // Run full analysis for the selected strategy
+        const result = await analyzeOptions(newSelectedTicker, true, strategyType);
+        
+        // Update the result in the scan results
+        dispatch(scanEarningsSuccess(
+          optionsData.scanResults.map(item =>
+            item.ticker === newSelectedTicker ? result : item
+          )
+        ));
+        
+        // Scroll to the options display
         setTimeout(() => {
-          const elementId = strategyType === 'naked'
-            ? `naked-options-${newSelectedTicker}`
-            : `iron-condor-${newSelectedTicker}`;
+          let elementId = '';
+          if (strategyType === 'naked') {
+            elementId = `naked-options-${newSelectedTicker}`;
+          } else if (strategyType === 'ironCondor') {
+            elementId = `iron-condor-${newSelectedTicker}`;
+          } else if (strategyType === 'calendar') {
+            elementId = `calendar-spread-${newSelectedTicker}`;
+          }
+          
           const element = document.getElementById(elementId);
           if (element) {
             element.scrollIntoView({ behavior: 'smooth', block: 'start' });
           }
         }, 100);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'An unknown error occurred';
+        dispatch(scanEarningsError(errorMessage));
+        
+        toast({
+          title: 'Analysis Failed',
+          description: errorMessage,
+          status: 'error',
+          duration: 5000,
+          isClosable: true,
+        });
       }
     }
   };
@@ -293,7 +344,6 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   const filteredResults = optionsData.scanResults
     .filter(result => {
       // Skip filtered out tickers completely
-      // We check for the string representation since TypeScript doesn't know about "FILTERED OUT"
       if (String(result.recommendation) === 'FILTERED OUT') {
         return false;
       }
@@ -309,7 +359,19 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         filterRecommendation === 'all' ||
         result.recommendation === filterRecommendation;
       
-      return matchesSearch && matchesRecommendation;
+      // Check if strategy is available for the current strategy type
+      let strategyAvailable = true;
+      if (result.strategyAvailability) {
+        if (strategyType === 'calendar' && !result.strategyAvailability.calendar_available) {
+          strategyAvailable = false;
+        } else if (strategyType === 'naked' && !result.strategyAvailability.naked_available) {
+          strategyAvailable = false;
+        } else if (strategyType === 'ironCondor' && !result.strategyAvailability.iron_condor_available) {
+          strategyAvailable = false;
+        }
+      }
+      
+      return matchesSearch && matchesRecommendation && strategyAvailable;
     })
     .sort((a, b) => {
       // Sort by selected field
@@ -452,11 +514,18 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             )}
           </Box>
           
-          <Text mt={2} fontSize="sm" color="gray.500">
-            {scanProgress.completed < scanProgress.total
-              ? "Analyzing options data... Results will update as they become available."
-              : "Finalizing results..."}
-          </Text>
+          <Flex justify="space-between" mt={2}>
+            <Text fontSize="sm" color="gray.500">
+              {scanProgress.completed < scanProgress.total
+                ? "Analyzing options data... Results will update as they become available."
+                : "Finalizing results..."}
+            </Text>
+            {scanProgress.filtered_out > 0 && (
+              <Text fontSize="sm" color="gray.500">
+                Skipped {scanProgress.filtered_out} tickers (price &lt; $2.50 or volume &lt; 1.5M)
+              </Text>
+            )}
+          </Flex>
         </Box>
       )}
 
@@ -682,9 +751,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                       ? (colorMode === 'dark' ? 'brand.900' : 'brand.50')
                       : undefined}
                     _hover={
-                      (strategyType === 'calendar' && result.optimalCalendarSpread) ||
-                      (strategyType === 'naked' && result.optimalNakedOptions) ||
-                      (strategyType === 'ironCondor' && result.optimalIronCondors)
+                      (strategyType === 'calendar' && result.strategyAvailability?.calendar_available) ||
+                      (strategyType === 'naked' && result.strategyAvailability?.naked_available) ||
+                      (strategyType === 'ironCondor' && result.strategyAvailability?.iron_condor_available)
                         ? { bg: colorMode === 'dark' ? 'brand.800' : 'brand.50' }
                         : undefined
                     }
