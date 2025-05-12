@@ -117,9 +117,12 @@ const TradingViewWidget: React.FC<TradingViewWidgetProps> = ({
     return () => {
       if (widgetRef.current) {
         try {
-          if (typeof widgetRef.current.remove === 'function') {
+          // Check if the container still exists in the DOM before removing
+          if (containerRef.current && typeof widgetRef.current.remove === 'function') {
             widgetRef.current.remove();
           }
+          // Clear the reference
+          widgetRef.current = null;
         } catch (e) {
           console.error('Error cleaning up widget:', e);
         }

@@ -252,9 +252,10 @@ const EarningsHistoryChart: React.FC<EarningsHistoryChartProps> = ({ ticker, yea
                   stroke="#3182CE"
                   activeDot={{ r: 8 }}
                   dot={(props) => {
-                    const { cx, cy, payload } = props;
+                    const { cx, cy, payload, index } = props;
                     return (
                       <circle
+                        key={`dot-${index}`}
                         cx={cx}
                         cy={cy}
                         r={5}

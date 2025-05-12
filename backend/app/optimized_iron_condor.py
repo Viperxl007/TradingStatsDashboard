@@ -53,8 +53,8 @@ def cached_get_liquidity_score(ticker: str, expiration: str, strike: float, opti
         }
     
     # Add retry logic with exponential backoff
-    max_retries = 3
-    retry_delay = 1  # seconds
+    max_retries = 5  # Increased from 3 to 5
+    retry_delay = 2  # Increased from 1 to 2 seconds
     
     for attempt in range(max_retries):
         try:
@@ -63,7 +63,9 @@ def cached_get_liquidity_score(ticker: str, expiration: str, strike: float, opti
         except Exception as e:
             if "Too Many Requests" in str(e) and attempt < max_retries - 1:
                 # Exponential backoff
-                sleep_time = retry_delay * (2 ** attempt)
+                # More aggressive exponential backoff with jitter
+                import random
+                sleep_time = retry_delay * (2 ** attempt) + random.uniform(0.1, 1.0)
                 logger.warning(f"Rate limited when getting liquidity score for {ticker} {expiration} {strike} {option_type}. Retrying in {sleep_time}s...")
                 time.sleep(sleep_time)
             else:
@@ -76,7 +78,7 @@ def cached_get_liquidity_score(ticker: str, expiration: str, strike: float, opti
                     'has_zero_bid': True
                 }
 
-def prefilter_options(calls, puts, current_price, min_short_delta=0.10, max_short_delta=0.45, max_options=8):
+def prefilter_options(calls, puts, current_price, min_short_delta=0.10, max_short_delta=0.45, max_options=6):
     """
     Prefilter options to reduce the number of combinations to evaluate.
     
@@ -123,9 +125,9 @@ def batch_fetch_liquidity_scores(ticker, expiration, options, option_type):
     """
     liquidity_scores = {}
     
-    # Process in small batches with delays between batches
-    batch_size = 3
-    delay_between_batches = 1  # seconds
+    # Process in smaller batches with longer delays between batches
+    batch_size = 2  # Reduced from 3 to 2
+    delay_between_batches = 2  # Increased from 1 to 2 seconds
     
     strikes = options['strike'].unique()
     
@@ -137,8 +139,8 @@ def batch_fetch_liquidity_scores(ticker, expiration, options, option_type):
             liquidity_scores[strike] = cached_get_liquidity_score(ticker, expiration, strike, option_type)
         
         # Add delay between batches to avoid rate limits
-        if i + batch_size < len(strikes):
-            time.sleep(delay_between_batches)
+        # Always add a delay between batches, even for the last batch
+        time.sleep(delay_between_batches)
     
     return liquidity_scores
 
@@ -232,7 +234,7 @@ def find_optimal_iron_condor(ticker):
         otm_calls, otm_puts = prefilter_options(
             calls, puts, current_price, 
             min_short_delta, max_short_delta, 
-            max_options=8  # Reduced from 15 to 8
+            max_options=6  # Reduced from 8 to 6 for direct searches
         )
         
         if otm_calls.empty or otm_puts.empty:
@@ -242,7 +244,8 @@ def find_optimal_iron_condor(ticker):
         logger.info(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(otm_calls)} call options and {len(otm_puts)} put options")
         
         # Pre-fetch liquidity scores for all options to avoid redundant API calls
-        logger.info(f"IRON CONDOR DEBUG: {ticker} Pre-fetching liquidity scores for all options")
+        logger.info(f"IRON CONDOR DEBUG: {ticker} Pre-fetching liquidity scores for all options (reduced set)")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Using aggressive filtering: only {len(otm_calls)} calls and {len(otm_puts)} puts")
         
         call_liquidity_scores = batch_fetch_liquidity_scores(ticker, target_exp_str, otm_calls, 'call')
         put_liquidity_scores = batch_fetch_liquidity_scores(ticker, target_exp_str, otm_puts, 'put')
@@ -490,13 +493,16 @@ def find_optimal_iron_condor(ticker):
         
         # Evaluate combinations with a more efficient approach
         # Use a smaller number of combinations to reduce API calls
-        max_combinations = 50  # Limit the total number of combinations to evaluate
+        # For direct searches (when full_analysis=true), we need to be even more conservative
+        # to avoid timeouts and rate limits
+        max_combinations = 25  # Reduced from 50 to prevent timeouts on direct searches
         
         combinations = []
-        for call_short_idx in range(min(4, len(otm_calls) - 1)):
-            for call_long_idx in range(call_short_idx + 1, min(call_short_idx + 3, len(otm_calls))):
-                for put_short_idx in range(min(4, len(otm_puts) - 1)):
-                    for put_long_idx in range(put_short_idx + 1, min(put_short_idx + 3, len(otm_puts))):
+        # Further reduce the search space for direct searches
+        for call_short_idx in range(min(3, len(otm_calls) - 1)):
+            for call_long_idx in range(call_short_idx + 1, min(call_short_idx + 2, len(otm_calls))):
+                for put_short_idx in range(min(3, len(otm_puts) - 1)):
+                    for put_long_idx in range(put_short_idx + 1, min(put_short_idx + 2, len(otm_puts))):
                         combinations.append((call_short_idx, call_long_idx, put_short_idx, put_long_idx))
                         if len(combinations) >= max_combinations:
                             break
@@ -508,9 +514,10 @@ def find_optimal_iron_condor(ticker):
                 break
         
         logger.info(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(combinations)} combinations (reduced from potential {len(otm_calls) * (len(otm_calls) - 1) * len(otm_puts) * (len(otm_puts) - 1) / 4})")
+        logger.warning(f"IRON CONDOR DEBUG: {ticker} Using more aggressive optimization: evaluating only {len(combinations)} combinations")
         
         # Process combinations in batches to avoid rate limits
-        batch_size = 10
+        batch_size = 5  # Reduced from 10 to prevent rate limits
         for i in range(0, len(combinations), batch_size):
             batch = combinations[i:i+batch_size]
             
@@ -523,7 +530,7 @@ def find_optimal_iron_condor(ticker):
             
             # Add delay between batches to avoid rate limits
             if i + batch_size < len(combinations):
-                time.sleep(1)
+                time.sleep(1.5)  # Increased delay between batches
         
         if not iron_condors:
             logger.warning(f"IRON CONDOR DEBUG: No suitable iron condors found for {ticker}")
@@ -533,7 +540,7 @@ def find_optimal_iron_condor(ticker):
         iron_condors.sort(key=lambda x: x['score'], reverse=True)
         
         # Get the top iron condors
-        top_iron_condors = iron_condors[:min(3, len(iron_condors))]
+        top_iron_condors = iron_condors[:min(2, len(iron_condors))]  # Reduced from 3 to 2
         
         # Return the results
         return {

@@ -8,15 +8,15 @@ interface ScoreThermometerProps {
 
 /**
  * ScoreThermometer Component
- * 
+ *
  * Displays a thermometer visualization for a score value with a color gradient
  * from red (poor score) to yellow (moderate score) to green (high score).
  *
- * Score ranges:
- * - Below 1.0: Poor (red)
- * - 1.0-2.0: Moderate (yellow)
- * - 2.0-3.0: Strong (light green)
- * - Above 3.0: Exceptional (green)
+ * Score ranges (normalized to 100):
+ * - Below 25: Poor (red)
+ * - 25-50: Moderate (yellow)
+ * - 50-75: Strong (light green)
+ * - Above 75: Exceptional (green)
  */
 const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' }) => {
   // Determine dimensions based on size
@@ -36,19 +36,19 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
 
   // Calculate position and color based on score
   const getPositionAndColor = () => {
-    // Clamp score between 0 and 4 for positioning
-    const clampedScore = Math.max(0, Math.min(4, score));
+    // Clamp score between 0 and 100 for positioning
+    const clampedScore = Math.max(0, Math.min(100, score));
     
     // Position as percentage (0 to 100%)
-    const position = (clampedScore / 4) * 100;
+    const position = clampedScore;
     
     // Color based on score ranges
     let color;
-    if (score < 1.0) {
+    if (score < 25) {
       color = 'red.500'; // Poor
-    } else if (score < 2.0) {
+    } else if (score < 50) {
       color = 'yellow.500'; // Moderate
-    } else if (score < 3.0) {
+    } else if (score < 75) {
       color = 'green.300'; // Strong
     } else {
       color = 'green.500'; // Exceptional
@@ -60,11 +60,11 @@ const ScoreThermometer: React.FC<ScoreThermometerProps> = ({ score, size = 'md' 
   const { position, color } = getPositionAndColor();
 
   return (
-    <Tooltip 
+    <Tooltip
       label={`Strategy Score: ${score.toFixed(2)} - ${
-        score < 1.0 ? 'Poor opportunity' :
-        score < 2.0 ? 'Moderate opportunity' :
-        score < 3.0 ? 'Strong opportunity' :
+        score < 25 ? 'Poor opportunity' :
+        score < 50 ? 'Moderate opportunity' :
+        score < 75 ? 'Strong opportunity' :
         'Exceptional opportunity'
       }`}
       placement="top"

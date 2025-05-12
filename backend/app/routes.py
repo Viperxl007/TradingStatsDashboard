@@ -4,17 +4,27 @@ API Routes Module
 This module defines the API routes for the options earnings screener.
 """
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 import logging
 import concurrent.futures
+import json
 from datetime import datetime
-from app.options_analyzer import analyze_options
-from app.earnings_calendar import get_earnings_today, get_earnings_by_date
-from app.data_fetcher import get_stock_info
+from app.options_analyzer import (
+    analyze_options, filter_dates, find_closest_expiration,
+    get_strikes_near_price, get_atm_iv, calculate_spread_cost,
+    get_liquidity_score, calculate_spread_score, find_optimal_calendar_spread
+)
+from app.earnings_calendar import (
+    get_earnings_today, get_earnings_by_date, get_earnings_calendar,
+    handle_pandas_dataframe, generate_sample_earnings
+)
+from app.data_fetcher import get_stock_info, get_current_price
+from app.rate_limiter import update_rate_limiter_config, yf_rate_limiter
 from .earnings_history import get_earnings_history, get_earnings_performance_stats
 
 # Set up logging
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set to DEBUG to see detailed logs
 
 # Create blueprint
 api_bp = Blueprint('api', __name__, url_prefix='/api')
@@ -35,21 +45,42 @@ def analyze_ticker(ticker):
     Args:
         ticker (str): Stock ticker symbol
         
+    Query Parameters:
+        full_analysis (bool, optional): Whether to run full strategy analysis
+        strategy (str, optional): Type of strategy to analyze ('calendar', 'naked', 'ironCondor')
+        
     Returns:
         JSON: Analysis results
     """
     try:
-        result = analyze_options(ticker)
+        # Get query parameters
+        run_full_analysis = request.args.get('full_analysis', 'false').lower() == 'true'
+        strategy_type = request.args.get('strategy')
+        
+        # Add detailed logging
+        logger.info(f"API REQUEST: Analyzing {ticker} with full_analysis={run_full_analysis}, strategy={strategy_type}")
+        start_time = datetime.now()
+        
+        # Run the analysis
+        result = analyze_options(ticker, run_full_analysis, strategy_type)
+        
+        # Log completion time
+        end_time = datetime.now()
+        duration = (end_time - start_time).total_seconds()
+        logger.info(f"API RESPONSE: Analysis of {ticker} completed in {duration:.2f} seconds")
+        
         return jsonify(result)
     except ValueError as e:
-        logger.error(f"Error analyzing {ticker}: {str(e)}")
+        logger.error(f"API ERROR: Error analyzing {ticker}: {str(e)}")
         return jsonify({
             "error": str(e),
             "ticker": ticker,
             "timestamp": datetime.now().timestamp()
         }), 400
     except Exception as e:
-        logger.error(f"Unexpected error analyzing {ticker}: {str(e)}")
+        logger.error(f"API ERROR: Unexpected error analyzing {ticker}: {str(e)}")
+        import traceback
+        logger.error(f"API ERROR: Traceback: {traceback.format_exc()}")
         return jsonify({
             "error": "An unexpected error occurred",
             "ticker": ticker,
@@ -70,15 +101,32 @@ def scan_earnings():
     try:
         # Get date parameter or use today
         date_str = request.args.get('date')
-        if date_str:
-            try:
-                date = datetime.strptime(date_str, '%Y-%m-%d')
-            except ValueError:
-                return jsonify({
-                    "error": "Invalid date format. Use YYYY-MM-DD.",
-                    "timestamp": datetime.now().timestamp()
-                }), 400
-            earnings = get_earnings_by_date(date)
+        
+        # Get earnings calendar
+        try:
+            if date_str:
+                try:
+                    date = datetime.strptime(date_str, '%Y-%m-%d')
+                except ValueError:
+                    return jsonify({
+                        "error": "Invalid date format. Use YYYY-MM-DD.",
+                        "timestamp": datetime.now().timestamp()
+                    }), 400
+                earnings = get_earnings_calendar(date_str)
+            else:
+                earnings = get_earnings_calendar()
+                date_str = datetime.now().strftime('%Y-%m-%d')
+        except Exception as e:
+            logger.error(f"Error getting earnings calendar: {str(e)}")
+            
+            # If we can't get real earnings data, generate sample data
+            if date_str:
+                earnings = generate_sample_earnings(date_str)
+            else:
+                date_str = datetime.now().strftime('%Y-%m-%d')
+                earnings = generate_sample_earnings(date_str)
+                
+            logger.info(f"Using sample earnings data: {len(earnings)} companies")
         else:
             earnings = get_earnings_today()
         
@@ -89,7 +137,8 @@ def scan_earnings():
                 return None
                 
             try:
-                analysis = analyze_options(ticker)
+                # Don't run full analysis for scans to avoid timeouts
+                analysis = analyze_options(ticker, False)
                 # Add company name from earnings data
                 analysis['companyName'] = earning.get('companyName', '')
                 analysis['reportTime'] = earning.get('reportTime', '')
@@ -149,9 +198,21 @@ def get_today_calendar():
         JSON: List of companies reporting earnings today
     """
     try:
-        earnings = get_earnings_today()
+        # Try to get real earnings data
+        try:
+            earnings = get_earnings_calendar()
+            date_str = datetime.now().strftime('%Y-%m-%d')
+        except Exception as e:
+            logger.error(f"Error getting today's earnings calendar: {str(e)}")
+            
+            # If we can't get real earnings data, generate sample data
+            date_str = datetime.now().strftime('%Y-%m-%d')
+            earnings = generate_sample_earnings(date_str)
+            
+            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+        
         return jsonify({
-            "date": datetime.now().strftime('%Y-%m-%d'),
+            "date": date_str,
             "count": len(earnings),
             "earnings": earnings,
             "timestamp": datetime.now().timestamp()
@@ -175,15 +236,26 @@ def get_date_calendar(date):
         JSON: List of companies reporting earnings on the specified date
     """
     try:
+        # Validate date format
         try:
-            date_obj = datetime.strptime(date, '%Y-%m-%d')
+            datetime.strptime(date, '%Y-%m-%d')
         except ValueError:
             return jsonify({
                 "error": "Invalid date format. Use YYYY-MM-DD.",
                 "timestamp": datetime.now().timestamp()
             }), 400
+        
+        # Try to get real earnings data
+        try:
+            earnings = get_earnings_calendar(date)
+        except Exception as e:
+            logger.error(f"Error getting earnings calendar for {date}: {str(e)}")
             
-        earnings = get_earnings_by_date(date_obj)
+            # If we can't get real earnings data, generate sample data
+            earnings = generate_sample_earnings(date)
+            
+            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+        
         return jsonify({
             "date": date,
             "count": len(earnings),

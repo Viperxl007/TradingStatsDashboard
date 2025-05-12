@@ -1,12 +1,14 @@
 import yfinance as yf
 import pandas as pd
+import numpy as np
 from datetime import datetime, timedelta
 import logging
 from typing import Dict, List, Any, Optional, Tuple
+from app.utils import convert_numpy_types
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set to DEBUG to see detailed logs
 
 def get_earnings_history(ticker: str, years: int = 7) -> Dict[str, Any]:
     """
@@ -43,11 +45,14 @@ def get_earnings_history(ticker: str, years: int = 7) -> Dict[str, Any]:
         # Calculate post-earnings performance
         performance_data = calculate_post_earnings_performance(earnings_dates, historical_prices)
         
-        return {
+        result = {
             "ticker": ticker,
             "earnings_dates": earnings_dates,
             "performance_data": performance_data
         }
+        
+        # Convert any NumPy types to Python native types
+        return convert_numpy_types(result)
         
     except Exception as e:
         logger.error(f"Error fetching earnings history for {ticker}: {str(e)}")
@@ -249,7 +254,7 @@ def get_earnings_performance_stats(performance_data: List[Dict[str, Any]]) -> Di
     positive_count = sum(1 for change in percent_changes if change > 0)
     negative_count = sum(1 for change in percent_changes if change < 0)
     
-    return {
+    result = {
         "count": len(percent_changes),
         "avg_percent_change": round(avg_change, 2),
         "median_percent_change": round(median_change, 2),
@@ -259,3 +264,6 @@ def get_earnings_performance_stats(performance_data: List[Dict[str, Any]]) -> Di
         "negative_count": negative_count,
         "positive_percentage": round((positive_count / len(percent_changes)) * 100, 2)
     }
+    
+    # Convert any NumPy types to Python native types
+    return convert_numpy_types(result)

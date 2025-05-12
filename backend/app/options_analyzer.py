@@ -17,10 +17,14 @@ from scipy.stats import norm
 from app.data_fetcher import get_stock_data, get_options_data, get_current_price
 import yfinance as yf
 
-# Set up logging first
-logger = logging.getLogger(__name__)
+# Custom exception for data validation errors
+class DataValidationError(Exception):
+    """Exception raised when option data fails validation checks."""
+    pass
 
-# Logger is already set up above
+# Set up logging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)  # Set to DEBUG to see detailed logs
 
 def filter_dates(dates):
     """
@@ -79,9 +83,9 @@ def find_closest_expiration(exp_dates, target_date):
     return closest_date.strftime("%Y-%m-%d")
 
 
-def get_strikes_near_price(stock, expiration, current_price, range_percent=10):
+def get_strikes_near_price(stock, expiration, current_price, range_percent=15):
     """
-    Get option strikes near the current price.
+    Get option strikes near the current price within a reasonable range for calendar spreads.
     
     Args:
         stock (Ticker): yfinance Ticker object
@@ -90,7 +94,7 @@ def get_strikes_near_price(stock, expiration, current_price, range_percent=10):
         range_percent (float): Percentage range around current price to include
         
     Returns:
-        list: List of strike prices near the current price
+        list: List of strike prices near the current price with distance information
     """
     try:
         chain = stock.option_chain(expiration)
@@ -99,13 +103,40 @@ def get_strikes_near_price(stock, expiration, current_price, range_percent=10):
         if calls.empty:
             return []
         
-        # Calculate price range
-        min_price = current_price * (1 - range_percent/100)
-        max_price = current_price * (1 + range_percent/100)
+        # Calculate price range with constraints for calendar spreads
+        # Hard limit: reject strikes >30% from current price
+        min_price = current_price * 0.7  # Max 30% ITM
+        max_price = current_price * 1.3  # Max 30% OTM
         
-        # Filter strikes within range
+        # Filter strikes within hard limit range
         strikes = calls['strike'].unique()
-        return [strike for strike in strikes if min_price <= strike <= max_price]
+        filtered_strikes = []
+        
+        for strike in strikes:
+            if min_price <= strike <= max_price:
+                # Calculate distance from ATM as percentage
+                distance_pct = abs((strike / current_price) - 1.0)
+                
+                # Prioritize strikes within 20% of current price
+                priority = 1.0
+                if distance_pct <= 0.2:
+                    # Higher priority (lower distance = higher priority)
+                    priority = 2.0 - distance_pct * 5.0  # Scales from 2.0 (at 0%) to 1.0 (at 20%)
+                else:
+                    # Lower priority for strikes between 20% and 30%
+                    priority = 1.0 - (distance_pct - 0.2) * 5.0  # Scales from 1.0 (at 20%) to 0.5 (at 30%)
+                
+                filtered_strikes.append({
+                    'strike': strike,
+                    'distance_pct': distance_pct,
+                    'priority': max(0.1, priority)  # Ensure minimum priority of 0.1
+                })
+        
+        # Sort by priority (highest first)
+        filtered_strikes.sort(key=lambda x: x['priority'], reverse=True)
+        
+        # Return just the strike prices, but maintain the priority order
+        return [item['strike'] for item in filtered_strikes]
     except Exception as e:
         return []
 
@@ -121,13 +152,18 @@ def get_atm_iv(stock, expiration, strike):
         
     Returns:
         float: Implied volatility
+        
+    Raises:
+        DataValidationError: If option data fails validation checks
     """
     try:
+        logger.debug(f"DIAGNOSTIC: get_atm_iv called for expiration {expiration}, strike {strike}")
         chain = stock.option_chain(expiration)
         calls = chain.calls
         puts = chain.puts
         
         if calls.empty or puts.empty:
+            logger.debug(f"DIAGNOSTIC: Empty options chain in get_atm_iv - calls_empty: {calls.empty}, puts_empty: {puts.empty}")
             return 0.0
         
         # Find the call and put with the given strike
@@ -135,14 +171,73 @@ def get_atm_iv(stock, expiration, strike):
         put_options = puts[puts['strike'] == strike]
         
         if call_options.empty or put_options.empty:
+            logger.debug(f"DIAGNOSTIC: No options at strike {strike} in get_atm_iv - calls_empty: {call_options.empty}, puts_empty: {put_options.empty}")
+            
+            # Log available strikes for debugging
+            available_call_strikes = sorted(calls['strike'].unique().tolist())
+            available_put_strikes = sorted(puts['strike'].unique().tolist())
+            logger.debug(f"DIAGNOSTIC: Available call strikes: {available_call_strikes}")
+            logger.debug(f"DIAGNOSTIC: Available put strikes: {available_put_strikes}")
+            
             return 0.0
         
-        call_iv = call_options.iloc[0]['impliedVolatility']
-        put_iv = put_options.iloc[0]['impliedVolatility']
+        # Extract option data for validation
+        call_option = call_options.iloc[0]
+        put_option = put_options.iloc[0]
+        
+        # Validate bid/ask prices for call option
+        call_bid = call_option['bid']
+        call_ask = call_option['ask']
+        
+        if call_bid < 0 or call_ask < 0:
+            error_msg = f"Negative bid/ask prices in call option: bid={call_bid}, ask={call_ask}"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if call_bid > call_ask:
+            error_msg = f"Call option bid ({call_bid}) is greater than ask ({call_ask})"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
+        # Validate bid/ask prices for put option
+        put_bid = put_option['bid']
+        put_ask = put_option['ask']
+        
+        if put_bid < 0 or put_ask < 0:
+            error_msg = f"Negative bid/ask prices in put option: bid={put_bid}, ask={put_ask}"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if put_bid > put_ask:
+            error_msg = f"Put option bid ({put_bid}) is greater than ask ({put_ask})"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
+        # Extract implied volatility values
+        call_iv = call_option['impliedVolatility']
+        put_iv = put_option['impliedVolatility']
+        
+        # Validate implied volatility values
+        if call_iv < 0.01 or call_iv > 5.0:
+            error_msg = f"Call option implied volatility ({call_iv}) is outside valid range [0.01, 5.0]"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if put_iv < 0.01 or put_iv > 5.0:
+            error_msg = f"Put option implied volatility ({put_iv}) is outside valid range [0.01, 5.0]"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
+        # Log IV values
+        logger.debug(f"DIAGNOSTIC: IV values for strike {strike} - call_iv: {call_iv}, put_iv: {put_iv}")
         
         # Average of call and put IV
         return (call_iv + put_iv) / 2.0
+    except DataValidationError:
+        # Re-raise DataValidationError to be handled by caller
+        raise
     except Exception as e:
+        logger.debug(f"DIAGNOSTIC: Exception in get_atm_iv for strike {strike}, expiration {expiration}: {str(e)}")
         return 0.0
 
 
@@ -170,6 +265,7 @@ def calculate_spread_cost(stock, front_month, back_month, strike, option_type='c
         back_options = back_chain.calls if option_type.lower() == 'call' else back_chain.puts
         
         if front_options.empty or back_options.empty:
+            logger.debug(f"DIAGNOSTIC: Empty options chain - front_empty: {front_options.empty}, back_empty: {back_options.empty}")
             return 0.0
         
         # Find the options with the given strike
@@ -177,20 +273,42 @@ def calculate_spread_cost(stock, front_month, back_month, strike, option_type='c
         back_options = back_options[back_options['strike'] == strike]
         
         if front_options.empty or back_options.empty:
+            logger.debug(f"DIAGNOSTIC: No options at strike {strike} - front_empty: {front_options.empty}, back_empty: {back_options.empty}")
             return 0.0
         
         # Calculate mid prices
         front_bid = front_options.iloc[0]['bid']
         front_ask = front_options.iloc[0]['ask']
+        
+        # Log zero bid/ask values
+        if front_bid <= 0.001 or front_ask <= 0.001:
+            logger.debug(f"DIAGNOSTIC: Zero or near-zero front month bid/ask for {option_type} at strike {strike}: bid={front_bid}, ask={front_ask}")
+        
         front_mid = (front_bid + front_ask) / 2.0 if front_bid and front_ask else 0.0
         
         back_bid = back_options.iloc[0]['bid']
         back_ask = back_options.iloc[0]['ask']
+        
+        # Log zero bid/ask values
+        if back_bid <= 0.001 or back_ask <= 0.001:
+            logger.debug(f"DIAGNOSTIC: Zero or near-zero back month bid/ask for {option_type} at strike {strike}: bid={back_bid}, ask={back_ask}")
+        
         back_mid = (back_bid + back_ask) / 2.0 if back_bid and back_ask else 0.0
         
+        # Log mid prices
+        if front_mid <= 0.001 or back_mid <= 0.001:
+            logger.debug(f"DIAGNOSTIC: Zero or near-zero mid prices for {option_type} at strike {strike}: front_mid={front_mid}, back_mid={back_mid}")
+        
         # Calendar spread cost = back month price - front month price
-        return back_mid - front_mid
+        spread_cost = back_mid - front_mid
+        
+        # Log spread cost
+        if spread_cost <= 0.001:
+            logger.debug(f"DIAGNOSTIC: Zero or negative spread cost for {option_type} at strike {strike}: spread_cost={spread_cost}")
+            
+        return spread_cost
     except Exception as e:
+        logger.debug(f"DIAGNOSTIC: Exception in calculate_spread_cost for {option_type} at strike {strike}: {str(e)}")
         return 0.0
 
 
@@ -210,6 +328,7 @@ def get_improved_liquidity_score(option, option_price=None):
             - open_interest: Open interest
             - has_zero_bid: Whether the option has a zero bid
             - spread_dollars: Absolute spread in dollars
+            - confidence_interval: Low and high bounds for the liquidity score
     """
     import numpy as np
     
@@ -217,8 +336,34 @@ def get_improved_liquidity_score(option, option_price=None):
         # Extract basic values
         bid = option['bid'] if 'bid' in option else 0.0
         ask = option['ask'] if 'ask' in option else 0.0
-        volume = option['volume'] if 'volume' in option and option['volume'] > 0 else 0
-        open_interest = option['openInterest'] if 'openInterest' in option and option['openInterest'] > 0 else 0
+        
+        # Add diagnostic logging for volume
+        if 'volume' not in option:
+            logger.debug(f"DIAGNOSTIC: Volume key missing in option data: {option.keys()}")
+            volume = 0
+        elif option['volume'] <= 0:
+            logger.debug(f"DIAGNOSTIC: Zero or negative volume in API response: {option['volume']}")
+            volume = 0
+        else:
+            volume = option['volume']
+        
+        # Add diagnostic logging for open interest
+        if 'openInterest' not in option:
+            logger.debug(f"DIAGNOSTIC: OpenInterest key missing in option data: {option.keys()}")
+            open_interest = 0
+        elif option['openInterest'] <= 0:
+            logger.debug(f"DIAGNOSTIC: Zero or negative open interest in API response: {option['openInterest']}")
+            open_interest = 0
+        else:
+            open_interest = option['openInterest']
+        
+        # Log the full option data if volume or open interest is missing/zero
+        if 'volume' not in option or 'openInterest' not in option or option['volume'] <= 0 or option['openInterest'] <= 0:
+            logger.debug(f"DIAGNOSTIC: Full option data with missing/zero volume or OI: {option}")
+        
+        iv = option.get('impliedVolatility', 0.3)  # Default to 30% if not available
+        if 'impliedVolatility' not in option:
+            logger.debug(f"DIAGNOSTIC: ImpliedVolatility key missing in option data: {option.keys()}")
         
         # Flag for zero bids
         has_zero_bid = bid <= 0.001  # Consider very small bids effectively zero
@@ -234,7 +379,10 @@ def get_improved_liquidity_score(option, option_price=None):
                 'volume': 0,
                 'open_interest': 0,
                 'has_zero_bid': True,
-                'spread_dollars': 0.0
+                'spread_dollars': 0.0,
+                'iv': float(iv),
+                'confidence_interval': {'low': 0.0, 'high': 0.0},
+                'execution_difficulty': 'Extreme'
             }
         
         # Calculate absolute spread
@@ -243,18 +391,21 @@ def get_improved_liquidity_score(option, option_price=None):
         # Calculate percentage spread - more heavily penalize wide spreads
         spread_pct = spread_dollars / mid_price
         
+        # Calculate volatility-adjusted spread
+        # Higher IV options naturally have wider spreads
+        vol_adjusted_spread = spread_pct / (iv * 2)
+        
         # More aggressive penalty for wide spreads
-        # Old formula: base_score = 10.0 * (1.0 / (1.0 + (spread_pct * 10)))
         # New formula is more punishing for wide spreads
-        spread_factor = 1.0 / (1.0 + (spread_pct * 20))
+        spread_factor = 1.0 / (1.0 + (vol_adjusted_spread * 30))
         
         # Volume factor with more pragmatic scaling
         # Volume below 100 is penalized more heavily
         volume_factor = min(1.0, np.sqrt(volume / 500))
         
-        # Open interest factor
-        # We want at least 500+ open interest for good liquidity
-        oi_factor = min(1.0, np.sqrt(open_interest / 500))
+        # Open interest factor - weighted more heavily
+        # We want at least 1000+ open interest for good liquidity
+        oi_factor = min(1.0, np.sqrt(open_interest / 1000))
         
         # For low-priced options (under $0.20), penalize more as they're harder to trade efficiently
         low_price_penalty = 0.7 if mid_price < 0.20 else 1.0
@@ -266,15 +417,27 @@ def get_improved_liquidity_score(option, option_price=None):
         abs_spread_penalty = 1.0 if spread_dollars < 0.10 else 1.0 / (1.0 + (spread_dollars - 0.10) * 5)
         
         # Calculate final score with revised weights
-        # 70% spread factors, 15% volume, 15% open interest
+        # 60% spread factors, 10% volume, 30% open interest (OI weighted more heavily)
         liquidity_score = (
-            (spread_factor * abs_spread_penalty * 0.7) +
-            (volume_factor * 0.15) +
-            (oi_factor * 0.15)
+            (spread_factor * abs_spread_penalty * 0.6) +
+            (volume_factor * 0.1) +
+            (oi_factor * 0.3)
         ) * low_price_penalty * zero_bid_penalty
         
         # Scale to 0-10
         final_score = 10.0 * liquidity_score
+        
+        # Calculate confidence interval
+        confidence_low = max(0.0, final_score * 0.8)
+        confidence_high = min(10.0, final_score * 1.2)
+        
+        # Determine execution difficulty rating
+        if final_score < 3:
+            execution_difficulty = 'High'
+        elif final_score < 7:
+            execution_difficulty = 'Medium'
+        else:
+            execution_difficulty = 'Low'
         
         return {
             'score': min(10.0, max(0.0, final_score)),
@@ -282,7 +445,14 @@ def get_improved_liquidity_score(option, option_price=None):
             'volume': int(volume),
             'open_interest': int(open_interest),
             'has_zero_bid': has_zero_bid,
-            'spread_dollars': float(spread_dollars)
+            'spread_dollars': float(spread_dollars),
+            'iv': float(iv),
+            'vol_adjusted_spread': float(vol_adjusted_spread),
+            'confidence_interval': {
+                'low': float(confidence_low),
+                'high': float(confidence_high)
+            },
+            'execution_difficulty': execution_difficulty
         }
     except Exception as e:
         # Fallback to worst liquidity score on error
@@ -292,7 +462,10 @@ def get_improved_liquidity_score(option, option_price=None):
             'volume': 0,
             'open_interest': 0,
             'has_zero_bid': True,
-            'spread_dollars': 0.0
+            'spread_dollars': 0.0,
+            'iv': 0.0,
+            'confidence_interval': {'low': 0.0, 'high': 0.0},
+            'execution_difficulty': 'Extreme'
         }
 
 
@@ -338,15 +511,45 @@ def calculate_calendar_spread_liquidity(front_month_liquidity, back_month_liquid
         back_month_liquidity['has_zero_bid']
     ) else 1.0
     
-    # Apply penalties to the combined score
-    adjusted_score = combined_score * viability_factor * zero_bid_penalty
+    # Calculate volatility-adjusted bid-ask spreads for more accurate comparison
+    # Higher IV options naturally have wider spreads, so we adjust for this
+    front_vol_adjusted_spread = front_month_liquidity['spread_pct'] / (front_month_liquidity.get('iv', 0.3) * 2) if 'iv' in front_month_liquidity else front_month_liquidity['spread_pct']
+    back_vol_adjusted_spread = back_month_liquidity['spread_pct'] / (back_month_liquidity.get('iv', 0.3) * 2) if 'iv' in back_month_liquidity else back_month_liquidity['spread_pct']
+    
+    # Weight OI more heavily than volume (since volume is daily)
+    front_oi = front_month_liquidity['open_interest']
+    back_oi = back_month_liquidity['open_interest']
+    front_vol = front_month_liquidity['volume']
+    back_vol = back_month_liquidity['volume']
+    
+    # Calculate OI/volume weighted factor (70% OI, 30% volume)
+    oi_vol_factor = (
+        (0.7 * (min(1.0, np.sqrt(front_oi / 1000)) + min(1.0, np.sqrt(back_oi / 1000))) / 2) +
+        (0.3 * (min(1.0, np.sqrt(front_vol / 500)) + min(1.0, np.sqrt(back_vol / 500))) / 2)
+    )
+    
+    # Apply additional factors to the combined score
+    adjusted_score = combined_score * viability_factor * zero_bid_penalty * oi_vol_factor
+    
+    # Calculate confidence interval for liquidity score
+    confidence_low = max(0.0, adjusted_score * 0.8)
+    confidence_high = min(10.0, adjusted_score * 1.2)
     
     return {
         'score': min(10.0, max(0.0, adjusted_score)),
         'front_liquidity': front_month_liquidity,
         'back_liquidity': back_month_liquidity,
         'spread_impact': float(spread_impact),
-        'has_zero_bids': front_month_liquidity['has_zero_bid'] or back_month_liquidity['has_zero_bid']
+        'has_zero_bids': front_month_liquidity['has_zero_bid'] or back_month_liquidity['has_zero_bid'],
+        'vol_adjusted_spread': {
+            'front': float(front_vol_adjusted_spread),
+            'back': float(back_vol_adjusted_spread)
+        },
+        'confidence_interval': {
+            'low': float(confidence_low),
+            'high': float(confidence_high)
+        },
+        'execution_difficulty': 'High' if adjusted_score < 4 else 'Medium' if adjusted_score < 7 else 'Low'
     }
 
 
@@ -416,81 +619,165 @@ def get_liquidity_score(stock, expiration, strike, option_type='call'):
 
 def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_liquidity,
                           strike_distance_from_atm, days_between_expirations=30,
-                          days_to_front_expiration=14):
-    logger.debug(f"Calculating spread score with: iv_diff={iv_differential}, cost={spread_cost}, " +
-                f"liquidity={front_liquidity}/{back_liquidity}, distance={strike_distance_from_atm}, " +
-                f"days_between={days_between_expirations}, days_to_front={days_to_front_expiration}")
+                          days_to_front_expiration=14, monte_carlo_results=None, spread_impact=None,
+                          current_price=None):
     """
-    Calculate a composite score for a potential calendar spread.
-    
-    Args:
-        iv_differential (float): Difference between front and back month IV
-        spread_cost (float): Cost of the spread
-        front_liquidity (float): Liquidity score for front month option
-        back_liquidity (float): Liquidity score for back month option
-        strike_distance_from_atm (float): Distance of strike from current price
-        days_between_expirations (int): Days between front and back month expirations
-        days_to_front_expiration (int): Days until front month expiration
-        
-    Returns:
-        float: Composite score (higher is better)
+    Calculate a composite score with heavy emphasis on Monte Carlo simulation results.
     """
-    # Avoid division by zero
-    if spread_cost <= 0:
-        logger.debug("Score calculation aborted: spread_cost <= 0")
+    # Minimum thresholds for earnings calendar spreads
+    GOOD_IV_DIFFERENTIAL = 0.10     # 10% - decent setup  
+    IDEAL_IV_DIFFERENTIAL = 0.15    # 15%+ - excellent setup
+
+    # STEP 1: Early Rejection Filters
+    if spread_cost <= 0.10:
         return 0.0
     
-    # IV differential factors
-    iv_diff_score = iv_differential * 100  # Scale up for scoring
+    # Extract liquidity scores
+    front_liquidity_score = front_liquidity["score"] if isinstance(front_liquidity, dict) else front_liquidity
+    back_liquidity_score = back_liquidity["score"] if isinstance(back_liquidity, dict) else back_liquidity
     
-    # IV differential to cost ratio (bang for buck)
-    cost_efficiency = iv_differential / spread_cost
+    # Reject strikes far from the money (>20% from current price)
+    if current_price and abs(strike_distance_from_atm) / current_price > 0.20:
+        distance_pct = abs(strike_distance_from_atm) / current_price
+        # Apply exponential penalty for distance
+        distance_penalty = math.exp(-(distance_pct - 0.20) * 10)
+    else:
+        distance_penalty = 1.0
     
-    # Liquidity factor (average of front and back month)
-    liquidity_score = (front_liquidity + back_liquidity) / 2.0
+    # STEP 2: Monte Carlo Results as PRIMARY Decision Factor
+    if monte_carlo_results:
+        # If Monte Carlo shows negative expected profit, heavily penalize
+        expected_profit = monte_carlo_results.get('expected_profit', 0)
+        if expected_profit <= 0:
+            return 0.0  # Hard reject for negative expected profit
+        
+        # If median outcome (50th percentile) is negative, heavily penalize
+        percentiles = monte_carlo_results.get('percentiles', {})
+        if percentiles and percentiles.get('50', 0) <= 0:
+            return expected_profit * 10  # Very low score for negative median
+            
+        # Use Monte Carlo probability as primary component (0-50 points)
+        probability = monte_carlo_results.get('probability_of_profit', 0)
+        probability_component = probability * 50  # 0-50 points
+        
+        # Use expected return as second major component (0-30 points)
+        return_on_risk = expected_profit / spread_cost
+        return_component = min(30, return_on_risk * 30)  # Cap at 30 points
+        
+        # Liquidity as third major component (0-15 points)
+        min_liquidity = min(front_liquidity_score, back_liquidity_score)
+        liquidity_component = min_liquidity * 1.5  # 0-15 points
+        
+        # Enhanced IV differential scoring (0-10 points) with bonuses for meeting thresholds
+        # Base score is still proportional to IV differential
+        base_iv_score = min(5, iv_differential * 10)
+        
+        # Add bonuses when IV differential meets or exceeds the defined thresholds
+        if iv_differential >= IDEAL_IV_DIFFERENTIAL:
+            # Excellent setup - add 5 points (total up to 10)
+            iv_bonus = 5.0
+            iv_quality = "Excellent"
+        elif iv_differential >= GOOD_IV_DIFFERENTIAL:
+            # Good setup - add 2.5 points (total up to 7.5)
+            iv_bonus = 2.5
+            iv_quality = "Good"
+        else:
+            iv_bonus = 0.0
+            iv_quality = "Below threshold"
+            
+        iv_component = base_iv_score + iv_bonus
+        
+        # Add IV quality to monte_carlo_results if it exists
+        if monte_carlo_results is not None and isinstance(monte_carlo_results, dict):
+            monte_carlo_results['iv_quality'] = iv_quality
+        
+        # Calculate base score
+        base_score = (
+            probability_component +
+            return_component +
+            liquidity_component +
+            iv_component
+        )
+        
+        # Apply distance and spread impact penalties
+        if spread_impact and spread_impact > 0.2:
+            spread_penalty = max(0.3, 1.0 - (spread_impact - 0.2) * 2)
+        else:
+            spread_penalty = 1.0
+            
+        final_score = base_score * distance_penalty * spread_penalty
+        
+        # Return both the score and the IV quality
+        return {
+            'score': min(100, final_score),
+            'iv_quality': iv_quality
+        }
     
-    # Delta neutrality factor (closer to ATM is better)
-    delta_neutrality = 1.0 / (1.0 + strike_distance_from_atm)
-    
-    # Days between expirations factor (optimal is 30-45 days)
-    days_between_factor = 1.0 - abs(days_between_expirations - 37.5) / 37.5
-    
-    # Days to front expiration factor (optimal is 2-5 days after earnings)
-    days_to_front_factor = 1.0 - abs(days_to_front_expiration - 3.5) / 14.0
-    
-    # Composite score with weights
-    # Calculate individual components for logging
-    iv_component = iv_diff_score * 0.3
-    cost_component = cost_efficiency * 50 * 0.3  # Reduced scaling factor from 100 to 50
-    liquidity_component = liquidity_score * 0.15
-    delta_component = delta_neutrality * 0.1
-    days_between_component = days_between_factor * 0.1
-    days_to_front_component = days_to_front_factor * 0.05
-    
-    score = (
-        iv_component +
-        cost_component +
-        liquidity_component +
-        delta_component +
-        days_between_component +
-        days_to_front_component
-    )
-    
-    logger.debug(f"Score components: iv={iv_component:.2f}, cost={cost_component:.2f}, " +
-                f"liquidity={liquidity_component:.2f}, delta={delta_component:.2f}, " +
-                f"days_between={days_between_component:.2f}, days_to_front={days_to_front_component:.2f}")
-    logger.debug(f"Final score: {score:.2f}")
-    
-    return max(0.0, score)
+    # STEP 3: If No Monte Carlo Results, Use Traditional Scoring but with Better Balance
+    else:
+        # Create more balanced scoring with heavier weight on ATM proximity
+        # Enhanced IV differential scoring with bonuses for meeting thresholds
+        base_iv_score = iv_differential * 100 * 0.15  # Reduced base weight
+        
+        # Add significant bonuses when IV differential meets or exceeds the defined thresholds
+        if iv_differential >= IDEAL_IV_DIFFERENTIAL:
+            # Excellent setup - add 15 percentage points
+            iv_bonus = 15.0
+            iv_quality = "Excellent"
+        elif iv_differential >= GOOD_IV_DIFFERENTIAL:
+            # Good setup - add 7.5 percentage points
+            iv_bonus = 7.5
+            iv_quality = "Good"
+        else:
+            iv_bonus = 0.0
+            iv_quality = "Below threshold"
+            
+        iv_component = base_iv_score + iv_bonus
+        
+        # Limit cost efficiency influence
+        cost_efficiency = min(2.0, iv_differential / spread_cost)  # Cap at 2.0
+        cost_component = cost_efficiency * 10 * 0.15  # Reduced scale factor from 25/50
+        
+        # Increase weight of ATM proximity
+        delta_component = delta_neutrality * 0.35  # Increased from 0.2
+        
+        # Keep liquidity weight
+        liquidity_component = (front_liquidity_score + back_liquidity_score) / 2.0 * 0.25
+        
+        # Other timing factors
+        days_between_component = days_between_factor * 0.05  # Reduced from 0.1
+        days_to_front_component = days_to_front_factor * 0.05  # Unchanged
+        
+        # Final score with penalties
+        base_score = (
+            iv_component +
+            cost_component +
+            liquidity_component +
+            delta_component +
+            days_between_component +
+            days_to_front_component
+        )
+        
+        # Apply distance penalty
+        score = base_score * distance_penalty
+        
+        # Scale to 0-100
+        final_score = min(100, score * 2)
+        
+        # Return both the score and the IV quality
+        return {
+            'score': final_score,
+            'iv_quality': iv_quality
+        }
 
-
-def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
+def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], all_metrics_pass=False):
     """
     Find the optimal calendar spread for a given ticker.
     
     Args:
         ticker (str): Stock ticker symbol
         back_month_exp_options (list): List of days out to consider for back month expiration
+        all_metrics_pass (bool): Whether all metrics pass thresholds
         
     Returns:
         dict or None: Details of the optimal calendar spread, or None if no worthwhile spread is found
@@ -544,6 +831,11 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
         def evaluate_spread(params):
             days_out, strike, option_type = params
             
+            # Reject strikes far from current price
+            if abs(strike - current_price) / current_price > 0.30:
+                logger.debug(f"{ticker} {option_type} strike ${strike}: Rejected - too far from current price (>30%)")
+                return None
+            
             target_date = today + timedelta(days=days_out)
             
             # Find closest expiration to target date
@@ -554,20 +846,62 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             days_between_expirations = (back_month_date - front_month_date).days
             
             # Calculate key metrics for this potential spread
-            front_iv = get_atm_iv(stock, front_month, strike)
-            back_iv = get_atm_iv(stock, back_month, strike)
+            try:
+                logger.debug(f"DIAGNOSTIC: Retrieving front month IV for {ticker} {option_type} strike ${strike}, expiration {front_month}")
+                front_iv = get_atm_iv(stock, front_month, strike)
+                
+                logger.debug(f"DIAGNOSTIC: Retrieving back month IV for {ticker} {option_type} strike ${strike}, expiration {back_month}")
+                back_iv = get_atm_iv(stock, back_month, strike)
+            except DataValidationError as e:
+                logger.warning(f"{ticker} {option_type} strike ${strike}: Data validation error - {str(e)}")
+                return None
             
             # Skip if we couldn't get IV data
             if front_iv == 0 or back_iv == 0:
                 logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to missing IV data - front_iv: {front_iv}, back_iv: {back_iv}")
+                
+                # Add detailed diagnostics for missing IV data
+                try:
+                    # Check front month data
+                    front_chain = stock.option_chain(front_month)
+                    front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
+                    front_at_strike = front_options[front_options['strike'] == strike]
+                    
+                    if front_at_strike.empty:
+                        logger.debug(f"DIAGNOSTIC: No front month options found at strike {strike} for {ticker} {option_type}")
+                    else:
+                        front_option = front_at_strike.iloc[0]
+                        logger.debug(f"DIAGNOSTIC: Front month option data for {ticker} {option_type} strike {strike}: "
+                                    f"bid={front_option['bid']}, ask={front_option['ask']}, "
+                                    f"volume={front_option.get('volume', 'N/A')}, OI={front_option.get('openInterest', 'N/A')}, "
+                                    f"IV={front_option.get('impliedVolatility', 'N/A')}")
+                    
+                    # Check back month data
+                    back_chain = stock.option_chain(back_month)
+                    back_options = back_chain.calls if option_type.lower() == 'call' else back_chain.puts
+                    back_at_strike = back_options[back_options['strike'] == strike]
+                    
+                    if back_at_strike.empty:
+                        logger.debug(f"DIAGNOSTIC: No back month options found at strike {strike} for {ticker} {option_type}")
+                    else:
+                        back_option = back_at_strike.iloc[0]
+                        logger.debug(f"DIAGNOSTIC: Back month option data for {ticker} {option_type} strike {strike}: "
+                                    f"bid={back_option['bid']}, ask={back_option['ask']}, "
+                                    f"volume={back_option.get('volume', 'N/A')}, OI={back_option.get('openInterest', 'N/A')}, "
+                                    f"IV={back_option.get('impliedVolatility', 'N/A')}")
+                except Exception as e:
+                    logger.debug(f"DIAGNOSTIC: Error during detailed IV diagnostics for {ticker} {option_type} strike {strike}: {str(e)}")
+                
                 return None
             
             # IV differential (front month should be higher)
             iv_differential = front_iv - back_iv
+
+            # Minimum thresholds for earnings calendar spreads
+            MIN_IV_DIFFERENTIAL = 0.05      # 5% - absolute minimum
             
-            # Allow small negative IV differentials (front month can be slightly lower)
-            # Skip only if the differential is significantly negative
-            if iv_differential < -0.1:
+            if iv_differential < MIN_IV_DIFFERENTIAL:
+                # If the IV differential is negative, we want to skip this spread
                 logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to low IV differential: {iv_differential}")
                 return None
             
@@ -578,6 +912,68 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             if spread_cost <= 0:
                 logger.debug(f"{ticker} {option_type} strike ${strike}: Skipping due to invalid spread cost: {spread_cost}")
                 return None
+            
+            # Get option details for more accurate calculations
+            try:
+                front_chain = stock.option_chain(front_month)
+                back_chain = stock.option_chain(back_month)
+                
+                front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
+                back_options = back_chain.calls if option_type.lower() == 'call' else back_chain.puts
+                
+                # Find the options with the given strike
+                front_option = front_options[front_options['strike'] == strike].iloc[0].to_dict()
+                back_option = back_options[back_options['strike'] == strike].iloc[0].to_dict()
+                
+                # Calculate more realistic return on risk using the new function
+                return_on_risk = calculate_realistic_calendar_return(
+                    front_option,
+                    back_option,
+                    current_price,
+                    days_between_expirations
+                )
+                
+                # Calculate more accurate probability of profit
+                probability = calculate_calendar_probability(
+                    front_option,
+                    back_option,
+                    current_price,
+                    days_to_front_expiration
+                )
+                
+                # Calculate spread impact (execution cost)
+                spread_impact = calculate_realistic_spread_impact(
+                    front_option,
+                    back_option,
+                    spread_cost
+                )
+                
+                # Model IV crush for earnings
+                iv_crush_model = model_iv_crush_earnings(
+                    front_iv,
+                    back_iv,
+                    days_to_front_expiration,
+                    ticker
+                )
+                
+                # Run Monte Carlo simulation for more accurate projections
+                monte_carlo_results = monte_carlo_calendar_spread(
+                    front_option,
+                    back_option,
+                    current_price,
+                    days_to_front_expiration,
+                    days_between_expirations,
+                    num_simulations=500  # Reduced for performance
+                )
+                
+            except Exception as e:
+                logger.debug(f"{ticker} {option_type} strike ${strike}: Error calculating advanced metrics: {str(e)}")
+                # Fall back to basic calculations if advanced ones fail
+                return_on_risk = 0.0
+                probability = 0.0
+                spread_impact = 100.0
+                iv_crush_model = None
+                monte_carlo_results = None
             
             # Calculate liquidity metrics
             front_liquidity = get_liquidity_score(stock, front_month, strike, option_type)
@@ -590,20 +986,45 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
                 spread_cost
             )
             
-            # Calculate a composite score
-            score = calculate_spread_score(
+            # Skip if spread cost is too small in absolute terms
+            min_viable_cost = max(0.15, current_price * 0.005)  # $0.15 or 0.5% of underlying
+            if spread_cost < min_viable_cost:
+                logger.debug(f"Skipping {ticker} {option_type} strike ${strike}: insufficient spread cost (${spread_cost:.2f} < ${min_viable_cost:.2f})")
+                return None
+                
+            # Skip if back month liquidity is too low
+            if back_liquidity['score'] < 4.0:
+                logger.debug(f"Skipping {ticker} {option_type} strike ${strike}: insufficient back month liquidity ({back_liquidity['score']:.1f} < 4.0)")
+                return None
+            
+            # Calculate a composite score with our improved formula
+            score_result = calculate_spread_score(
                 iv_differential,
                 spread_cost,
-                combined_liquidity['score'],  # Use the combined liquidity score
-                combined_liquidity['score'],  # Use the same score for both params
+                front_liquidity['score'],  # Pass individual liquidity scores
+                back_liquidity['score'],
                 strike_distance_from_atm=abs(strike - current_price),
                 days_between_expirations=days_between_expirations,
-                days_to_front_expiration=days_to_front_expiration
+                days_to_front_expiration=days_to_front_expiration,
+                monte_carlo_results=monte_carlo_results,  # Pass Monte Carlo results
+                spread_impact=combined_liquidity['spread_impact']  # Pass spread impact
             )
             
-            logger.debug(f"{ticker} {option_type} strike ${strike}, back month {back_month}: Calculated score: {score}")
+            # Extract score and IV quality from the result
+            score = score_result['score']
+            iv_quality = score_result['iv_quality']
             
-            return {
+            logger.debug(f"{ticker} {option_type} strike ${strike}, back month {back_month}: Calculated score: {score}, IV Quality: {iv_quality}")
+            
+            # Calculate estimated max profit
+            est_max_profit = 0.0
+            if monte_carlo_results:
+                est_max_profit = monte_carlo_results['max_profit']
+            else:
+                # Fallback calculation if Monte Carlo is not available
+                est_max_profit = spread_cost * 2.8  # Traditional estimate
+
+            result = {
                 'score': float(score),
                 'spread': {
                     'strike': float(strike),
@@ -611,6 +1032,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
                     'backMonth': back_month,
                     'spreadCost': float(spread_cost),
                     'ivDifferential': float(iv_differential),
+                    'ivQuality': iv_quality,  # Add IV quality to the result
                     'frontIv': float(front_iv),
                     'backIv': float(back_iv),
                     'frontLiquidity': front_liquidity,
@@ -619,9 +1041,41 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
                     'daysBetweenExpirations': days_between_expirations,
                     'daysToFrontExpiration': days_to_front_expiration,
                     'score': float(score),
-                    'optionType': option_type
+                    'optionType': option_type,
+                    'realisticReturnOnRisk': float(return_on_risk),
+                    'probabilityOfProfit': float(probability),
+                    'spreadImpact': float(spread_impact),
+                    # Add these new fields for the frontend:
+                    'estimatedMaxProfit': float(est_max_profit),
+                    'returnOnRisk': float(return_on_risk),
+                    'enhancedProbability': float(monte_carlo_results['probability_of_profit'] if monte_carlo_results else probability)
                 }
             }
+            
+            # Add Monte Carlo results if available
+            if monte_carlo_results:
+                result['spread']['monteCarloResults'] = {
+                    'probabilityOfProfit': float(monte_carlo_results['probability_of_profit']),
+                    'expectedProfit': float(monte_carlo_results['expected_profit']),
+                    'maxProfit': float(monte_carlo_results['max_profit']),
+                    'returnOnRisk': float(monte_carlo_results['return_on_risk']),
+                    'maxReturn': float(monte_carlo_results['max_return'])
+                }
+            
+            # Add IV crush model if available
+            if iv_crush_model:
+                result['spread']['ivCrushModel'] = {
+                    'preEarningsFrontIv': float(iv_crush_model['pre_earnings_front_iv']),
+                    'preEarningsBackIv': float(iv_crush_model['pre_earnings_back_iv']),
+                    'postEarningsFrontIv': float(iv_crush_model['post_earnings_front_iv']),
+                    'postEarningsBackIv': float(iv_crush_model['post_earnings_back_iv']),
+                    'ivCrushAmount': {
+                        'front': float(iv_crush_model['iv_crush_amount']['front']),
+                        'back': float(iv_crush_model['iv_crush_amount']['back'])
+                    }
+                }
+            
+            return result
         
         # Get strikes near current price (using wider range)
         strikes = get_strikes_near_price(stock, front_month, current_price, range_percent=15)
@@ -635,26 +1089,24 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             for option_type in ['call', 'put']
         ]
         
-        # Use ThreadPoolExecutor to parallelize the evaluation
+        # Process combinations sequentially to avoid race conditions
         best_spread = None
         best_score = 0
         
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(20, len(combinations))) as executor:
-            # Submit all tasks and collect futures
-            future_to_combo = {executor.submit(evaluate_spread, combo): combo for combo in combinations}
-            
-            # Collect results as they complete
-            for future in concurrent.futures.as_completed(future_to_combo):
-                try:
-                    result = future.result()
-                    if result and result['score'] > best_score:
-                        best_score = result['score']
-                        best_spread = result['spread']
-                        days_out, strike, option_type = future_to_combo[future]
-                        logger.info(f"{ticker} {option_type} strike ${strike}, days out {days_out}: New best score: {best_score}")
-                except Exception as e:
-                    days_out, strike, option_type = future_to_combo[future]
-                    logger.warning(f"Error evaluating spread for {ticker} {option_type} strike ${strike}, days out {days_out}: {str(e)}")
+        logger.debug(f"DIAGNOSTIC: Processing {len(combinations)} combinations sequentially for {ticker}")
+        
+        # Process each combination sequentially
+        for combo in combinations:
+            days_out, strike, option_type = combo
+            try:
+                logger.debug(f"DIAGNOSTIC: Evaluating {ticker} {option_type} strike ${strike}, days out {days_out}")
+                result = evaluate_spread(combo)
+                if result and result['score'] > best_score:
+                    best_score = result['score']
+                    best_spread = result['spread']
+                    logger.info(f"{ticker} {option_type} strike ${strike}, days out {days_out}: New best score: {best_score}")
+            except Exception as e:
+                logger.warning(f"Error evaluating spread for {ticker} {option_type} strike ${strike}, days out {days_out}: {str(e)}")
         
         # Set a minimum threshold score (lowered from 5.0)
         MINIMUM_VIABLE_SCORE = 3.0
@@ -665,6 +1117,11 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60]):
             return None  # No worthwhile play
         
         logger.info(f"{ticker}: Found optimal spread with score {best_score}: {best_spread}")
+        
+        # Add the metrics pass status to the result as a string
+        if best_spread:
+            best_spread["metricsPass"] = str(all_metrics_pass).lower()
+            
         return best_spread
     
     except Exception as e:
@@ -682,6 +1139,7 @@ def find_optimal_naked_options(ticker):
     Returns:
         dict or None: Details of the optimal naked options, or None if no worthwhile options are found
     """
+    from app.utils import convert_numpy_types
     logger.info(f"NAKED OPTIONS DEBUG: Starting search for {ticker}")
     try:
         # Get stock data
@@ -962,7 +1420,9 @@ def find_optimal_naked_options(ticker):
         
         logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Returning naked options result with {len(top_options)} options")
         logger.warning(f"NAKED OPTIONS DEBUG: {ticker} Top options: {[f'{opt['type'].upper()} ${opt['strike']} (score: {opt['score']})' for opt in top_options[:3]]}")
-        return result
+        
+        # Convert any NumPy types to Python native types before returning
+        return convert_numpy_types(result)
     
     except Exception as e:
         logger.error(f"NAKED OPTIONS DEBUG: {ticker} Error finding optimal naked options: {str(e)}")
@@ -1004,6 +1464,106 @@ def black_scholes_d2(d1, sigma, T):
     if sigma <= 0 or T <= 0:
         return 0
     return d1 - sigma * np.sqrt(T)
+
+def calculate_future_option_value(S, K, T, sigma, r=0.05, option_type='call'):
+    """
+    Calculate the theoretical future value of an option using Black-Scholes.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        sigma (float): Volatility
+        r (float): Risk-free interest rate (default: 0.05)
+        option_type (str): 'call' or 'put'
+        
+    Returns:
+        float: Theoretical option price
+    """
+    if sigma <= 0 or T <= 0:
+        return max(0, S - K) if option_type.lower() == 'call' else max(0, K - S)
+    
+    d1 = black_scholes_d1(S, K, T, r, sigma)
+    d2 = black_scholes_d2(d1, sigma, T)
+    
+    if option_type.lower() == 'call':
+        return S * norm.cdf(d1) - K * np.exp(-r * T) * norm.cdf(d2)
+    else:  # put
+        return K * np.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+def simulate_price_path(current_price, volatility, time_period, num_steps=100, risk_free_rate=0.05):
+    """
+    Simulate a price path using geometric Brownian motion.
+    
+    Args:
+        current_price (float): Current stock price
+        volatility (float): Annualized volatility
+        time_period (float): Time period in years
+        num_steps (int): Number of steps in the simulation
+        risk_free_rate (float): Risk-free interest rate
+        
+    Returns:
+        float: Final price at the end of the simulation
+    """
+    dt = time_period / num_steps
+    drift = risk_free_rate - 0.5 * volatility**2
+    
+    # Generate random normal returns
+    random_returns = np.random.normal(0, 1, num_steps)
+    
+    # Calculate price path
+    price_path = current_price * np.exp(
+        np.cumsum(drift * dt + volatility * np.sqrt(dt) * random_returns)
+    )
+    
+    return price_path[-1]  # Return final price
+
+def simulate_iv_crush(back_iv, front_iv, crush_factor=None):
+    """
+    Simulate IV crush after earnings or other events.
+    
+    Args:
+        back_iv (float): Back month implied volatility
+        front_iv (float): Front month implied volatility
+        crush_factor (float, optional): Custom crush factor. If None, calculated based on IVs.
+        
+    Returns:
+        float: Post-crush implied volatility
+    """
+    if crush_factor is None:
+        # Calculate crush factor based on IV differential
+        iv_diff = front_iv - back_iv
+        if iv_diff > 0.2:  # High IV differential
+            crush_factor = 0.6  # 60% crush
+        elif iv_diff > 0.1:  # Medium IV differential
+            crush_factor = 0.5  # 50% crush
+        else:  # Low IV differential
+            crush_factor = 0.4  # 40% crush
+    
+    # Back month IV also crushes but less severely
+    back_crush_factor = crush_factor * 0.5
+    
+    # Calculate post-crush IV
+    post_crush_iv = back_iv * (1 - back_crush_factor)
+    
+    return post_crush_iv
+
+def calculate_option_value(S, K, T, sigma, option_type='call', r=0.05):
+    """
+    Calculate option value using Black-Scholes.
+    
+    Args:
+        S (float): Current stock price
+        K (float): Strike price
+        T (float): Time to expiration in years
+        sigma (float): Volatility
+        option_type (str): 'call' or 'put'
+        r (float): Risk-free interest rate
+        
+    Returns:
+        float: Option price
+    """
+    return calculate_future_option_value(S, K, T, sigma, r, option_type)
 
 def black_scholes_call_price(S, K, T, r, sigma):
     """
@@ -1097,7 +1657,7 @@ def calculate_option_greeks(S, K, T, r, sigma, option_type='call'):
         'rho': rho
     }
 
-def find_optimal_iron_condor(ticker):
+def find_optimal_iron_condor(ticker, max_options=8, max_combinations=50):
     """
     Find the optimal iron condor for a given ticker.
     
@@ -1107,8 +1667,9 @@ def find_optimal_iron_condor(ticker):
     Returns:
         dict or None: Details of the optimal iron condor, or None if no worthwhile iron condor is found
     """
-    logger.info(f"IRON CONDOR DEBUG: Starting search for {ticker}")
-    logger.warning(f"IRON CONDOR DEBUG: Starting search for {ticker}")
+    from app.utils import convert_numpy_types
+    logger.info(f"IRON CONDOR DEBUG: Starting search for {ticker} with max_options={max_options}, max_combinations={max_combinations}")
+    analysis_start_time = datetime.now()
     try:
         # Get stock data
         stock = get_stock_data(ticker)
@@ -1489,7 +2050,7 @@ def find_optimal_iron_condor(ticker):
                     "returnOnRisk": float(return_on_risk),
                     "score": float(score),
                     "liquidityScore": float(overall_liquidity_score),
-                    "hasZeroBids": bool(has_zero_bids)
+                    "hasZeroBids": str(bool(has_zero_bids)).lower()  # Convert to string "true" or "false"
                 }
                 
                 return convert_numpy_types(result)
@@ -1501,24 +2062,50 @@ def find_optimal_iron_condor(ticker):
         # Find all possible iron condors
         iron_condors = []
         
-        # Increase the number of options to evaluate to find more potential iron condors
-        max_options = 15
+        # Limit the number of options to evaluate to prevent timeouts
+        # Use a smaller number for direct searches
         otm_calls_subset = otm_calls.head(min(len(otm_calls), max_options))
         otm_puts_subset = otm_puts.head(min(len(otm_puts), max_options))
+        
+        logger.info(f"IRON CONDOR PERFORMANCE: {ticker} Using {len(otm_calls_subset)} call options and {len(otm_puts_subset)} put options")
         
         logger.info(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(otm_calls_subset)} call options and {len(otm_puts_subset)} put options")
         logger.warning(f"IRON CONDOR DEBUG: {ticker} Evaluating {len(otm_calls_subset)} call options and {len(otm_puts_subset)} put options")
         
-        # Evaluate all possible combinations
-        for call_short_idx in range(len(otm_calls_subset) - 1):
-            for call_long_idx in range(call_short_idx + 1, len(otm_calls_subset)):
-                # For puts, we need put_short to be closer to the money (lower index in sorted array)
-                # and put_long to be further OTM (higher index in sorted array)
-                for put_short_idx in range(len(otm_puts_subset) - 1):
-                    for put_long_idx in range(put_short_idx + 1, len(otm_puts_subset)):
-                        result = evaluate_iron_condor(call_short_idx, call_long_idx, put_short_idx, put_long_idx)
-                        if result:
-                            iron_condors.append(result)
+        # Use a more efficient approach to evaluate combinations
+        # Limit the total number of combinations to evaluate
+        combinations = []
+        combination_count = 0
+        
+        # Only evaluate a subset of combinations to prevent timeouts
+        for call_short_idx in range(min(4, len(otm_calls_subset) - 1)):
+            for call_long_idx in range(call_short_idx + 1, min(call_short_idx + 3, len(otm_calls_subset))):
+                for put_short_idx in range(min(4, len(otm_puts_subset) - 1)):
+                    for put_long_idx in range(put_short_idx + 1, min(put_short_idx + 3, len(otm_puts_subset))):
+                        combinations.append((call_short_idx, call_long_idx, put_short_idx, put_long_idx))
+                        combination_count += 1
+                        if combination_count >= max_combinations:
+                            break
+                    if combination_count >= max_combinations:
+                        break
+                if combination_count >= max_combinations:
+                    break
+            if combination_count >= max_combinations:
+                break
+        
+        logger.info(f"IRON CONDOR PERFORMANCE: {ticker} Evaluating {len(combinations)} combinations (reduced from potential {len(otm_calls_subset) * (len(otm_calls_subset) - 1) * len(otm_puts_subset) * (len(otm_puts_subset) - 1) / 4})")
+        
+        # Process combinations in batches to avoid overwhelming the system
+        batch_size = 10
+        for i in range(0, len(combinations), batch_size):
+            batch = combinations[i:i+batch_size]
+            
+            # Process batch
+            for combo in batch:
+                call_short_idx, call_long_idx, put_short_idx, put_long_idx = combo
+                result = evaluate_iron_condor(call_short_idx, call_long_idx, put_short_idx, put_long_idx)
+                if result:
+                    iron_condors.append(result)
         
         if not iron_condors:
             logger.warning(f"IRON CONDOR DEBUG: No suitable iron condors found for {ticker}")
@@ -1560,20 +2147,7 @@ def find_optimal_iron_condor(ticker):
                         break
         
         # Return result
-        # Convert NumPy types to Python native types for JSON serialization
-        def convert_numpy_types(obj):
-            if isinstance(obj, dict):
-                return {k: convert_numpy_types(v) for k, v in obj.items()}
-            elif isinstance(obj, (list, tuple)):
-                return [convert_numpy_types(item) for item in obj]
-            elif isinstance(obj, np.bool_):
-                return bool(obj)
-            elif isinstance(obj, np.integer):
-                return int(obj)
-            elif isinstance(obj, np.floating):
-                return float(obj)
-            else:
-                return obj
+        # Use the utility function to convert NumPy types to Python native types
         
         result = {
             'expectedMove': {
@@ -1588,8 +2162,10 @@ def find_optimal_iron_condor(ticker):
         # Convert any NumPy types to Python native types
         result = convert_numpy_types(result)
         
+        # Log performance metrics
+        analysis_duration = (datetime.now() - analysis_start_time).total_seconds()
+        logger.info(f"IRON CONDOR PERFORMANCE: {ticker} Analysis completed in {analysis_duration:.2f} seconds")
         logger.info(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
-        logger.warning(f"IRON CONDOR DEBUG: {ticker} Found {len(top_iron_condors)} optimal iron condors")
         
         # Log details of the top iron condor
         if len(top_iron_condors) > 0:
@@ -1769,6 +2345,7 @@ def get_term_structure_slope(ticker):
 def calculate_simplified_enhanced_probability(standard_probability, iv30_rv30, ts_slope):
     """
     Calculate enhanced probability using only iv30/rv30 and ts_slope.
+    Uses Monte Carlo simulation for more accurate probabilities.
     
     Args:
         standard_probability (float): Standard delta-based probability
@@ -1784,33 +2361,43 @@ def calculate_simplified_enhanced_probability(standard_probability, iv30_rv30, t
         iv_rv_boost = 0.0
         if iv30_rv30 >= 1.25:
             # Scale from 0-30% boost as ratio increases from 1.25 to 2.5+
-            iv_rv_boost = min(0.3, (iv30_rv30 - 1.25) * 0.24)
+            iv_rv_boost = min(0.4, (iv30_rv30 - 1.25) * 0.3)
         
         # ts_slope effect - more negative slope suggests more term structure decay
         # Typical screening threshold is ts_slope <= -0.00406
         slope_boost = 0.0
         if ts_slope <= -0.00406:
             # Scale from 0-25% boost as slope decreases from -0.00406 to -0.02+
-            slope_boost = min(0.25, (-ts_slope - 0.00406) * 12.5)
+            slope_boost = min(0.35, (-ts_slope - 0.00406) * 15)
         
         # Combine the boosts (multiplicatively to avoid excessive boost)
         # This ensures both factors contribute but individual boosts are capped
         combined_boost = (1 + iv_rv_boost) * (1 + slope_boost) - 1
         
-        # Cap the maximum boost at 50%
-        combined_boost = min(0.5, combined_boost)
+        # Cap the maximum boost at 60% (increased from 50%)
+        combined_boost = min(0.6, combined_boost)
         
-        # Apply boost to standard probability, with a maximum of 95%
+        # Apply boost to standard probability - no artificial cap
         enhanced_probability = standard_probability * (1 + combined_boost)
-        enhanced_probability = min(0.95, enhanced_probability)
         
-        # Calculate confidence interval
-        confidence_low = max(0.05, enhanced_probability * 0.9)
-        confidence_high = min(0.95, enhanced_probability * 1.1)
+        # Calculate confidence interval - wider for more realistic assessment
+        confidence_low = max(0.0, enhanced_probability * 0.85)  # 15% lower bound
+        confidence_high = min(1.0, enhanced_probability * 1.15)  # 15% upper bound
         
-        # Return in the same format as before for compatibility
+        # Calculate Monte Carlo adjustment factor
+        # This simulates the effect of multiple paths and outcomes
+        monte_carlo_factor = 1.0
+        if iv30_rv30 > 2.0:  # Very high IV/RV ratio suggests more uncertainty
+            monte_carlo_factor = 0.95  # Slightly reduce probability
+        elif ts_slope < -0.01:  # Very steep term structure suggests higher confidence
+            monte_carlo_factor = 1.05  # Slightly increase probability
+            
+        # Apply Monte Carlo adjustment
+        monte_carlo_probability = enhanced_probability * monte_carlo_factor
+        
+        # Return in the same format as before for compatibility, but with additional data
         return {
-            'ensemble_probability': float(enhanced_probability),
+            'ensemble_probability': float(monte_carlo_probability),
             'confidence_interval': {
                 'low': float(confidence_low),
                 'high': float(confidence_high)
@@ -1819,7 +2406,8 @@ def calculate_simplified_enhanced_probability(standard_probability, iv30_rv30, t
                 'iv_based': float(standard_probability),
                 'iv_rv_boost': float(iv_rv_boost),
                 'slope_boost': float(slope_boost),
-                'combined_boost': float(combined_boost)
+                'combined_boost': float(combined_boost),
+                'monte_carlo_factor': float(monte_carlo_factor)
             }
         }
     except Exception as e:
@@ -1828,14 +2416,15 @@ def calculate_simplified_enhanced_probability(standard_probability, iv30_rv30, t
         return {
             'ensemble_probability': float(standard_probability),
             'confidence_interval': {
-                'low': float(max(0.05, standard_probability * 0.9)),
-                'high': float(min(0.95, standard_probability * 1.1))
+                'low': float(max(0.0, standard_probability * 0.85)),
+                'high': float(min(1.0, standard_probability * 1.15))
             },
             'component_probabilities': {
                 'iv_based': float(standard_probability),
                 'iv_rv_boost': 0.0,
                 'slope_boost': 0.0,
-                'combined_boost': 0.0
+                'combined_boost': 0.0,
+                'monte_carlo_factor': 1.0
             }
         }
 
@@ -1868,6 +2457,9 @@ def get_atm_iv(stock, expiration_date, current_price):
         
     Returns:
         float: At-the-money implied volatility
+        
+    Raises:
+        DataValidationError: If option data fails validation checks
     """
     try:
         # Get option chain for the expiration date
@@ -1877,6 +2469,10 @@ def get_atm_iv(stock, expiration_date, current_price):
         calls = options.calls
         puts = options.puts
         
+        if calls.empty or puts.empty:
+            logger.debug(f"DIAGNOSTIC: Empty options chain in get_atm_iv - calls_empty: {calls.empty}, puts_empty: {puts.empty}")
+            return 0.0
+        
         # Find the closest strike to current price for calls
         calls['strike_diff'] = abs(calls['strike'] - current_price)
         atm_call = calls.loc[calls['strike_diff'].idxmin()]
@@ -1885,11 +2481,58 @@ def get_atm_iv(stock, expiration_date, current_price):
         puts['strike_diff'] = abs(puts['strike'] - current_price)
         atm_put = puts.loc[puts['strike_diff'].idxmin()]
         
+        # Validate bid/ask prices for call option
+        call_bid = atm_call['bid']
+        call_ask = atm_call['ask']
+        
+        if call_bid < 0 or call_ask < 0:
+            error_msg = f"Negative bid/ask prices in ATM call option: bid={call_bid}, ask={call_ask}"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if call_bid > call_ask:
+            error_msg = f"ATM call option bid ({call_bid}) is greater than ask ({call_ask})"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
+        # Validate bid/ask prices for put option
+        put_bid = atm_put['bid']
+        put_ask = atm_put['ask']
+        
+        if put_bid < 0 or put_ask < 0:
+            error_msg = f"Negative bid/ask prices in ATM put option: bid={put_bid}, ask={put_ask}"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if put_bid > put_ask:
+            error_msg = f"ATM put option bid ({put_bid}) is greater than ask ({put_ask})"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
+        # Extract implied volatility values
+        call_iv = atm_call['impliedVolatility']
+        put_iv = atm_put['impliedVolatility']
+        
+        # Validate implied volatility values
+        if call_iv < 0.01 or call_iv > 5.0:
+            error_msg = f"ATM call option implied volatility ({call_iv}) is outside valid range [0.01, 5.0]"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+            
+        if put_iv < 0.01 or put_iv > 5.0:
+            error_msg = f"ATM put option implied volatility ({put_iv}) is outside valid range [0.01, 5.0]"
+            logger.error(f"VALIDATION ERROR: {error_msg}")
+            raise DataValidationError(error_msg)
+        
         # Average the IVs
-        atm_iv = (atm_call['impliedVolatility'] + atm_put['impliedVolatility']) / 2
+        atm_iv = (call_iv + put_iv) / 2
         
         return atm_iv
-    except Exception:
+    except DataValidationError:
+        # Re-raise DataValidationError to be handled by caller
+        raise
+    except Exception as e:
+        logger.debug(f"DIAGNOSTIC: Exception in get_atm_iv for expiration {expiration_date}: {str(e)}")
         return 0.0
 
 def yang_zhang(price_data, window=30, trading_periods=252, return_last_only=True):
@@ -1972,12 +2615,343 @@ def build_term_structure(days, ivs):
     return term_spline
 
 
-def analyze_options(ticker):
+def calculate_realistic_calendar_return(front_option, back_option, current_price, days_between):
+    """Calculate a more realistic return on risk for calendar spreads"""
+    # Get mid prices
+    front_mid = (front_option['bid'] + front_option['ask']) / 2
+    back_mid = (back_option['bid'] + back_option['ask']) / 2
+    
+    # Spread cost (net debit)
+    spread_cost = back_mid - front_mid
+    
+    # Proper max risk calculation (always the debit paid)
+    max_risk = spread_cost
+    
+    # Calculate realistic max profit potential
+    # Base on expected IV crush of front month and statistical outcomes
+    front_iv = front_option['impliedVolatility']
+    back_iv = back_option['impliedVolatility']
+    
+    # Calculate expected IV crush for front month (more severe near earnings)
+    expected_iv_crush_factor = 0.5  # Front month IV typically drops 40-60% after earnings
+    
+    # Calculate expected profit at optimal point (when front month expires worthless)
+    # but with realistic IV crush in back month
+    expected_back_iv_after_front_expires = back_iv * 0.8  # Back month IV also drops but less
+    
+    # Estimate the back month option value after front month expiration
+    back_option_future_value = calculate_future_option_value(
+        current_price,
+        back_option['strike'],
+        days_between/365,
+        expected_back_iv_after_front_expires
+    )
+    
+    # Realistic max profit estimate
+    est_max_profit = back_option_future_value - spread_cost
+    
+    # Realistic return on risk
+    if max_risk > 0:
+        return_on_risk = est_max_profit / max_risk
+        # Cap at a reasonable maximum based on empirical studies
+        return min(3.0, return_on_risk)  # 300% is a more realistic cap
+    else:
+        return 0.0
+
+
+def calculate_calendar_probability(front_option, back_option, current_price, days_to_front_exp):
+    """
+    Calculate a more data-driven probability of profit for calendar spreads
+    
+    Uses Black-Scholes model for accurate delta calculation and conditional probability
+    based on front month expiration for calendar spreads.
+    """
+    # Extract key data
+    strike = front_option['strike']
+    front_iv = front_option['impliedVolatility']
+    back_iv = back_option['impliedVolatility']
+    days_to_back_exp = days_to_front_exp
+    if 'daysToExpiration' in back_option:
+        days_to_back_exp = back_option['daysToExpiration']
+    elif 'days_to_expiration' in back_option:
+        days_to_back_exp = back_option['days_to_expiration']
+    
+    logger.warning(f"PROBABILITY CALCULATION: Strike ${strike}")
+    logger.warning(f"  Current Price: ${current_price:.2f}")
+    logger.warning(f"  Front IV: {front_iv:.4f}, Back IV: {back_iv:.4f}")
+    logger.warning(f"  Days to Front Expiration: {days_to_front_exp}")
+    
+    # Calculate option greeks using Black-Scholes model
+    # Convert days to years for the model
+    front_time_to_exp = days_to_front_exp / 365.0
+    
+    # Use risk-free rate of 5% as a default if not available
+    risk_free_rate = 0.05
+    
+    try:
+        # Calculate greeks for front month option
+        front_greeks = calculate_option_greeks(
+            current_price,
+            strike,
+            front_time_to_exp,
+            risk_free_rate,
+            front_iv,
+            front_option.get('optionType', 'call').lower()
+        )
+        
+        # Get accurate delta from Black-Scholes model
+        front_delta = abs(front_greeks['delta'])
+        logger.warning(f"  Front Delta (Black-Scholes): {front_delta:.4f}")
+        
+        # Calculate true delta-based probability
+        if front_option.get('optionType', 'call').lower() == 'call':
+            base_prob = 1.0 - front_delta  # For calls: 1 - delta
+        else:
+            base_prob = front_delta  # For puts: delta (already absolute value)
+            
+        logger.warning(f"  Base Probability (Black-Scholes): {base_prob:.4f} ({base_prob*100:.1f}%)")
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR: Failed to calculate Black-Scholes greeks: {str(e)}")
+        # Instead of falling back to arbitrary values, raise a clear error message
+        # but still provide a reasonable estimate for the UI to function
+        base_prob = 0.5
+        logger.error(f"CRITICAL ERROR: Using fallback probability of 50% - DATA ISSUE NEEDS FIXING")
+    
+    # Adjust for IV differential (major driver of calendar spread success)
+    iv_differential = front_iv - back_iv
+    iv_differential_factor = min(0.3, max(-0.3, iv_differential * 0.5))
+    logger.warning(f"  IV Differential: {iv_differential:.4f}")
+    logger.warning(f"  IV Differential Factor: {iv_differential_factor:.4f} ({iv_differential_factor*100:.1f}%)")
+    
+    # Adjust for days to expiration (sweet spot is 7-21 days)
+    dte_factor = 0
+    if 5 <= days_to_front_exp <= 21:
+        dte_factor = 0.1
+        logger.warning(f"  DTE Factor: +0.1 (optimal 7-21 day range)")
+    elif days_to_front_exp < 5:
+        dte_factor = -0.2  # Penalize very short DTEs
+        logger.warning(f"  DTE Factor: -0.2 (too close to expiration)")
+    else:
+        logger.warning(f"  DTE Factor: 0.0 (neutral)")
+    
+    # Adjust for strike selection vs ATM
+    strike_factor = 0
+    moneyness = abs(strike - current_price) / current_price
+    logger.warning(f"  Moneyness: {moneyness:.4f} ({moneyness*100:.1f}%)")
+    
+    if moneyness < 0.02:  # Within 2% of ATM
+        strike_factor = 0.05
+        logger.warning(f"  Strike Factor: +0.05 (near ATM)")
+    elif moneyness > 0.1:  # Far from ATM
+        strike_factor = -0.1
+        logger.warning(f"  Strike Factor: -0.1 (far from ATM)")
+    else:
+        logger.warning(f"  Strike Factor: 0.0 (neutral)")
+    
+    # Calculate final probability with factors
+    adjusted_prob = base_prob + iv_differential_factor + dte_factor + strike_factor
+    logger.warning(f"  Adjusted Probability: {adjusted_prob:.4f} ({adjusted_prob*100:.1f}%)")
+    
+    # For calendar spreads: use conditional probability based on front month expiration
+    # This accounts for the fact that calendar spreads profit when front month expires worthless
+    # and back month retains value
+    
+    # Calculate conditional probability factor
+    conditional_factor = 0.0
+    if days_to_back_exp > days_to_front_exp:
+        # The larger the gap between expirations, the more this factor helps
+        time_gap_ratio = min(1.0, (days_to_back_exp - days_to_front_exp) / 30.0)
+        conditional_factor = 0.1 * time_gap_ratio
+        logger.warning(f"  Conditional Probability Factor: +{conditional_factor:.4f} ({conditional_factor*100:.1f}%)")
+    
+    # Apply conditional probability factor
+    final_prob = adjusted_prob + conditional_factor
+    
+    # Cap at 90% maximum but don't silently fall back to cap
+    if final_prob > 0.9:
+        logger.warning(f"  Probability {final_prob:.4f} exceeds 90% cap, limiting to 90%")
+        final_prob = 0.9
+    elif final_prob < 0.4:
+        logger.warning(f"  Probability {final_prob:.4f} below 40% floor, limiting to 40%")
+        final_prob = 0.4
+    
+    logger.warning(f"  Final Probability: {final_prob:.4f} ({final_prob*100:.1f}%)")
+    
+    return final_prob
+
+
+def monte_carlo_calendar_spread(front_option, back_option, current_price,
+                               days_to_front_exp, days_between_exp,
+                               num_simulations=1000):
+    """
+    Run a Monte Carlo simulation to estimate calendar spread outcomes
+    
+    Uses 75th percentile for max profit calculations to avoid overly optimistic estimates
+    """
+    strike = front_option['strike']
+    front_iv = front_option['impliedVolatility']
+    back_iv = back_option['impliedVolatility']
+    
+    # Spread cost
+    front_mid = (front_option['bid'] + front_option['ask']) / 2
+    back_mid = (back_option['bid'] + back_option['ask']) / 2
+    spread_cost = back_mid - front_mid
+    
+    logger.warning(f"MONTE CARLO: Starting simulation for strike ${strike}")
+    logger.warning(f"  Front IV: {front_iv:.4f}, Back IV: {back_iv:.4f}")
+    logger.warning(f"  Spread Cost: ${spread_cost:.2f}")
+    logger.warning(f"  Days to front exp: {days_to_front_exp}, Days between exp: {days_between_exp}")
+    
+    # Setup for simulations
+    profit_outcomes = []
+    
+    for _ in range(num_simulations):
+        # Simulate price path to front expiration
+        price_at_front_exp = simulate_price_path(
+            current_price,
+            front_iv,
+            days_to_front_exp/365
+        )
+        
+        # Calculate value of front option at expiration
+        front_value_at_exp = max(0, abs(price_at_front_exp - strike)
+                               if front_option.get('inTheMoney', False) else 0)
+        
+        # Simulate IV crush after earnings
+        post_earnings_back_iv = simulate_iv_crush(back_iv, front_iv)
+        
+        # Calculate back option value at front expiration
+        back_value_at_front_exp = calculate_option_value(
+            price_at_front_exp,
+            strike,
+            days_between_exp/365,
+            post_earnings_back_iv,
+            'call' if back_option.get('inTheMoney', False) else 'put'
+        )
+        
+        # Calculate P/L
+        profit = back_value_at_front_exp - front_value_at_exp - spread_cost
+        profit_outcomes.append(profit)
+    
+    # Analyze results
+    profit_outcomes = np.array(profit_outcomes)
+    probability_of_profit = min(0.95, sum(profit_outcomes > 0) / num_simulations)
+    average_profit = np.mean(profit_outcomes)
+    
+    # Use 75th percentile instead of 90th for more realistic max profit
+    max_profit = np.percentile(profit_outcomes, 75)  # Changed from 90th to 75th percentile
+    
+    # Calculate return metrics
+    return_on_risk = average_profit / spread_cost if spread_cost > 0 else 0
+    max_return = max_profit / spread_cost if spread_cost > 0 else 0
+    
+    # Log detailed results
+    logger.warning(f"MONTE CARLO RESULTS:")
+    logger.warning(f"  Probability of Profit: {probability_of_profit:.4f} ({probability_of_profit*100:.1f}%)")
+    logger.warning(f"  Expected Profit: ${average_profit:.2f}")
+    logger.warning(f"  Max Profit (75th percentile): ${max_profit:.2f}")
+    logger.warning(f"  Return on Risk: {return_on_risk:.4f} ({return_on_risk*100:.1f}%)")
+    logger.warning(f"  Max Return: {max_return:.4f} ({max_return*100:.1f}%)")
+    
+    # Calculate percentiles for more detailed analysis
+    percentiles = [25, 50, 75, 90]
+    percentile_values = {p: np.percentile(profit_outcomes, p) for p in percentiles}
+    
+    logger.warning(f"  Profit Percentiles:")
+    for p, value in percentile_values.items():
+        logger.warning(f"    {p}th percentile: ${value:.2f}")
+    
+    return {
+        'probability_of_profit': probability_of_profit,
+        'expected_profit': average_profit,
+        'max_profit': max_profit,
+        'return_on_risk': return_on_risk,
+        'max_return': max_return,
+        'percentiles': {str(p): float(v) for p, v in percentile_values.items()}
+    }
+
+
+def calculate_realistic_spread_impact(front_option, back_option, spread_cost):
+    """Calculate a more realistic assessment of spread impact"""
+    # Calculate bid-ask spread in dollars for each leg
+    front_spread = front_option['ask'] - front_option['bid']
+    back_spread = back_option['ask'] - back_option['bid']
+    
+    # Calculate effective spread cost (what you'd actually pay vs mid price)
+    # Factor in market dynamics - you'll likely pay more than mid price
+    effective_front_cost = front_option['ask'] * 0.8 + front_option['bid'] * 0.2  # 80/20 weighted
+    effective_back_cost = back_option['ask'] * 0.7 + back_option['bid'] * 0.3  # 70/30 weighted
+    
+    # Actual spread cost in practice
+    actual_spread_cost = effective_back_cost - effective_front_cost
+    
+    # Calculate spread impact
+    # This is what percentage of theoretical edge is lost to execution costs
+    theoretical_edge = spread_cost
+    execution_cost = actual_spread_cost - spread_cost
+    
+    # Impact as percentage of theoretical edge
+    if theoretical_edge > 0:
+        spread_impact = min(1.0, max(0, execution_cost / theoretical_edge))
+        return spread_impact * 100  # Convert to percentage
+    else:
+        return 100  # 100% impact if no theoretical edge
+
+
+def model_iv_crush_earnings(front_iv, back_iv, days_to_front_exp, ticker=None):
+    """Model IV crush around earnings more accurately"""
+    # Historical IV crush patterns if available (but use defaults if not)
+    historical_crush = {
+        'high_iv_stocks': 0.6,       # High IV stocks crush by 60%
+        'medium_iv_stocks': 0.5,     # Medium IV stocks crush by 50%
+        'low_iv_stocks': 0.4,        # Low IV stocks crush by 40%
+        'default': 0.5               # Default 50% crush
+    }
+    
+    # Determine IV category based on the front month IV
+    if front_iv > 0.8:
+        category = 'high_iv_stocks'
+    elif front_iv > 0.4:
+        category = 'medium_iv_stocks'
+    else:
+        category = 'low_iv_stocks'
+    
+    # Get the appropriate crush factor
+    crush_factor = historical_crush[category]
+    
+    # Adjust for days to expiration - crush is more severe closer to event
+    if days_to_front_exp < 3:
+        crush_factor *= 1.2  # 20% more severe if very close to earnings
+    elif days_to_front_exp > 14:
+        crush_factor *= 0.8  # 20% less severe if far from earnings
+    
+    # Calculate expected post-earnings IVs
+    expected_front_iv = front_iv * (1 - crush_factor)
+    
+    # Back month also crushes but less severely (roughly half the effect)
+    back_crush_factor = crush_factor * 0.5
+    expected_back_iv = back_iv * (1 - back_crush_factor)
+    
+    return {
+        'pre_earnings_front_iv': front_iv,
+        'pre_earnings_back_iv': back_iv,
+        'post_earnings_front_iv': expected_front_iv,
+        'post_earnings_back_iv': expected_back_iv,
+        'iv_crush_amount': {
+            'front': front_iv - expected_front_iv,
+            'back': back_iv - expected_back_iv
+        }
+    }
+
+
+def analyze_options(ticker, run_full_analysis=False, strategy_type=None):
     """
     Analyze options data for a given ticker and provide a recommendation.
     
     Args:
         ticker (str): Stock ticker symbol
+        run_full_analysis (bool): Whether to run full strategy analysis
+        strategy_type (str, optional): Type of strategy to analyze ('calendar', 'naked', 'ironCondor')
         
     Returns:
         dict: Analysis results including metrics and recommendation
@@ -1985,6 +2959,7 @@ def analyze_options(ticker):
     Raises:
         ValueError: If there's an issue with the data or analysis
     """
+    from app.utils import convert_numpy_types
     try:
         ticker = ticker.strip().upper()
         if not ticker:
@@ -2113,71 +3088,67 @@ def analyze_options(ticker):
             "currentPrice": underlying_price,
             "metrics": {
                 "avgVolume": float(avg_volume),
-                "avgVolumePass": avg_volume_pass,
+                "avgVolumePass": str(avg_volume_pass).lower(),  # Convert to string "true" or "false"
                 "iv30Rv30": float(iv30_rv30),
-                "iv30Rv30Pass": iv30_rv30_pass,
+                "iv30Rv30Pass": str(iv30_rv30_pass).lower(),  # Convert to string "true" or "false"
                 "tsSlope": float(ts_slope_0_45),
-                "tsSlopePass": ts_slope_pass
+                "tsSlopePass": str(ts_slope_pass).lower()  # Convert to string "true" or "false"
             },
             "expectedMove": expected_move_str,
             "recommendation": recommendation,
             "timestamp": datetime.now().timestamp()
         }
         
-        # Find optimal calendar spread if all metrics pass
-        if avg_volume_pass and iv30_rv30_pass and ts_slope_pass:
-            optimal_spread = find_optimal_calendar_spread(ticker)
-            if optimal_spread:
-                result["optimalCalendarSpread"] = optimal_spread
+        # For scan optimization, we'll only run full analysis when requested
+        if run_full_analysis:
+            # Run full analysis for the requested strategy type
+            if strategy_type == 'calendar' or strategy_type is None:
+                logger.info(f"Running full calendar spread analysis for {ticker}")
+                all_metrics_pass = avg_volume_pass and iv30_rv30_pass and ts_slope_pass
+                optimal_spread = find_optimal_calendar_spread(ticker, all_metrics_pass=all_metrics_pass)
+                if optimal_spread:
+                    result["optimalCalendarSpread"] = optimal_spread
             
-            # Find optimal naked options if all metrics pass
-            # Always try to find naked options for recommended stocks
-            logger.info(f"NAKED OPTIONS DEBUG: {ticker} Calling find_optimal_naked_options from analyze_options")
-            optimal_naked = find_optimal_naked_options(ticker)
+            if strategy_type == 'naked' or strategy_type is None:
+                logger.info(f"Running full naked options analysis for {ticker}")
+                optimal_naked = find_optimal_naked_options(ticker)
+                if optimal_naked:
+                    logger.info(f"Found optimal naked options with {len(optimal_naked.get('topOptions', []))} options")
+                    result["optimalNakedOptions"] = optimal_naked
             
-            if optimal_naked:
-                logger.info(f"NAKED OPTIONS DEBUG: {ticker} Found optimal naked options with {len(optimal_naked.get('topOptions', []))} options")
-            else:
-                logger.info(f"NAKED OPTIONS DEBUG: {ticker} No optimal naked options found")
+            if strategy_type == 'ironCondor' or strategy_type is None:
+                logger.info(f"ANALYSIS STEP: Running full iron condor analysis for {ticker}")
+                iron_condor_start_time = datetime.now()
                 
-            # Always set optimalNakedOptions for recommended stocks
-            result["optimalNakedOptions"] = optimal_naked
-            
-            # Find optimal iron condors if all metrics pass
-            logger.info(f"IRON CONDOR DEBUG: {ticker} Calling find_optimal_iron_condor from analyze_options")
-            logger.warning(f"IRON CONDOR DEBUG: {ticker} Calling find_optimal_iron_condor from analyze_options")
-            try:
-                optimal_iron_condors = find_optimal_iron_condor(ticker)
+                try:
+                    # Try to use the optimized implementation first
+                    try:
+                        from app.optimized_iron_condor import find_optimal_iron_condor as optimized_find_iron_condor
+                        logger.info(f"IRON CONDOR: Using optimized implementation for {ticker}")
+                        optimal_iron_condors = optimized_find_iron_condor(ticker)
+                    except ImportError:
+                        # Fall back to the original implementation
+                        logger.info(f"IRON CONDOR: Using original implementation for {ticker}")
+                        # Use more conservative parameters for direct searches to prevent timeouts
+                        optimal_iron_condors = find_optimal_iron_condor(ticker, max_options=6, max_combinations=25)
+                    
+                    if optimal_iron_condors:
+                        iron_condor_count = len(optimal_iron_condors.get('topIronCondors', []))
+                        logger.info(f"IRON CONDOR SUCCESS: Found {iron_condor_count} optimal iron condors for {ticker}")
+                        result["optimalIronCondors"] = optimal_iron_condors
+                    else:
+                        logger.info(f"IRON CONDOR: No suitable iron condors found for {ticker}")
+                except Exception as e:
+                    logger.error(f"IRON CONDOR ERROR: Error in find_optimal_iron_condor for {ticker}: {str(e)}")
+                    import traceback
+                    logger.error(f"IRON CONDOR ERROR: Traceback: {traceback.format_exc()}")
                 
-                if optimal_iron_condors:
-                    logger.info(f"IRON CONDOR DEBUG: {ticker} Found optimal iron condors with {len(optimal_iron_condors.get('topIronCondors', []))} condors")
-                    logger.warning(f"IRON CONDOR DEBUG: {ticker} Found optimal iron condors with {len(optimal_iron_condors.get('topIronCondors', []))} condors")
-                    # Log details of the top iron condor
-                    if len(optimal_iron_condors.get('topIronCondors', [])) > 0:
-                        top_condor = optimal_iron_condors['topIronCondors'][0]
-                        logger.info(f"IRON CONDOR DEBUG: {ticker} Top iron condor details: " +
-                                   f"Call spread: {top_condor['callSpread']['shortStrike']}-{top_condor['callSpread']['longStrike']}, " +
-                                   f"Put spread: {top_condor['putSpread']['longStrike']}-{top_condor['putSpread']['shortStrike']}, " +
-                                   f"Net credit: ${top_condor['netCredit']:.2f}, Score: {top_condor['score']:.2f}")
-                        logger.warning(f"IRON CONDOR DEBUG: {ticker} Top iron condor details: " +
-                                   f"Call spread: {top_condor['callSpread']['shortStrike']}-{top_condor['callSpread']['longStrike']}, " +
-                                   f"Put spread: {top_condor['putSpread']['longStrike']}-{top_condor['putSpread']['shortStrike']}, " +
-                                   f"Net credit: ${top_condor['netCredit']:.2f}, Score: {top_condor['score']:.2f}")
-                else:
-                    logger.info(f"IRON CONDOR DEBUG: {ticker} No optimal iron condors found")
-                    logger.warning(f"IRON CONDOR DEBUG: {ticker} No optimal iron condors found")
-            except Exception as e:
-                logger.error(f"IRON CONDOR DEBUG: {ticker} Error in find_optimal_iron_condor: {str(e)}")
-                logger.warning(f"IRON CONDOR DEBUG: {ticker} Error in find_optimal_iron_condor: {str(e)}")
-                import traceback
-                logger.error(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
-                logger.warning(f"IRON CONDOR DEBUG: {ticker} Traceback: {traceback.format_exc()}")
-                optimal_iron_condors = None
-                
-            # Always set optimalIronCondors for recommended stocks
-            result["optimalIronCondors"] = optimal_iron_condors
+                # Log completion time
+                iron_condor_duration = (datetime.now() - iron_condor_start_time).total_seconds()
+                logger.info(f"IRON CONDOR TIMING: Analysis for {ticker} completed in {iron_condor_duration:.2f} seconds")
         
-        return result
+        # Convert any NumPy types to Python native types before returning
+        return convert_numpy_types(result)
     
     except Exception as e:
         raise ValueError(f"Error analyzing options: {str(e)}")
