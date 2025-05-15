@@ -133,11 +133,16 @@ export interface OptimalCalendarSpread {
   spreadImpact?: number;         // Impact of bid-ask spreads on profitability
   // Monte Carlo simulation results
   monteCarloResults?: {
-    probabilityOfProfit: number; // Monte Carlo probability of profit
+    probabilityOfProfit: number; // Monte Carlo probability of profit (adjusted)
+    raw_probability: number;     // Raw probability before adjustments
     expectedProfit: number;      // Expected profit from simulation
     maxProfit: number;           // Maximum profit from simulation
     returnOnRisk: number;        // Return on risk from simulation
     maxReturn: number;           // Maximum return from simulation
+    numSimulations: number;      // Number of simulations run
+    percentiles: {              // Percentile values for profit distribution
+      [key: string]: number;
+    };
   };
   // IV crush model
   ivCrushModel?: {

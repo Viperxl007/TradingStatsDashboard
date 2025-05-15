@@ -140,6 +140,13 @@ app.json_encoder = CustomJSONEncoder
 # Initialize rate limiter
 update_rate_limiter_config()
 
+# Initialize market data provider and log which API is being used
+try:
+    from app.market_data import market_data
+    logger.warning(f"Initialized market data provider: {market_data.__class__.__name__}")
+except Exception as e:
+    logger.error(f"Failed to initialize market data provider: {str(e)}")
+
 def get_common_strikes(stock, front_month, back_month):
     """
     Get strike prices that exist in both front and back month expirations.
@@ -223,6 +230,9 @@ def analyze_ticker(ticker):
         # Check if a specific strategy analysis is requested
         strategy_type = request.args.get('strategy')
         run_full_analysis = request.args.get('full_analysis', 'false').lower() == 'true'
+        
+        # Add debug logging
+        logger.warning(f"API DEBUG: /api/analyze/{ticker} called with full_analysis={request.args.get('full_analysis')}, parsed as run_full_analysis={run_full_analysis}")
         
         # Run the analysis
         result = analyze_options(ticker, run_full_analysis=run_full_analysis, strategy_type=strategy_type)

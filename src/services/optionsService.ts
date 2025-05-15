@@ -70,7 +70,8 @@ export const analyzeOptions = async (
       url += `&strategy=${strategyType}`;
     }
     
-    console.log(`Fetching from: ${url}`);
+    // Add debug logging
+    console.log(`Fetching from: ${url} with runFullAnalysis=${runFullAnalysis}`);
     
     // Make the request without a timeout
     try {

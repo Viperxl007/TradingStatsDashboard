@@ -46,3 +46,6 @@ yarn-error.log*
 
 # Yarn Integrity file
 .yarn-integrity
+
+# Local configuration files
+backend/local_config.py

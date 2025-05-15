@@ -89,7 +89,17 @@ const DirectSearch: React.FC = () => {
       dispatch(analyzeOptionsStart(ticker));
       setAnalysisStartTime(Date.now());
       
+      // Add debug logging
+      console.log(`DirectSearch: Calling analyzeOptions for ${ticker} with runFullAnalysis=true`);
+      
       const result = await analyzeOptions(ticker, true); // Set runFullAnalysis to true
+      
+      // Add debug logging for the result
+      console.log(`DirectSearch: Received result for ${ticker}`, {
+        hasMonteCarloResults: !!result.optimalCalendarSpread?.monteCarloResults,
+        numSimulations: result.optimalCalendarSpread?.monteCarloResults?.numSimulations
+      });
+      
       dispatch(analyzeOptionsSuccess(result));
       setAnalysisStartTime(null);
     } catch (error) {

@@ -1,10 +1,10 @@
-import yfinance as yf
 import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 import logging
 from typing import Dict, List, Any, Optional, Tuple
 from app.utils import convert_numpy_types
+from app.market_data import market_data
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -29,11 +29,8 @@ def get_earnings_history(ticker: str, years: int = 7) -> Dict[str, Any]:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=years * 365)
         
-        # Get the stock data using yfinance
-        stock = yf.Ticker(ticker)
-        
         # Get earnings dates
-        earnings_dates = get_historical_earnings_dates(stock, start_date)
+        earnings_dates = market_data.get_historical_earnings_dates(ticker, start_date)
         if not earnings_dates:
             return {"error": f"No earnings data found for {ticker}"}
         
@@ -58,75 +55,7 @@ def get_earnings_history(ticker: str, years: int = 7) -> Dict[str, Any]:
         logger.error(f"Error fetching earnings history for {ticker}: {str(e)}")
         return {"error": str(e)}
 
-def get_historical_earnings_dates(stock: yf.Ticker, start_date: datetime) -> List[str]:
-    """
-    Get historical earnings announcement dates for a stock.
-    
-    Args:
-        stock (yf.Ticker): yfinance Ticker object
-        start_date (datetime): Start date for historical data
-        
-    Returns:
-        List of earnings dates in YYYY-MM-DD format
-    """
-    try:
-        # Get earnings calendar from yfinance
-        earnings_calendar = stock.calendar
-        
-        # If no calendar data, try to get earnings history
-        if earnings_calendar is None or len(earnings_calendar) == 0:
-            earnings_history = stock.earnings_history
-            
-            if earnings_history is not None and not earnings_history.empty:
-                # Extract earnings dates
-                earnings_dates = earnings_history.index.strftime('%Y-%m-%d').tolist()
-                
-                # Filter dates after start_date
-                start_date_str = start_date.strftime('%Y-%m-%d')
-                earnings_dates = [date for date in earnings_dates if date >= start_date_str]
-                
-                return earnings_dates
-        
-        # If we have calendar data
-        if earnings_calendar is not None and 'Earnings Date' in earnings_calendar:
-            # Get the next earnings date
-            next_earnings_date = earnings_calendar['Earnings Date']
-            if isinstance(next_earnings_date, pd.Timestamp):
-                next_earnings_date = next_earnings_date.strftime('%Y-%m-%d')
-            
-            # Try to get historical earnings from quarterly financials
-            quarterly_financials = stock.quarterly_financials
-            if quarterly_financials is not None and not quarterly_financials.empty:
-                historical_dates = quarterly_financials.columns.strftime('%Y-%m-%d').tolist()
-                
-                # Filter dates after start_date
-                start_date_str = start_date.strftime('%Y-%m-%d')
-                historical_dates = [date for date in historical_dates if date >= start_date_str]
-                
-                # Add next earnings date if it exists
-                if next_earnings_date and next_earnings_date not in historical_dates:
-                    historical_dates.append(next_earnings_date)
-                
-                return sorted(historical_dates)
-        
-        # If we couldn't get earnings dates from yfinance, try a different approach
-        # Use quarterly earnings data as a fallback
-        quarterly_earnings = stock.quarterly_earnings
-        if quarterly_earnings is not None and not quarterly_earnings.empty:
-            earnings_dates = quarterly_earnings.index.strftime('%Y-%m-%d').tolist()
-            
-            # Filter dates after start_date
-            start_date_str = start_date.strftime('%Y-%m-%d')
-            earnings_dates = [date for date in earnings_dates if date >= start_date_str]
-            
-            return earnings_dates
-        
-        logger.warning(f"Could not retrieve earnings dates for {stock.ticker}")
-        return []
-        
-    except Exception as e:
-        logger.error(f"Error getting historical earnings dates: {str(e)}")
-        return []
+# This function is now handled by the market_data module
 
 def get_historical_prices(ticker: str, start_date: datetime, end_date: datetime) -> Optional[pd.DataFrame]:
     """
@@ -140,28 +69,7 @@ def get_historical_prices(ticker: str, start_date: datetime, end_date: datetime)
     Returns:
         DataFrame with historical price data or None if retrieval fails
     """
-    try:
-        # Format dates for yfinance
-        start_str = start_date.strftime('%Y-%m-%d')
-        end_str = end_date.strftime('%Y-%m-%d')
-        
-        # Get historical data
-        historical_data = yf.download(
-            ticker,
-            start=start_str,
-            end=end_str,
-            progress=False
-        )
-        
-        if historical_data.empty:
-            logger.warning(f"No historical price data found for {ticker}")
-            return None
-            
-        return historical_data
-        
-    except Exception as e:
-        logger.error(f"Error getting historical prices: {str(e)}")
-        return None
+    return market_data.get_historical_prices(ticker, start_date, end_date)
 
 def calculate_post_earnings_performance(earnings_dates: List[str], 
                                        historical_prices: pd.DataFrame) -> List[Dict[str, Any]]:

@@ -2,7 +2,7 @@
 Earnings Calendar Module
 
 This module handles fetching earnings calendar data using the finance_calendars package
-or yfinance as a fallback.
+or market data provider as a fallback.
 """
 
 import logging
@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 import importlib.util
 import pandas as pd
 import random
+from app.market_data import market_data
 
 # Set up logging
 logger = logging.getLogger(__name__)
@@ -24,10 +25,7 @@ if fc_available:
         logger.info("Using finance_calendars package for earnings data")
     except ImportError:
         fc_available = False
-        logger.warning("Failed to import finance_calendars, will use yfinance as fallback")
-
-# Always import yfinance as a fallback
-import yfinance as yf
+        logger.warning("Failed to import finance_calendars, will use market data provider as fallback")
 
 def get_earnings_today():
     """
@@ -44,8 +42,8 @@ def get_earnings_today():
             except Exception as e:
                 logger.warning(f"Error using finance_calendars: {str(e)}. Falling back to yfinance.")
         
-        # Fallback to yfinance
-        return get_earnings_from_yfinance()
+        # Fallback to market data provider
+        return market_data.get_earnings_calendar()
     except Exception as e:
         logger.error(f"Error fetching today's earnings: {str(e)}")
         return []
@@ -71,50 +69,13 @@ def get_earnings_by_date(date=None):
             except Exception as e:
                 logger.warning(f"Error using finance_calendars: {str(e)}. Falling back to yfinance.")
         
-        # Fallback to yfinance
-        return get_earnings_from_yfinance(date)
+        # Fallback to market data provider
+        return market_data.get_earnings_calendar(date)
     except Exception as e:
         logger.error(f"Error fetching earnings for {date.strftime('%Y-%m-%d')}: {str(e)}")
         return []
 
-def get_earnings_from_yfinance(date=None):
-    """
-    Get earnings data using yfinance as a fallback.
-    
-    Args:
-        date (datetime, optional): Date to get earnings for. Defaults to None (today).
-        
-    Returns:
-        list: List of dictionaries containing earnings data
-    """
-    try:
-        # Get earnings calendar from yfinance
-        calendar = yf.get_earnings_calendar()
-        
-        # Filter by date if specified
-        if date is not None:
-            date_str = date.strftime('%Y-%m-%d')
-            calendar = calendar[calendar['Earnings Date'].dt.strftime('%Y-%m-%d') == date_str]
-        else:
-            today_str = datetime.now().strftime('%Y-%m-%d')
-            calendar = calendar[calendar['Earnings Date'].dt.strftime('%Y-%m-%d') == today_str]
-        
-        # Convert to our format
-        formatted_data = []
-        for _, row in calendar.iterrows():
-            formatted_data.append({
-                "symbol": row['Symbol'],
-                "name": row['Company'],
-                "when": "before market open" if "BMO" in str(row['Call Time']) else "after market close",
-                "date": row['Earnings Date'].strftime('%Y-%m-%d'),
-                "estimate": row['EPS Estimate'] if 'EPS Estimate' in row else None,
-                "actual": row['Reported EPS'] if 'Reported EPS' in row else None
-            })
-        
-        return formatted_data
-    except Exception as e:
-        logger.error(f"Error fetching earnings from yfinance: {str(e)}")
-        return []
+# This function is now handled by the market_data module
 
 def get_earnings_this_week():
     """
