@@ -143,6 +143,8 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
   const strikeDistancePercent = currentPrice ? ((calendarSpread.strike / currentPrice) - 1) * 100 : 0;
   const isStrikeOutsideExpectedMove = Math.abs(strikeDistancePercent) > (expectedMove?.percent || 0) * 100;
   
+  const monteCarloProb = calendarSpread.monteCarloResults?.probabilityOfProfit;
+
   return (
     <Box
       id={`calendar-spread-${ticker}`}
@@ -169,14 +171,15 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
       <Divider mb={4} />
       
       <Box mb={4}>
-        <Heading as="h4" size="sm" mb={2}>
-          Strategy Overview
-        </Heading>
-        <Text fontSize="sm" mb={3}>
-          A calendar spread profits from IV differential between expiration dates and volatility crush after earnings.
-        </Text>
-        
-        <Flex direction={["column", "row"]} justify="space-between" mb={4}>
+        <>
+          <Heading as="h4" size="sm" mb={2}>
+            Strategy Overview
+          </Heading>
+          <Text fontSize="sm" mb={3}>
+            A calendar spread profits from IV differential between expiration dates and volatility crush after earnings.
+          </Text>
+          
+          <Flex direction={["column", "row"]} justify="space-between" mb={4}>
           <Stat mb={3}>
             <StatLabel>Expected Move</StatLabel>
             <StatNumber>{(expectedMove?.percent || 0) * 100 > 0 ? ((expectedMove?.percent || 0) * 100).toFixed(2) : "0.00"}%</StatNumber>
@@ -505,17 +508,43 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           Probability Profile
         </Heading>
         
+        {/* Add debug logging outside of JSX completely */}
+        {calendarSpread.monteCarloResults && monteCarloProb !== undefined &&
+          console.log('CalendarSpreadDisplay: monteCarloResults', {
+            monteCarloProb,
+            raw_probability: calendarSpread.monteCarloResults.raw_probability,
+            numSimulations: calendarSpread.monteCarloResults.numSimulations,
+            monteCarloResults: calendarSpread.monteCarloResults
+          })
+        }
+        
         <Box mb={4}>
-          {calendarSpread.monteCarloResults ? (
+          {calendarSpread.monteCarloResults && monteCarloProb !== undefined ? (
             <Box p={2} borderRadius="md" bg={useColorModeValue('blue.50', 'rgba(66, 153, 225, 0.1)')} borderWidth="1px" borderColor="blue.200">
               <Text fontSize="sm" fontWeight="bold" color="blue.500">
-                Monte Carlo Probability: {(calendarSpread.monteCarloResults.probabilityOfProfit * 100).toFixed(2)}%
+                Monte Carlo Probability: {(monteCarloProb * 100).toFixed(2)}%
               </Text>
+              
+              {/* Display raw probability if available */}
+              {calendarSpread.monteCarloResults.raw_probability !== undefined && (
+                <Flex alignItems="center" mt={1}>
+                  <Text fontSize="xs" color="blue.500">
+                    Raw Probability: {(calendarSpread.monteCarloResults.raw_probability * 100).toFixed(2)}%
+                  </Text>
+                  <Tooltip label="Raw probability before conservative adjustments are applied">
+                    <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
+                  </Tooltip>
+                </Flex>
+              )}
+              
               <Text fontSize="xs" color="blue.500">
                 Based on {calendarSpread.monteCarloResults.expectedProfit >= 0 ? "positive" : "negative"} expected profit of ${calendarSpread.monteCarloResults.expectedProfit.toFixed(2)}
               </Text>
               <Text fontSize="xs" color="blue.500" mt={1}>
-                Simulates price movement and volatility crush after earnings
+                Based on {calendarSpread.monteCarloResults.numSimulations?.toLocaleString() || 500} simulations
+              </Text>
+              <Text fontSize="xs" color="blue.500">
+                Simulates price movement and volatility crush with realistic transaction costs
               </Text>
             </Box>
           ) : (
@@ -536,6 +565,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
             </>
           )}
         </Box>
+        </>
       </Box>
     </Box>
   );

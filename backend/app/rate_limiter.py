@@ -2,7 +2,7 @@
 Rate Limiter Module
 
 This module provides rate limiting functionality for API calls to prevent exceeding
-rate limits of external services like Yahoo Finance.
+rate limits of external services like Yahoo Finance and AlphaVantage.
 """
 
 import time
@@ -157,6 +157,9 @@ class RateLimiter:
 # Create a global rate limiter instance for Yahoo Finance
 yf_rate_limiter = RateLimiter()
 
+# Thread lock for Yahoo Finance API calls - exposed for use by market_data.py
+_yf_api_lock = threading.RLock()
+
 def update_rate_limiter_config():
     """
     Update the Yahoo Finance rate limiter configuration from the app config.
@@ -165,7 +168,7 @@ def update_rate_limiter_config():
     the rate limiter based on the application configuration.
     """
     try:
-        from config import YF_RATE_LIMIT, SEQUENTIAL_PROCESSING
+        from config import YF_RATE_LIMIT, SEQUENTIAL_PROCESSING, AV_RATE_LIMIT, MARKET_DATA_SOURCE
         
         # Update YF rate limiter with config values
         yf_rate_limiter.update_config(
@@ -180,17 +183,19 @@ def update_rate_limiter_config():
                    f"per={yf_rate_limiter.per}, burst={yf_rate_limiter.burst}, "
                    f"max_consecutive={yf_rate_limiter.max_consecutive}, "
                    f"pause_duration={yf_rate_limiter.pause_duration}")
+                   
+        # Log the current market data source
+        logger.info(f"Current market data source: {MARKET_DATA_SOURCE}")
     except ImportError:
         logger.warning("Could not import config, using default rate limiter settings")
     except Exception as e:
         logger.error(f"Error updating rate limiter config: {str(e)}")
 
-# Thread lock for Yahoo Finance API calls
-_yf_api_lock = threading.RLock()
-
 def get_current_price(ticker):
     """
     Get the current price for a ticker with rate limiting.
+    
+    This function is now a wrapper around the market_data module's get_current_price function.
     
     Args:
         ticker (str): Stock ticker symbol
@@ -198,24 +203,10 @@ def get_current_price(ticker):
     Returns:
         float: Current stock price or None if an error occurs
     """
-    import yfinance as yf
-    
     try:
-        # Acquire rate limiter token with timeout
-        if not yf_rate_limiter.acquire(block=True, timeout=10):
-            logger.warning(f"Rate limit exceeded for {ticker}, skipping")
-            return None
-            
-        # Use thread lock for thread safety
-        with _yf_api_lock:
-            stock = yf.Ticker(ticker)
-            todays_data = stock.history(period='1d')
-            
-            if todays_data.empty:
-                logger.warning(f"No data available for {ticker}")
-                return None
-                
-            return todays_data['Close'].iloc[0]
+        # Import here to avoid circular imports
+        from app.market_data import market_data
+        return market_data.get_current_price(ticker)
     except Exception as e:
         logger.error(f"Error getting current price for {ticker}: {str(e)}")
         return None

@@ -43,6 +43,13 @@ def create_app(test_config=None):
         logger.info("Rate limiter initialized")
     except Exception as e:
         logger.warning(f"Failed to initialize rate limiter: {str(e)}")
+        
+    # Initialize market data provider
+    try:
+        from app.market_data import market_data
+        logger.info(f"Market data provider initialized: {market_data.__class__.__name__}")
+    except Exception as e:
+        logger.warning(f"Failed to initialize market data provider: {str(e)}")
 
     # Register blueprints
     from app.routes import api_bp
