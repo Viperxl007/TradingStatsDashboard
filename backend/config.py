@@ -16,7 +16,8 @@ import importlib.util
 MARKET_DATA_SOURCE = os.environ.get('MARKET_DATA_SOURCE', 'yfinance')
 
 # AlphaVantage API key (only used if MARKET_DATA_SOURCE is 'alphavantage')
-ALPHAVANTAGE_API_KEY = os.environ.get('ALPHAVANTAGE_API_KEY', 'ZB4OJAXNSXX8PAV6')
+# Must be set via environment variable or local_config.py
+ALPHAVANTAGE_API_KEY = os.environ.get('ALPHAVANTAGE_API_KEY')
 
 # Rate limiting configuration for Yahoo Finance API calls
 YF_RATE_LIMIT = {
@@ -63,6 +64,13 @@ try:
         print(f"Using market data source: {MARKET_DATA_SOURCE}")
 except Exception as e:
     print(f"Error loading local configuration: {str(e)}")
+
+# Validate configuration after loading local config
+if MARKET_DATA_SOURCE == 'alphavantage' and not ALPHAVANTAGE_API_KEY:
+    print("WARNING: ALPHAVANTAGE_API_KEY is not set but AlphaVantage is selected as market data source.")
+    print("Please set ALPHAVANTAGE_API_KEY environment variable or configure it in local_config.py")
+    print("Falling back to yfinance as market data source.")
+    MARKET_DATA_SOURCE = 'yfinance'
 
 # Sequential processing configuration
 SEQUENTIAL_PROCESSING = {

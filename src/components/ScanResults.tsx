@@ -37,6 +37,7 @@ import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
 import CalendarSpreadDisplay from './CalendarSpreadDisplay';
+import PinTradeButton from './tradeTracker/PinTradeButton';
 
 /**
  * ScanResults Component
@@ -289,6 +290,14 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         // Run full analysis for the selected strategy
         const result = await analyzeOptions(newSelectedTicker, true, strategyType);
         
+        // Find the original item to preserve company name if it's missing in the result
+        const originalItem = optionsData.scanResults.find(item => item.ticker === newSelectedTicker);
+        
+        // Ensure company name is preserved
+        if (originalItem && !result.companyName && originalItem.companyName) {
+          result.companyName = originalItem.companyName;
+        }
+        
         // Update the result in the scan results
         dispatch(scanEarningsSuccess(
           optionsData.scanResults.map(item =>
@@ -343,8 +352,8 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   // Filter and sort results
   const filteredResults = optionsData.scanResults
     .filter(result => {
-      // Skip filtered out tickers completely
-      if (String(result.recommendation) === 'FILTERED OUT') {
+      // Skip filtered out tickers completely or those with missing metrics
+      if (String(result.recommendation) === 'FILTERED OUT' || !result.metrics) {
         return false;
       }
       
@@ -385,13 +394,19 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           comparison = a.currentPrice - b.currentPrice;
           break;
         case 'avgVolume':
-          comparison = a.metrics.avgVolume - b.metrics.avgVolume;
+          // Handle undefined metrics
+          if (!a.metrics || !b.metrics) return 0;
+          comparison = (a.metrics.avgVolume || 0) - (b.metrics.avgVolume || 0);
           break;
         case 'iv30Rv30':
-          comparison = a.metrics.iv30Rv30 - b.metrics.iv30Rv30;
+          // Handle undefined metrics
+          if (!a.metrics || !b.metrics) return 0;
+          comparison = (a.metrics.iv30Rv30 || 0) - (b.metrics.iv30Rv30 || 0);
           break;
         case 'tsSlope':
-          comparison = a.metrics.tsSlope - b.metrics.tsSlope;
+          // Handle undefined metrics
+          if (!a.metrics || !b.metrics) return 0;
+          comparison = (a.metrics.tsSlope || 0) - (b.metrics.tsSlope || 0);
           break;
         case 'recommendation':
           // Custom sort order: Recommended > Consider > Avoid
@@ -739,7 +754,11 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                 {filteredResults.map((result) => (
                   <Tr
                     key={result.ticker}
-                    onClick={() => handleRowClick(result.ticker)}
+                    onClick={() => {
+                      // Log for debugging
+                      console.log(`Row clicked for ${result.ticker}, company name: ${result.companyName || 'N/A'}`);
+                      handleRowClick(result.ticker);
+                    }}
                     cursor={
                       (strategyType === 'calendar' && result.optimalCalendarSpread) ||
                       (strategyType === 'naked' && result.optimalNakedOptions) ||
@@ -758,44 +777,86 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                         : undefined
                     }
                   >
-                    <Td fontWeight="bold">{result.ticker}</Td>
+                    <Td fontWeight="bold">
+                      <Flex alignItems="center">
+                        {result.ticker}
+                        {/* Earnings time indicator */}
+                        {result.reportTime && (
+                          <Text as="span" ml={1} fontSize="sm" title={`Report Time: ${result.reportTime}`}>
+                            {result.reportTime === 'BMO' ? '☀️' :
+                             result.reportTime === 'AMC' ? '🌙' :
+                             `(${result.reportTime})`}
+                          </Text>
+                        )}
+                        <Box ml={2}>
+                          <PinTradeButton
+                            ticker={result.ticker}
+                            price={result.currentPrice}
+                            strategy={strategyType === 'calendar' ? 'calendar_spread' :
+                                     strategyType === 'ironCondor' ? 'iron_condor' :
+                                     strategyType === 'naked' ? 'single_option' : 'stock'}
+                            size="sm"
+                            tooltipPlacement="right"
+                            companyName={result.companyName || ''}
+                            reportTime={result.reportTime || ''}
+                            earningsDate={result.earningsDate || ''}
+                          />
+                          {/* Add a tooltip to explain the pin button */}
+                          <Text fontSize="xs" color="gray.500" mt={1}>
+                            Pin to Trade Ideas
+                          </Text>
+                        </Box>
+                      </Flex>
+                    </Td>
                     <Td>{result.companyName || '-'}</Td>
                     <Td isNumeric>${result.currentPrice !== undefined && result.currentPrice !== null ? result.currentPrice.toFixed(2) : 'N/A'}</Td>
                     <Td isNumeric>
-                      <Flex justify="flex-end" align="center">
-                        <Icon
-                          as={result.metrics?.avgVolumePass === "true" ? FiCheckCircle : FiXCircle}
-                          color={result.metrics?.avgVolumePass === "true" ? 'green.500' : 'red.500'}
-                          mr={2}
-                        />
-                        {result.metrics?.avgVolume !== undefined && result.metrics?.avgVolume !== null
-                          ? result.metrics.avgVolume.toLocaleString()
-                          : 'N/A'}
-                      </Flex>
+                      {result.metrics ? (
+                        <Flex justify="flex-end" align="center">
+                          <Icon
+                            as={result.metrics.avgVolumePass === "true" ? FiCheckCircle : FiXCircle}
+                            color={result.metrics.avgVolumePass === "true" ? 'green.500' : 'red.500'}
+                            mr={2}
+                          />
+                          {result.metrics.avgVolume !== undefined && result.metrics.avgVolume !== null
+                            ? result.metrics.avgVolume.toLocaleString()
+                            : 'N/A'}
+                        </Flex>
+                      ) : (
+                        <Text>N/A</Text>
+                      )}
                     </Td>
                     <Td isNumeric>
-                      <Flex justify="flex-end" align="center">
-                        <Icon
-                          as={result.metrics?.iv30Rv30Pass === "true" ? FiCheckCircle : FiXCircle}
-                          color={result.metrics?.iv30Rv30Pass === "true" ? 'green.500' : 'red.500'}
-                          mr={2}
-                        />
-                        {result.metrics?.iv30Rv30 !== undefined && result.metrics?.iv30Rv30 !== null
-                          ? result.metrics.iv30Rv30.toFixed(2)
-                          : 'N/A'}
-                      </Flex>
+                      {result.metrics ? (
+                        <Flex justify="flex-end" align="center">
+                          <Icon
+                            as={result.metrics.iv30Rv30Pass === "true" ? FiCheckCircle : FiXCircle}
+                            color={result.metrics.iv30Rv30Pass === "true" ? 'green.500' : 'red.500'}
+                            mr={2}
+                          />
+                          {result.metrics.iv30Rv30 !== undefined && result.metrics.iv30Rv30 !== null
+                            ? result.metrics.iv30Rv30.toFixed(2)
+                            : 'N/A'}
+                        </Flex>
+                      ) : (
+                        <Text>N/A</Text>
+                      )}
                     </Td>
                     <Td isNumeric>
-                      <Flex justify="flex-end" align="center">
-                        <Icon
-                          as={result.metrics?.tsSlopePass === "true" ? FiCheckCircle : FiXCircle}
-                          color={result.metrics?.tsSlopePass === "true" ? 'green.500' : 'red.500'}
-                          mr={2}
-                        />
-                        {result.metrics?.tsSlope !== undefined && result.metrics?.tsSlope !== null
-                          ? result.metrics.tsSlope.toFixed(5)
-                          : 'N/A'}
-                      </Flex>
+                      {result.metrics ? (
+                        <Flex justify="flex-end" align="center">
+                          <Icon
+                            as={result.metrics.tsSlopePass === "true" ? FiCheckCircle : FiXCircle}
+                            color={result.metrics.tsSlopePass === "true" ? 'green.500' : 'red.500'}
+                            mr={2}
+                          />
+                          {result.metrics.tsSlope !== undefined && result.metrics.tsSlope !== null
+                            ? result.metrics.tsSlope.toFixed(5)
+                            : 'N/A'}
+                        </Flex>
+                      ) : (
+                        <Text>N/A</Text>
+                      )}
                     </Td>
                     <Td>{result.expectedMove}</Td>
                     <Td>

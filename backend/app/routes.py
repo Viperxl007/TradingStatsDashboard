@@ -16,7 +16,7 @@ from app.options_analyzer import (
 )
 from app.earnings_calendar import (
     get_earnings_today, get_earnings_by_date, get_earnings_calendar,
-    handle_pandas_dataframe, generate_sample_earnings
+    handle_pandas_dataframe
 )
 from app.data_fetcher import get_stock_info, get_current_price
 from app.rate_limiter import update_rate_limiter_config, yf_rate_limiter
@@ -118,15 +118,10 @@ def scan_earnings():
                 date_str = datetime.now().strftime('%Y-%m-%d')
         except Exception as e:
             logger.error(f"Error getting earnings calendar: {str(e)}")
-            
-            # If we can't get real earnings data, generate sample data
-            if date_str:
-                earnings = generate_sample_earnings(date_str)
-            else:
-                date_str = datetime.now().strftime('%Y-%m-%d')
-                earnings = generate_sample_earnings(date_str)
-                
-            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
         else:
             earnings = get_earnings_today()
         
@@ -137,11 +132,15 @@ def scan_earnings():
                 return None
                 
             try:
-                # Don't run full analysis for scans to avoid timeouts
-                analysis = analyze_options(ticker, False)
+                # Get earnings date from the earnings data
+                earnings_date = earning.get('date', '')
+                
+                # Don't run full analysis for scans to avoid timeouts, but pass earnings date
+                analysis = analyze_options(ticker, False, earnings_date=earnings_date)
                 # Add company name from earnings data
                 analysis['companyName'] = earning.get('companyName', '')
                 analysis['reportTime'] = earning.get('reportTime', '')
+                analysis['earningsDate'] = earnings_date
                 return analysis
             except Exception as e:
                 logger.warning(f"Error analyzing {ticker}: {str(e)}")
@@ -204,12 +203,10 @@ def get_today_calendar():
             date_str = datetime.now().strftime('%Y-%m-%d')
         except Exception as e:
             logger.error(f"Error getting today's earnings calendar: {str(e)}")
-            
-            # If we can't get real earnings data, generate sample data
-            date_str = datetime.now().strftime('%Y-%m-%d')
-            earnings = generate_sample_earnings(date_str)
-            
-            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
         
         return jsonify({
             "date": date_str,
@@ -251,8 +248,10 @@ def get_date_calendar(date):
         except Exception as e:
             logger.error(f"Error getting earnings calendar for {date}: {str(e)}")
             
-            # If we can't get real earnings data, generate sample data
-            earnings = generate_sample_earnings(date)
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
             
             logger.info(f"Using sample earnings data: {len(earnings)} companies")
         

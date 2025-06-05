@@ -123,8 +123,7 @@ from app.rate_limiter import (
 
 # Import earnings calendar functionality
 from app.earnings_calendar import (
-    get_earnings_calendar, handle_pandas_dataframe,
-    generate_sample_earnings
+    get_earnings_calendar, handle_pandas_dataframe
 )
 
 # Create Flask app
@@ -230,12 +229,13 @@ def analyze_ticker(ticker):
         # Check if a specific strategy analysis is requested
         strategy_type = request.args.get('strategy')
         run_full_analysis = request.args.get('full_analysis', 'false').lower() == 'true'
+        earnings_date = request.args.get('earnings_date')
         
         # Add debug logging
-        logger.warning(f"API DEBUG: /api/analyze/{ticker} called with full_analysis={request.args.get('full_analysis')}, parsed as run_full_analysis={run_full_analysis}")
+        logger.warning(f"API DEBUG: /api/analyze/{ticker} called with full_analysis={request.args.get('full_analysis')}, parsed as run_full_analysis={run_full_analysis}, earnings_date={earnings_date}")
         
         # Run the analysis
-        result = analyze_options(ticker, run_full_analysis=run_full_analysis, strategy_type=strategy_type)
+        result = analyze_options(ticker, run_full_analysis=run_full_analysis, strategy_type=strategy_type, earnings_date=earnings_date)
         return jsonify(result)
     except Exception as e:
         logger.error(f"Error analyzing {ticker}: {str(e)}")
@@ -313,8 +313,11 @@ def process_ticker(earning):
         # Import strategy checker
         from app.strategy_checker import check_strategies_availability
         
-        # Run basic analysis to get metrics and recommendation
-        analysis = analyze_options(ticker)
+        # Get earnings date from the earnings data
+        earnings_date = earning.get('date', '')
+        
+        # Run basic analysis to get metrics and recommendation, passing earnings date
+        analysis = analyze_options(ticker, earnings_date=earnings_date)
         
         # Check strategy availability instead of running full analysis
         strategy_availability = check_strategies_availability(ticker)
@@ -322,9 +325,10 @@ def process_ticker(earning):
         # Add strategy availability to the analysis result
         analysis['strategyAvailability'] = strategy_availability
         
-        # Add company name and report time from earnings data
+        # Add company name, report time, and earnings date from earnings data
         analysis['companyName'] = earning.get('companyName', '')
         analysis['reportTime'] = earning.get('reportTime', '')
+        analysis['earningsDate'] = earnings_date
         
         return analysis
     except Exception as e:
@@ -333,6 +337,7 @@ def process_ticker(earning):
             "ticker": earning.get('ticker', 'unknown'),
             "companyName": earning.get('companyName', ''),
             "reportTime": earning.get('reportTime', ''),
+            "earningsDate": earning.get('date', ''),
             "error": str(e),
             "timestamp": datetime.now().timestamp()
         }
@@ -353,14 +358,10 @@ def scan_earnings():
         except Exception as e:
             logger.error(f"Error getting earnings calendar: {str(e)}")
             
-            # If we can't get real earnings data, generate sample data
-            if date_str:
-                earnings = generate_sample_earnings(date_str)
-            else:
-                date_str = datetime.now().strftime('%Y-%m-%d')
-                earnings = generate_sample_earnings(date_str)
-                
-            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
         
         # Filter out earnings with no ticker
         valid_earnings = [earning for earning in earnings if earning.get('ticker')]
@@ -447,12 +448,10 @@ def get_today_calendar():
             date_str = datetime.now().strftime('%Y-%m-%d')
         except Exception as e:
             logger.error(f"Error getting today's earnings calendar: {str(e)}")
-            
-            # If we can't get real earnings data, generate sample data
-            date_str = datetime.now().strftime('%Y-%m-%d')
-            earnings = generate_sample_earnings(date_str)
-            
-            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
         
         return jsonify({
             "date": date_str,
@@ -485,11 +484,10 @@ def get_calendar_by_date(date):
             earnings = get_earnings_calendar(date)
         except Exception as e:
             logger.error(f"Error getting earnings calendar for {date}: {str(e)}")
-            
-            # If we can't get real earnings data, generate sample data
-            earnings = generate_sample_earnings(date)
-            
-            logger.info(f"Using sample earnings data: {len(earnings)} companies")
+            return jsonify({
+                "error": "Earnings calendar data is not available. Please check your data source configuration.",
+                "timestamp": datetime.now().timestamp()
+            }), 503
         
         return jsonify({
             "date": date,

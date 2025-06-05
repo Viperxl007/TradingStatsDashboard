@@ -29,7 +29,8 @@ import {
   StatHelpText,
   Icon
 } from '@chakra-ui/react';
-import { FiSearch, FiCheckCircle, FiXCircle, FiAlertCircle } from 'react-icons/fi';
+import { FiSearch, FiCheckCircle, FiXCircle, FiAlertCircle, FiPlusCircle } from 'react-icons/fi';
+import { HStack } from '@chakra-ui/react';
 import { useData, analyzeOptionsStart, analyzeOptionsSuccess, analyzeOptionsError } from '../context/DataContext';
 import { analyzeOptions } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
@@ -38,6 +39,8 @@ import EarningsHistoryChart from './EarningsHistoryChart';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
 import CalendarSpreadDisplay from './CalendarSpreadDisplay';
+import PinTradeButton from './tradeTracker/PinTradeButton';
+import { getCurrentDateString } from '../utils/dateUtils';
 
 declare global {
   interface Window {
@@ -223,29 +226,113 @@ const DirectSearch: React.FC = () => {
               <Card
                 height="100%"
                 variant="outline"
-                borderColor={getRecommendationColor(optionsData.analysisResult.recommendation) + '.500'}
+                borderColor={getRecommendationColor(optionsData.analysisResult!.recommendation) + '.500'}
                 boxShadow="md"
               >
                 <CardHeader
-                  bg={getRecommendationColor(optionsData.analysisResult.recommendation) + '.500'}
+                  bg={getRecommendationColor(optionsData.analysisResult!.recommendation) + '.500'}
                   color="white"
                 >
-                  <Heading size="md">
-                    {optionsData.analysisResult.ticker} - {optionsData.analysisResult.recommendation}
-                  </Heading>
+                  <Flex alignItems="center">
+                    <Heading size="md">
+                      {optionsData.analysisResult!.ticker} - {optionsData.analysisResult!.recommendation}
+                    </Heading>
+                    <Box ml="auto">
+                      <HStack spacing={2}>
+                        <Button
+                          size="sm"
+                          leftIcon={<FiPlusCircle />}
+                          colorScheme="green"
+                          onClick={() => {
+                            // Check if analysisResult exists
+                            if (!optionsData.analysisResult) return;
+                            
+                            // Import the ConvertToTradeModal component dynamically
+                            import('./tradeTracker/ConvertToTradeModal').then(({ default: ConvertToTradeModal }) => {
+                              // Create a temporary trade idea
+                              const tradeIdea = {
+                                id: `temp-${Date.now()}`,
+                                ticker: optionsData.analysisResult!.ticker,
+                                entryDate: getCurrentDateString(),
+                                entryPrice: 0,
+                                quantity: 0,
+                                direction: 'long',
+                                status: 'open',
+                                strategy: optionsData.analysisResult!.optimalCalendarSpread ? 'calendar_spread' :
+                                         optionsData.analysisResult!.optimalIronCondors ? 'iron_condor' :
+                                         optionsData.analysisResult!.optimalNakedOptions ? 'single_option' : 'stock',
+                                fees: 0,
+                                notes: `Analysis from Direct Search: ${optionsData.analysisResult!.recommendation}`,
+                                tags: ['from_direct_search'],
+                                createdAt: Date.now(),
+                                updatedAt: Date.now(),
+                                metadata: {
+                                  companyName: optionsData.analysisResult!.companyName || '',
+                                  currentPrice: optionsData.analysisResult!.currentPrice,
+                                  metrics: optionsData.analysisResult!.metrics,
+                                  expectedMove: optionsData.analysisResult!.expectedMove,
+                                  reportTime: optionsData.analysisResult!.reportTime
+                                }
+                              };
+                              
+                              // Create a modal element
+                              const modalContainer = document.createElement('div');
+                              document.body.appendChild(modalContainer);
+                              
+                              // Render the modal
+                              // Note: This is a simplified approach. In a real app, you'd use React's createPortal or a modal context
+                              const openTradeModal = () => {
+                                // Show a toast message instead
+                                const toast = document.createElement('div');
+                                toast.textContent = 'Opening trade modal...';
+                                toast.style.position = 'fixed';
+                                toast.style.bottom = '20px';
+                                toast.style.right = '20px';
+                                toast.style.padding = '10px 20px';
+                                toast.style.backgroundColor = '#38A169';
+                                toast.style.color = 'white';
+                                toast.style.borderRadius = '4px';
+                                toast.style.zIndex = '9999';
+                                document.body.appendChild(toast);
+                                
+                                setTimeout(() => {
+                                  document.body.removeChild(toast);
+                                }, 3000);
+                              };
+                              
+                              openTradeModal();
+                            });
+                          }}
+                        >
+                          Open Trade
+                        </Button>
+                        <PinTradeButton
+                          ticker={optionsData.analysisResult!.ticker}
+                          price={optionsData.analysisResult!.currentPrice}
+                          strategy={optionsData.analysisResult!.optimalCalendarSpread ? 'calendar_spread' :
+                                   optionsData.analysisResult!.optimalIronCondors ? 'iron_condor' :
+                                   optionsData.analysisResult!.optimalNakedOptions ? 'single_option' : 'stock'}
+                          tooltipPlacement="left"
+                          companyName={optionsData.analysisResult!.companyName || ''}
+                          reportTime={optionsData.analysisResult!.reportTime || ''}
+                          earningsDate={optionsData.analysisResult!.earningsDate || ''}
+                        />
+                      </HStack>
+                    </Box>
+                  </Flex>
                 </CardHeader>
                 <CardBody>
                   <Grid templateColumns="repeat(2, 1fr)" gap={6}>
                     <GridItem>
                       <Stat>
                         <StatLabel>Current Price</StatLabel>
-                        <StatNumber>${optionsData.analysisResult.currentPrice.toFixed(2)}</StatNumber>
+                        <StatNumber>${optionsData.analysisResult!.currentPrice.toFixed(2)}</StatNumber>
                       </Stat>
                     </GridItem>
                     <GridItem>
                       <Stat>
                         <StatLabel>Expected Move</StatLabel>
-                        <StatNumber>{optionsData.analysisResult.expectedMove}</StatNumber>
+                        <StatNumber>{optionsData.analysisResult!.expectedMove}</StatNumber>
                         <StatHelpText>Based on ATM straddle</StatHelpText>
                       </Stat>
                     </GridItem>
@@ -257,49 +344,49 @@ const DirectSearch: React.FC = () => {
                   <Stack spacing={3}>
                     <Flex align="center">
                       <Icon
-                        as={optionsData.analysisResult.metrics.avgVolumePass === "true" ? FiCheckCircle : FiXCircle}
-                        color={optionsData.analysisResult.metrics.avgVolumePass === "true" ? 'green.500' : 'red.500'}
+                        as={optionsData.analysisResult!.metrics.avgVolumePass === "true" ? FiCheckCircle : FiXCircle}
+                        color={optionsData.analysisResult!.metrics.avgVolumePass === "true" ? 'green.500' : 'red.500'}
                         mr={2}
                       />
                       <Text fontWeight="medium">Average Volume:</Text>
-                      <Text ml={2}>{optionsData.analysisResult.metrics.avgVolume.toLocaleString()}</Text>
+                      <Text ml={2}>{optionsData.analysisResult!.metrics.avgVolume.toLocaleString()}</Text>
                       <Badge
                         ml={2}
-                        colorScheme={optionsData.analysisResult.metrics.avgVolumePass === "true" ? 'green' : 'red'}
+                        colorScheme={optionsData.analysisResult!.metrics.avgVolumePass === "true" ? 'green' : 'red'}
                       >
-                        {optionsData.analysisResult.metrics.avgVolumePass === "true" ? 'PASS' : 'FAIL'}
+                        {optionsData.analysisResult!.metrics.avgVolumePass === "true" ? 'PASS' : 'FAIL'}
                       </Badge>
                     </Flex>
                     
                     <Flex align="center">
                       <Icon
-                        as={optionsData.analysisResult.metrics.iv30Rv30Pass === "true" ? FiCheckCircle : FiXCircle}
-                        color={optionsData.analysisResult.metrics.iv30Rv30Pass === "true" ? 'green.500' : 'red.500'}
+                        as={optionsData.analysisResult!.metrics.iv30Rv30Pass === "true" ? FiCheckCircle : FiXCircle}
+                        color={optionsData.analysisResult!.metrics.iv30Rv30Pass === "true" ? 'green.500' : 'red.500'}
                         mr={2}
                       />
                       <Text fontWeight="medium">IV30/RV30 Ratio:</Text>
-                      <Text ml={2}>{optionsData.analysisResult.metrics.iv30Rv30.toFixed(2)}</Text>
+                      <Text ml={2}>{optionsData.analysisResult!.metrics.iv30Rv30.toFixed(2)}</Text>
                       <Badge
                         ml={2}
-                        colorScheme={optionsData.analysisResult.metrics.iv30Rv30Pass === "true" ? 'green' : 'red'}
+                        colorScheme={optionsData.analysisResult!.metrics.iv30Rv30Pass === "true" ? 'green' : 'red'}
                       >
-                        {optionsData.analysisResult.metrics.iv30Rv30Pass === "true" ? 'PASS' : 'FAIL'}
+                        {optionsData.analysisResult!.metrics.iv30Rv30Pass === "true" ? 'PASS' : 'FAIL'}
                       </Badge>
                     </Flex>
                     
                     <Flex align="center">
                       <Icon
-                        as={optionsData.analysisResult.metrics.tsSlopePass === "true" ? FiCheckCircle : FiXCircle}
-                        color={optionsData.analysisResult.metrics.tsSlopePass === "true" ? 'green.500' : 'red.500'}
+                        as={optionsData.analysisResult!.metrics.tsSlopePass === "true" ? FiCheckCircle : FiXCircle}
+                        color={optionsData.analysisResult!.metrics.tsSlopePass === "true" ? 'green.500' : 'red.500'}
                         mr={2}
                       />
                       <Text fontWeight="medium">Term Structure Slope:</Text>
-                      <Text ml={2}>{optionsData.analysisResult.metrics.tsSlope.toFixed(5)}</Text>
+                      <Text ml={2}>{optionsData.analysisResult!.metrics.tsSlope.toFixed(5)}</Text>
                       <Badge
                         ml={2}
-                        colorScheme={optionsData.analysisResult.metrics.tsSlopePass === "true" ? 'green' : 'red'}
+                        colorScheme={optionsData.analysisResult!.metrics.tsSlopePass === "true" ? 'green' : 'red'}
                       >
-                        {optionsData.analysisResult.metrics.tsSlopePass === "true" ? 'PASS' : 'FAIL'}
+                        {optionsData.analysisResult!.metrics.tsSlopePass === "true" ? 'PASS' : 'FAIL'}
                       </Badge>
                     </Flex>
                   </Stack>
@@ -307,19 +394,19 @@ const DirectSearch: React.FC = () => {
                   {/* Calendar Spread Section - Always show, with message if no viable spreads found */}
                   <Divider my={4} />
                   <Box mt={4}>
-                    {optionsData.analysisResult.optimalCalendarSpread ? (
+                    {optionsData.analysisResult!.optimalCalendarSpread ? (
                       <>
                         <CalendarSpreadDisplay
-                          ticker={optionsData.analysisResult.ticker}
-                          calendarSpread={optionsData.analysisResult.optimalCalendarSpread}
+                          ticker={optionsData.analysisResult!.ticker}
+                          calendarSpread={optionsData.analysisResult!.optimalCalendarSpread}
                           expectedMove={{
-                            percent: parseFloat(optionsData.analysisResult.expectedMove.replace('%', '')) / 100,
-                            dollars: parseFloat(optionsData.analysisResult.expectedMove.replace('%', '')) * optionsData.analysisResult.currentPrice / 100
+                            percent: parseFloat(optionsData.analysisResult!.expectedMove.replace('%', '')) / 100,
+                            dollars: parseFloat(optionsData.analysisResult!.expectedMove.replace('%', '')) * optionsData.analysisResult!.currentPrice / 100
                           }}
                           daysToExpiration={30} // Approximate, would be provided by backend in real implementation
                           compact={true}
                         />
-                        {optionsData.analysisResult.optimalCalendarSpread.metricsPass === "false" && (
+                        {optionsData.analysisResult!.optimalCalendarSpread.metricsPass === "false" && (
                           <Alert status="warning" mt={2} size="sm">
                             <AlertIcon />
                             <Text fontSize="sm">
@@ -347,7 +434,7 @@ const DirectSearch: React.FC = () => {
                           borderColor="brand.500"
                           pb={2}
                         >
-                          {optionsData.analysisResult.ticker} Calendar Spread Strategy
+                          {optionsData.analysisResult!.ticker} Calendar Spread Strategy
                         </Heading>
                         
                         <Divider mb={4} />
@@ -384,8 +471,8 @@ const DirectSearch: React.FC = () => {
                         p={1} // Add padding to ensure border is visible
                       >
                         <NakedOptionsDisplay
-                          ticker={optionsData.analysisResult.ticker}
-                          nakedOptions={optionsData.analysisResult.optimalNakedOptions || {
+                          ticker={optionsData.analysisResult!.ticker}
+                          nakedOptions={optionsData.analysisResult!.optimalNakedOptions || {
                             expectedMove: { percent: 0, dollars: 0 },
                             daysToExpiration: 0,
                             topOptions: []
@@ -408,8 +495,8 @@ const DirectSearch: React.FC = () => {
                         p={1} // Add padding to ensure border is visible
                       >
                         <IronCondorDisplay
-                          ticker={optionsData.analysisResult.ticker}
-                          ironCondors={optionsData.analysisResult.optimalIronCondors || {
+                          ticker={optionsData.analysisResult!.ticker}
+                          ironCondors={optionsData.analysisResult!.optimalIronCondors || {
                             expectedMove: { percent: 0, dollars: 0 },
                             daysToExpiration: 0,
                             topIronCondors: [],
@@ -442,7 +529,7 @@ const DirectSearch: React.FC = () => {
                 </Box>
                 <Box p={4}>
                   <EarningsHistoryChart
-                    ticker={optionsData.analysisResult.ticker}
+                    ticker={optionsData.analysisResult!.ticker}
                     years={7}
                   />
                 </Box>
@@ -453,7 +540,7 @@ const DirectSearch: React.FC = () => {
           {/* TradingView Chart */}
           <Box mt={8} mb={8}>
             <TradingViewWidget
-              symbol={optionsData.analysisResult.ticker}
+              symbol={optionsData.analysisResult!.ticker}
               height="1000px"
             />
           </Box>
