@@ -31,6 +31,7 @@ import {
   ReferenceLine
 } from 'recharts';
 import { getEarningsHistory } from '../services/optionsService';
+import { formatDisplayDate } from '../utils/dateUtils';
 
 interface EarningsHistoryChartProps {
   ticker: string;
@@ -72,12 +73,7 @@ const EarningsHistoryChart: React.FC<EarningsHistoryChartProps> = ({ ticker, yea
 
   // Format date for display
   const formatDate = (dateString: string): string => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { 
-      year: 'numeric', 
-      month: 'short', 
-      day: 'numeric' 
-    });
+    return formatDisplayDate(dateString);
   };
 
   // Format percentage for display

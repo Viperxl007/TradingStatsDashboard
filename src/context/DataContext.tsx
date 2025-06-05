@@ -6,14 +6,20 @@ import {
   DataState,
   FilterOptions,
   OptionsAnalysisResult,
-  EarningsCalendarItem
+  EarningsCalendarItem,
+  TradeTrackerState
 } from '../types';
-import { 
-  calculateAccountSummary, 
-  analyzeTokenPerformance, 
-  identifyTrendingTokens, 
+import {
+  AnyTradeEntry,
+  TradeFilterOptions,
+  TradeStatistics
+} from '../types/tradeTracker';
+import {
+  calculateAccountSummary,
+  analyzeTokenPerformance,
+  identifyTrendingTokens,
   identifyUnderperformingTokens,
-  filterTrades
+  filterTrades as filterTradesUtil
 } from '../services/dataProcessing';
 
 // Define action types
@@ -37,7 +43,31 @@ export enum ActionType {
   FETCH_EARNINGS_CALENDAR_START = 'FETCH_EARNINGS_CALENDAR_START',
   FETCH_EARNINGS_CALENDAR_SUCCESS = 'FETCH_EARNINGS_CALENDAR_SUCCESS',
   FETCH_EARNINGS_CALENDAR_ERROR = 'FETCH_EARNINGS_CALENDAR_ERROR',
-  CLEAR_OPTIONS_DATA = 'CLEAR_OPTIONS_DATA'
+  CLEAR_OPTIONS_DATA = 'CLEAR_OPTIONS_DATA',
+  
+  // Trade Tracker actions
+  LOAD_TRADES_START = 'LOAD_TRADES_START',
+  LOAD_TRADES_SUCCESS = 'LOAD_TRADES_SUCCESS',
+  LOAD_TRADES_ERROR = 'LOAD_TRADES_ERROR',
+  CREATE_TRADE_START = 'CREATE_TRADE_START',
+  CREATE_TRADE_SUCCESS = 'CREATE_TRADE_SUCCESS',
+  CREATE_TRADE_ERROR = 'CREATE_TRADE_ERROR',
+  UPDATE_TRADE_START = 'UPDATE_TRADE_START',
+  UPDATE_TRADE_SUCCESS = 'UPDATE_TRADE_SUCCESS',
+  UPDATE_TRADE_ERROR = 'UPDATE_TRADE_ERROR',
+  DELETE_TRADE_START = 'DELETE_TRADE_START',
+  DELETE_TRADE_SUCCESS = 'DELETE_TRADE_SUCCESS',
+  DELETE_TRADE_ERROR = 'DELETE_TRADE_ERROR',
+  FILTER_TRADES = 'FILTER_TRADES',
+  SELECT_TRADE = 'SELECT_TRADE',
+  CALCULATE_TRADE_STATISTICS = 'CALCULATE_TRADE_STATISTICS',
+  IMPORT_TRADES_START = 'IMPORT_TRADES_START',
+  IMPORT_TRADES_SUCCESS = 'IMPORT_TRADES_SUCCESS',
+  IMPORT_TRADES_ERROR = 'IMPORT_TRADES_ERROR',
+  EXPORT_TRADES_START = 'EXPORT_TRADES_START',
+  EXPORT_TRADES_SUCCESS = 'EXPORT_TRADES_SUCCESS',
+  EXPORT_TRADES_ERROR = 'EXPORT_TRADES_ERROR',
+  CLEAR_TRADE_TRACKER_DATA = 'CLEAR_TRADE_TRACKER_DATA'
 }
 
 // Define action interfaces
@@ -128,6 +158,114 @@ interface ClearOptionsDataAction {
   type: ActionType.CLEAR_OPTIONS_DATA;
 }
 
+// Trade Tracker action interfaces
+interface LoadTradesStartAction {
+  type: ActionType.LOAD_TRADES_START;
+}
+
+interface LoadTradesSuccessAction {
+  type: ActionType.LOAD_TRADES_SUCCESS;
+  payload: AnyTradeEntry[];
+}
+
+interface LoadTradesErrorAction {
+  type: ActionType.LOAD_TRADES_ERROR;
+  payload: string;
+}
+
+interface CreateTradeStartAction {
+  type: ActionType.CREATE_TRADE_START;
+  payload: AnyTradeEntry;
+}
+
+interface CreateTradeSuccessAction {
+  type: ActionType.CREATE_TRADE_SUCCESS;
+  payload: AnyTradeEntry;
+}
+
+interface CreateTradeErrorAction {
+  type: ActionType.CREATE_TRADE_ERROR;
+  payload: string;
+}
+
+interface UpdateTradeStartAction {
+  type: ActionType.UPDATE_TRADE_START;
+  payload: AnyTradeEntry;
+}
+
+interface UpdateTradeSuccessAction {
+  type: ActionType.UPDATE_TRADE_SUCCESS;
+  payload: AnyTradeEntry;
+}
+
+interface UpdateTradeErrorAction {
+  type: ActionType.UPDATE_TRADE_ERROR;
+  payload: string;
+}
+
+interface DeleteTradeStartAction {
+  type: ActionType.DELETE_TRADE_START;
+  payload: string; // trade ID
+}
+
+interface DeleteTradeSuccessAction {
+  type: ActionType.DELETE_TRADE_SUCCESS;
+  payload: string; // trade ID
+}
+
+interface DeleteTradeErrorAction {
+  type: ActionType.DELETE_TRADE_ERROR;
+  payload: string;
+}
+
+interface FilterTradesAction {
+  type: ActionType.FILTER_TRADES;
+  payload: TradeFilterOptions;
+}
+
+interface SelectTradeAction {
+  type: ActionType.SELECT_TRADE;
+  payload: string | null; // trade ID
+}
+
+interface CalculateTradeStatisticsAction {
+  type: ActionType.CALCULATE_TRADE_STATISTICS;
+  payload: TradeStatistics;
+}
+
+interface ImportTradesStartAction {
+  type: ActionType.IMPORT_TRADES_START;
+  payload: AnyTradeEntry[];
+}
+
+interface ImportTradesSuccessAction {
+  type: ActionType.IMPORT_TRADES_SUCCESS;
+  payload: number; // number of trades imported
+}
+
+interface ImportTradesErrorAction {
+  type: ActionType.IMPORT_TRADES_ERROR;
+  payload: string;
+}
+
+interface ExportTradesStartAction {
+  type: ActionType.EXPORT_TRADES_START;
+}
+
+interface ExportTradesSuccessAction {
+  type: ActionType.EXPORT_TRADES_SUCCESS;
+  payload: AnyTradeEntry[];
+}
+
+interface ExportTradesErrorAction {
+  type: ActionType.EXPORT_TRADES_ERROR;
+  payload: string;
+}
+
+interface ClearTradeTrackerDataAction {
+  type: ActionType.CLEAR_TRADE_TRACKER_DATA;
+}
+
 // Union of all action types
 type DataAction =
   | ImportDataStartAction
@@ -147,7 +285,30 @@ type DataAction =
   | FetchEarningsCalendarStartAction
   | FetchEarningsCalendarSuccessAction
   | FetchEarningsCalendarErrorAction
-  | ClearOptionsDataAction;
+  | ClearOptionsDataAction
+  // Trade Tracker actions
+  | LoadTradesStartAction
+  | LoadTradesSuccessAction
+  | LoadTradesErrorAction
+  | CreateTradeStartAction
+  | CreateTradeSuccessAction
+  | CreateTradeErrorAction
+  | UpdateTradeStartAction
+  | UpdateTradeSuccessAction
+  | UpdateTradeErrorAction
+  | DeleteTradeStartAction
+  | DeleteTradeSuccessAction
+  | DeleteTradeErrorAction
+  | FilterTradesAction
+  | SelectTradeAction
+  | CalculateTradeStatisticsAction
+  | ImportTradesStartAction
+  | ImportTradesSuccessAction
+  | ImportTradesErrorAction
+  | ExportTradesStartAction
+  | ExportTradesSuccessAction
+  | ExportTradesErrorAction
+  | ClearTradeTrackerDataAction;
 
 // Initial state
 const initialState: DataState = {
@@ -180,6 +341,57 @@ const initialState: DataState = {
     analysisResult: null,
     scanResults: [],
     earningsCalendar: [],
+    isLoading: false,
+    error: null
+  },
+  
+  // Trade Tracker data
+  tradeTrackerData: {
+    trades: [],
+    filteredTrades: [],
+    statistics: {
+      totalTrades: 0,
+      openTrades: 0,
+      closedTrades: 0,
+      winningTrades: 0,
+      losingTrades: 0,
+      winRate: 0,
+      totalProfit: 0,
+      totalLoss: 0,
+      netProfitLoss: 0,
+      averageProfit: 0,
+      averageLoss: 0,
+      largestProfit: 0,
+      largestLoss: 0,
+      profitFactor: 0,
+      expectancy: 0,
+      averageDuration: 0,
+      byStrategy: {
+        stock: { count: 0, winRate: 0, netProfitLoss: 0 },
+        single_option: { count: 0, winRate: 0, netProfitLoss: 0 },
+        vertical_spread: { count: 0, winRate: 0, netProfitLoss: 0 },
+        iron_condor: { count: 0, winRate: 0, netProfitLoss: 0 },
+        calendar_spread: { count: 0, winRate: 0, netProfitLoss: 0 },
+        diagonal_spread: { count: 0, winRate: 0, netProfitLoss: 0 },
+        covered_call: { count: 0, winRate: 0, netProfitLoss: 0 },
+        protective_put: { count: 0, winRate: 0, netProfitLoss: 0 },
+        straddle: { count: 0, winRate: 0, netProfitLoss: 0 },
+        strangle: { count: 0, winRate: 0, netProfitLoss: 0 },
+        butterfly: { count: 0, winRate: 0, netProfitLoss: 0 },
+        custom: { count: 0, winRate: 0, netProfitLoss: 0 }
+      },
+      byTicker: {}
+    },
+    filters: {
+      tickers: [],
+      dateRange: [null, null],
+      status: [],
+      strategies: [],
+      tags: [],
+      profitableOnly: false,
+      searchText: ''
+    },
+    selectedTradeId: null,
     isLoading: false,
     error: null
   },
@@ -249,7 +461,7 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
           : state.timeframe
       };
       
-      const filteredData = filterTrades(
+      const filteredData = filterTradesUtil(
         state.rawData,
         newFilters.selectedTokens,
         newFilters.dateRange,
@@ -390,6 +602,194 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
         }
       };
     
+    // Trade Tracker actions
+    case ActionType.LOAD_TRADES_START:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.LOAD_TRADES_SUCCESS:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          trades: action.payload,
+          filteredTrades: action.payload,
+          isLoading: false,
+          error: null
+        }
+      };
+    
+    case ActionType.LOAD_TRADES_ERROR:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.CREATE_TRADE_START:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.CREATE_TRADE_SUCCESS:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          trades: [...state.tradeTrackerData.trades, action.payload],
+          filteredTrades: [...state.tradeTrackerData.filteredTrades, action.payload],
+          isLoading: false,
+          error: null
+        }
+      };
+    
+    case ActionType.CREATE_TRADE_ERROR:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.UPDATE_TRADE_START:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.UPDATE_TRADE_SUCCESS: {
+      const updatedTrades = state.tradeTrackerData.trades.map(trade => 
+        trade.id === action.payload.id ? action.payload : trade
+      );
+      
+      const updatedFilteredTrades = state.tradeTrackerData.filteredTrades.map(trade => 
+        trade.id === action.payload.id ? action.payload : trade
+      );
+      
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          trades: updatedTrades,
+          filteredTrades: updatedFilteredTrades,
+          isLoading: false,
+          error: null
+        }
+      };
+    }
+    
+    case ActionType.UPDATE_TRADE_ERROR:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.DELETE_TRADE_START:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: true,
+          error: null
+        }
+      };
+    
+    case ActionType.DELETE_TRADE_SUCCESS: {
+      const filteredTrades = state.tradeTrackerData.trades.filter(trade => 
+        trade.id !== action.payload
+      );
+      
+      const filteredFilteredTrades = state.tradeTrackerData.filteredTrades.filter(trade => 
+        trade.id !== action.payload
+      );
+      
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          trades: filteredTrades,
+          filteredTrades: filteredFilteredTrades,
+          selectedTradeId: state.tradeTrackerData.selectedTradeId === action.payload ? null : state.tradeTrackerData.selectedTradeId,
+          isLoading: false,
+          error: null
+        }
+      };
+    }
+    
+    case ActionType.DELETE_TRADE_ERROR:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          isLoading: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.FILTER_TRADES: {
+      const filters = action.payload;
+      
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          filters,
+          isLoading: false,
+          error: null
+        }
+      };
+    }
+    
+    case ActionType.SELECT_TRADE:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          selectedTradeId: action.payload
+        }
+      };
+    
+    case ActionType.CALCULATE_TRADE_STATISTICS:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...state.tradeTrackerData,
+          statistics: action.payload
+        }
+      };
+    
+    case ActionType.CLEAR_TRADE_TRACKER_DATA:
+      return {
+        ...state,
+        tradeTrackerData: {
+          ...initialState.tradeTrackerData
+        }
+      };
+    
     default:
       return state;
   }
@@ -510,4 +910,83 @@ export const fetchEarningsCalendarError = (error: string): FetchEarningsCalendar
 
 export const clearOptionsData = (): ClearOptionsDataAction => ({
   type: ActionType.CLEAR_OPTIONS_DATA
+});
+
+// Trade Tracker action creators
+export const loadTradesStart = (): LoadTradesStartAction => ({
+  type: ActionType.LOAD_TRADES_START
+});
+
+export const loadTradesSuccess = (trades: AnyTradeEntry[]): LoadTradesSuccessAction => ({
+  type: ActionType.LOAD_TRADES_SUCCESS,
+  payload: trades
+});
+
+export const loadTradesError = (error: string): LoadTradesErrorAction => ({
+  type: ActionType.LOAD_TRADES_ERROR,
+  payload: error
+});
+
+export const createTradeStart = (trade: AnyTradeEntry): CreateTradeStartAction => ({
+  type: ActionType.CREATE_TRADE_START,
+  payload: trade
+});
+
+export const createTradeSuccess = (trade: AnyTradeEntry): CreateTradeSuccessAction => ({
+  type: ActionType.CREATE_TRADE_SUCCESS,
+  payload: trade
+});
+
+export const createTradeError = (error: string): CreateTradeErrorAction => ({
+  type: ActionType.CREATE_TRADE_ERROR,
+  payload: error
+});
+
+export const updateTradeStart = (trade: AnyTradeEntry): UpdateTradeStartAction => ({
+  type: ActionType.UPDATE_TRADE_START,
+  payload: trade
+});
+
+export const updateTradeSuccess = (trade: AnyTradeEntry): UpdateTradeSuccessAction => ({
+  type: ActionType.UPDATE_TRADE_SUCCESS,
+  payload: trade
+});
+
+export const updateTradeError = (error: string): UpdateTradeErrorAction => ({
+  type: ActionType.UPDATE_TRADE_ERROR,
+  payload: error
+});
+
+export const deleteTradeStart = (id: string): DeleteTradeStartAction => ({
+  type: ActionType.DELETE_TRADE_START,
+  payload: id
+});
+
+export const deleteTradeSuccess = (id: string): DeleteTradeSuccessAction => ({
+  type: ActionType.DELETE_TRADE_SUCCESS,
+  payload: id
+});
+
+export const deleteTradeError = (error: string): DeleteTradeErrorAction => ({
+  type: ActionType.DELETE_TRADE_ERROR,
+  payload: error
+});
+
+export const filterTradesAction = (filters: TradeFilterOptions): FilterTradesAction => ({
+  type: ActionType.FILTER_TRADES,
+  payload: filters
+});
+
+export const selectTrade = (id: string | null): SelectTradeAction => ({
+  type: ActionType.SELECT_TRADE,
+  payload: id
+});
+
+export const calculateTradeStatistics = (statistics: TradeStatistics): CalculateTradeStatisticsAction => ({
+  type: ActionType.CALCULATE_TRADE_STATISTICS,
+  payload: statistics
+});
+
+export const clearTradeTrackerData = (): ClearTradeTrackerDataAction => ({
+  type: ActionType.CLEAR_TRADE_TRACKER_DATA
 });

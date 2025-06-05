@@ -1,3 +1,9 @@
+import {
+  AnyTradeEntry,
+  TradeFilterOptions,
+  TradeStatistics
+} from './tradeTracker';
+
 /**
  * Trade data model representing an individual trade
  */
@@ -213,6 +219,7 @@ export interface OptionsAnalysisResult {
   expectedMove: string;          // Expected move percentage
   recommendation: 'Recommended' | 'Consider' | 'Avoid' | 'FILTERED OUT'; // Analysis recommendation
   reportTime?: 'BMO' | 'AMC' | 'DMH'; // Earnings report time (optional)
+  earningsDate?: string;         // Earnings date (optional)
   timestamp: number;             // Timestamp of the analysis
   error?: string;                // Error message if analysis failed
   strategyAvailability?: StrategyAvailability; // Strategy availability information
@@ -264,11 +271,27 @@ export interface DataState {
   // Options Data
   optionsData: OptionsDataState; // Options earnings screener data
   
+  // Trade Tracker Data
+  tradeTrackerData: TradeTrackerState; // Trade Tracker state
+  
   // UI State
   isLoading: boolean;            // Loading state for async operations
   error: string | null;          // Error message if any
   activeTab: string;             // Currently active dashboard tab
   isDarkMode: boolean;           // Dark mode toggle state
+}
+
+/**
+ * Trade Tracker state
+ */
+export interface TradeTrackerState {
+  trades: AnyTradeEntry[];       // All trade entries
+  filteredTrades: AnyTradeEntry[]; // Filtered trade entries
+  statistics: TradeStatistics;   // Trade statistics
+  filters: TradeFilterOptions;   // Current filter options
+  selectedTradeId: string | null; // Currently selected trade
+  isLoading: boolean;            // Loading state for async operations
+  error: string | null;          // Error message if any
 }
 
 /**

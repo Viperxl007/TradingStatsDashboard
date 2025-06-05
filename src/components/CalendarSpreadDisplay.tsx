@@ -19,6 +19,7 @@ import { OptimalCalendarSpread } from '../types';
 import ScoreThermometer from './ScoreThermometer';
 import LiquidityThermometer from './LiquidityThermometer';
 import { FiInfo } from 'react-icons/fi';
+import { parseLocalDate, formatShortDate, daysBetween } from '../utils/dateUtils';
 
 interface CalendarSpreadDisplayProps {
   ticker: string;
@@ -65,10 +66,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
   
   // Calculate days between expirations
   const daysBetweenExpirations = () => {
-    const frontDate = new Date(calendarSpread.frontMonth);
-    const backDate = new Date(calendarSpread.backMonth);
-    const diffTime = Math.abs(backDate.getTime() - frontDate.getTime());
-    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return daysBetween(calendarSpread.frontMonth, calendarSpread.backMonth);
   };
   
   // Use the estimated max profit from the backend or calculate it as fallback
@@ -221,14 +219,14 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Front Month</Text>
-            <Text fontSize="lg" fontWeight="bold">{new Date(calendarSpread.frontMonth).toLocaleDateString()}</Text>
+            <Text fontSize="lg" fontWeight="bold">{formatShortDate(calendarSpread.frontMonth)}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(frontMonthIV * 100).toFixed(2)}%</Text>
             <Text fontSize="sm">Short {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Back Month</Text>
-            <Text fontSize="lg" fontWeight="bold">{new Date(calendarSpread.backMonth).toLocaleDateString()}</Text>
+            <Text fontSize="lg" fontWeight="bold">{formatShortDate(calendarSpread.backMonth)}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(backMonthIV * 100).toFixed(2)}%</Text>
             <Text fontSize="sm">Long {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>

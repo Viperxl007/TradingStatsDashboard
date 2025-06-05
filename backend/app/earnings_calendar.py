@@ -35,15 +35,22 @@ def get_earnings_today():
         list: List of dictionaries containing earnings data
     """
     try:
+        # Always try finance_calendars first for accurate BMO/AMC timing
         if fc_available:
             try:
                 earnings = fc.get_earnings_today()
-                return format_earnings_data(earnings)
+                # Handle pandas DataFrame from finance_calendars
+                if hasattr(earnings, 'columns'):
+                    logger.info(f"Using finance_calendars for earnings data: {len(earnings)} companies")
+                    return handle_pandas_dataframe(earnings, datetime.now().strftime('%Y-%m-%d'))
+                else:
+                    return format_earnings_data(earnings)
             except Exception as e:
-                logger.warning(f"Error using finance_calendars: {str(e)}. Falling back to yfinance.")
-        
-        # Fallback to market data provider
-        return market_data.get_earnings_calendar()
+                logger.warning(f"Error using finance_calendars: {str(e)}. No fallback available for earnings calendar.")
+                return []
+        else:
+            logger.warning("finance_calendars not available. No earnings calendar data available.")
+            return []
     except Exception as e:
         logger.error(f"Error fetching today's earnings: {str(e)}")
         return []
@@ -62,15 +69,22 @@ def get_earnings_by_date(date=None):
         if date is None:
             date = datetime.now()
             
+        # Always try finance_calendars first for accurate BMO/AMC timing
         if fc_available:
             try:
                 earnings = fc.get_earnings_by_date(date)
-                return format_earnings_data(earnings)
+                # Handle pandas DataFrame from finance_calendars
+                if hasattr(earnings, 'columns'):
+                    logger.info(f"Using finance_calendars for earnings data on {date.strftime('%Y-%m-%d')}: {len(earnings)} companies")
+                    return handle_pandas_dataframe(earnings, date.strftime('%Y-%m-%d'))
+                else:
+                    return format_earnings_data(earnings)
             except Exception as e:
-                logger.warning(f"Error using finance_calendars: {str(e)}. Falling back to yfinance.")
-        
-        # Fallback to market data provider
-        return market_data.get_earnings_calendar(date)
+                logger.warning(f"Error using finance_calendars: {str(e)}. No fallback available for earnings calendar.")
+                return []
+        else:
+            logger.warning("finance_calendars not available. No earnings calendar data available.")
+            return []
     except Exception as e:
         logger.error(f"Error fetching earnings for {date.strftime('%Y-%m-%d')}: {str(e)}")
         return []
@@ -238,12 +252,14 @@ def handle_pandas_dataframe(df, date_str):
             # Handle finance_calendars specific format
             if has_finance_calendars_format and 'time' in row:
                 time_val = str(row['time']).lower()
-                if 'bmo' in time_val or 'before' in time_val or 'morning' in time_val:
+                if 'pre-market' in time_val or 'bmo' in time_val or 'before' in time_val or 'morning' in time_val:
                     report_time = 'BMO'
-                elif 'amc' in time_val or 'after' in time_val or 'evening' in time_val:
+                elif 'after-hours' in time_val or 'amc' in time_val or 'after' in time_val or 'evening' in time_val:
                     report_time = 'AMC'
+                elif 'not-supplied' in time_val:
+                    report_time = 'AMC'  # Default when time not specified
                 # Log the time value for debugging
-                logger.info(f"Time value: {time_val}, interpreted as: {report_time}")
+                logger.info(f"Ticker: {ticker}, Time value: '{time_val}', interpreted as: {report_time}")
             else:
                 # Try standard column names
                 if 'Call Time' in row:
@@ -428,95 +444,4 @@ def get_earnings_calendar(date_str=None):
         logger.error(f"Error fetching earnings calendar: {str(e)}")
         raise Exception(f"Error fetching earnings calendar: {str(e)}")
 
-def generate_sample_earnings(date_str):
-    """
-    Generate sample earnings data for a specific date.
-    
-    Args:
-        date_str (str): Date in YYYY-MM-DD format
-        
-    Returns:
-        list: List of sample earnings calendar items
-    """
-    # Generate different sample data based on the date to make it more realistic
-    date_obj = datetime.strptime(date_str, '%Y-%m-%d')
-    day_of_week = date_obj.weekday()  # 0 = Monday, 6 = Sunday
-    month = date_obj.month
-    day = date_obj.day
-    
-    # Use a combination of day of week, month, and day to generate varied data
-    # This ensures different dates show different companies
-    seed = day_of_week + month * 10 + day
-    
-    # List of actual companies with their real sectors
-    all_companies = [
-        {"ticker": "AAPL", "name": "Apple Inc.", "sector": "Technology", "eps": 1.52},
-        {"ticker": "MSFT", "name": "Microsoft Corporation", "sector": "Technology", "eps": 2.35},
-        {"ticker": "AMZN", "name": "Amazon.com Inc.", "sector": "Consumer Cyclical", "eps": 0.83},
-        {"ticker": "GOOGL", "name": "Alphabet Inc.", "sector": "Communication Services", "eps": 1.89},
-        {"ticker": "META", "name": "Meta Platforms, Inc.", "sector": "Communication Services", "eps": 4.71},
-        {"ticker": "TSLA", "name": "Tesla, Inc.", "sector": "Consumer Cyclical", "eps": 0.73},
-        {"ticker": "NVDA", "name": "NVIDIA Corporation", "sector": "Technology", "eps": 5.16},
-        {"ticker": "JPM", "name": "JPMorgan Chase & Co.", "sector": "Financial Services", "eps": 3.41},
-        {"ticker": "V", "name": "Visa Inc.", "sector": "Financial Services", "eps": 2.37},
-        {"ticker": "WMT", "name": "Walmart Inc.", "sector": "Consumer Defensive", "eps": 0.62},
-        {"ticker": "PG", "name": "Procter & Gamble Company", "sector": "Consumer Defensive", "eps": 1.83},
-        {"ticker": "DIS", "name": "The Walt Disney Company", "sector": "Communication Services", "eps": 1.21},
-        {"ticker": "NFLX", "name": "Netflix, Inc.", "sector": "Communication Services", "eps": 4.52},
-        {"ticker": "INTC", "name": "Intel Corporation", "sector": "Technology", "eps": 0.13},
-        {"ticker": "AMD", "name": "Advanced Micro Devices, Inc.", "sector": "Technology", "eps": 0.68},
-        {"ticker": "CSCO", "name": "Cisco Systems, Inc.", "sector": "Technology", "eps": 0.87},
-        {"ticker": "ADBE", "name": "Adobe Inc.", "sector": "Technology", "eps": 4.13},
-        {"ticker": "CRM", "name": "Salesforce, Inc.", "sector": "Technology", "eps": 2.26},
-        {"ticker": "PYPL", "name": "PayPal Holdings, Inc.", "sector": "Financial Services", "eps": 1.18},
-        {"ticker": "COST", "name": "Costco Wholesale Corporation", "sector": "Consumer Defensive", "eps": 3.92},
-        {"ticker": "MCD", "name": "McDonald's Corporation", "sector": "Consumer Cyclical", "eps": 2.82},
-        {"ticker": "NKE", "name": "NIKE, Inc.", "sector": "Consumer Cyclical", "eps": 0.98},
-        {"ticker": "BA", "name": "The Boeing Company", "sector": "Industrials", "eps": -1.15},
-        {"ticker": "GS", "name": "The Goldman Sachs Group, Inc.", "sector": "Financial Services", "eps": 8.79},
-        {"ticker": "IBM", "name": "International Business Machines", "sector": "Technology", "eps": 1.63},
-        {"ticker": "T", "name": "AT&T Inc.", "sector": "Communication Services", "eps": 0.57},
-        {"ticker": "VZ", "name": "Verizon Communications Inc.", "sector": "Communication Services", "eps": 1.15},
-        {"ticker": "CAT", "name": "Caterpillar Inc.", "sector": "Industrials", "eps": 5.12},
-        {"ticker": "CVX", "name": "Chevron Corporation", "sector": "Energy", "eps": 3.45},
-        {"ticker": "XOM", "name": "Exxon Mobil Corporation", "sector": "Energy", "eps": 2.14},
-        {"ticker": "PFE", "name": "Pfizer Inc.", "sector": "Healthcare", "eps": 0.47},
-        {"ticker": "JNJ", "name": "Johnson & Johnson", "sector": "Healthcare", "eps": 2.31},
-        {"ticker": "UNH", "name": "UnitedHealth Group Incorporated", "sector": "Healthcare", "eps": 6.57},
-        {"ticker": "HD", "name": "The Home Depot, Inc.", "sector": "Consumer Cyclical", "eps": 3.81},
-        {"ticker": "BAC", "name": "Bank of America Corporation", "sector": "Financial Services", "eps": 0.78},
-        {"ticker": "MA", "name": "Mastercard Incorporated", "sector": "Financial Services", "eps": 3.07},
-        {"ticker": "KO", "name": "The Coca-Cola Company", "sector": "Consumer Defensive", "eps": 0.49},
-        {"ticker": "PEP", "name": "PepsiCo, Inc.", "sector": "Consumer Defensive", "eps": 2.15},
-        {"ticker": "ABBV", "name": "AbbVie Inc.", "sector": "Healthcare", "eps": 2.91},
-        {"ticker": "MRK", "name": "Merck & Co., Inc.", "sector": "Healthcare", "eps": 1.83}
-    ]
-    
-    # Select companies based on the seed
-    # This ensures different dates show different companies
-    random.seed(seed)
-    
-    # Shuffle the companies list
-    shuffled_companies = all_companies.copy()
-    random.shuffle(shuffled_companies)
-    
-    # Select 5-8 companies based on the seed
-    num_companies = (seed % 4) + 5  # 5 to 8 companies
-    selected_companies = shuffled_companies[:num_companies]
-    
-    # Create the earnings data
-    result = []
-    for company in selected_companies:
-        # Alternate between BMO and AMC
-        report_time = "BMO" if len(result) % 2 == 0 else "AMC"
-        
-        result.append({
-            "ticker": company["ticker"],
-            "companyName": company["name"],
-            "reportTime": report_time,
-            "date": date_str,
-            "estimatedEPS": company["eps"],
-            "actualEPS": None
-        })
-    
-    return result
+# REMOVED: generate_sample_earnings function - we should never use fake data in production

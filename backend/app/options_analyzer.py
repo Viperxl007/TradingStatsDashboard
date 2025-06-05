@@ -141,6 +141,136 @@ def get_strikes_near_price(stock, expiration, current_price, range_percent=15):
         return []
 
 
+def get_atm_strikes_for_earnings(stock, expiration, current_price):
+    """
+    Get ATM strikes specifically for earnings calendar spreads.
+    Returns only the strikes closest to current price (ATM).
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        expiration (str): Option expiration date in YYYY-MM-DD format
+        current_price (float): Current stock price
+        
+    Returns:
+        list: List of ATM strike prices (typically 1-2 strikes)
+    """
+    try:
+        chain = stock.option_chain(expiration)
+        calls = chain.calls
+        
+        if calls.empty:
+            return []
+        
+        # Get all available strikes
+        strikes = sorted(calls['strike'].unique())
+        
+        if not strikes:
+            return []
+        
+        # Find the strike closest to current price (true ATM)
+        atm_strike = min(strikes, key=lambda x: abs(x - current_price))
+        
+        # For earnings trades, we want ONLY the ATM strike
+        # But we'll include the strike immediately above and below if they're very close
+        atm_strikes = [atm_strike]
+        
+        # Find strikes immediately above and below ATM
+        atm_index = strikes.index(atm_strike)
+        
+        # Add the strike below if it exists and is within 2% of current price
+        if atm_index > 0:
+            strike_below = strikes[atm_index - 1]
+            if abs(strike_below - current_price) / current_price <= 0.02:
+                atm_strikes.append(strike_below)
+        
+        # Add the strike above if it exists and is within 2% of current price
+        if atm_index < len(strikes) - 1:
+            strike_above = strikes[atm_index + 1]
+            if abs(strike_above - current_price) / current_price <= 0.02:
+                atm_strikes.append(strike_above)
+        
+        # Sort strikes and return unique values
+        atm_strikes = sorted(list(set(atm_strikes)))
+        
+        logger.info(f"ATM strikes for earnings trade at price ${current_price}: {atm_strikes}")
+        return atm_strikes
+        
+    except Exception as e:
+        logger.error(f"Error getting ATM strikes for earnings: {str(e)}")
+        return []
+
+
+def get_next_earnings_date(ticker):
+    """
+    Get the next earnings date for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        str or None: Next earnings date in YYYY-MM-DD format, or None if not found
+    """
+    try:
+        from app.data_fetcher import get_stock_data
+        
+        stock = get_stock_data(ticker)
+        if not stock:
+            return None
+        
+        # Try to get earnings calendar from yfinance
+        try:
+            earnings_calendar = stock.calendar
+            if earnings_calendar is not None and isinstance(earnings_calendar, dict) and 'Earnings Date' in earnings_calendar:
+                next_earnings_date = earnings_calendar['Earnings Date']
+                if hasattr(next_earnings_date, 'strftime'):
+                    return next_earnings_date.strftime('%Y-%m-%d')
+                elif isinstance(next_earnings_date, str):
+                    return next_earnings_date
+        except Exception as e:
+            logger.debug(f"Could not get earnings calendar for {ticker}: {str(e)}")
+        
+        # Fallback: try to get from market data provider
+        try:
+            from app.market_data import MarketDataProvider
+            provider = MarketDataProvider.get_provider()
+            start_date = datetime.now()
+            earnings_dates = provider.get_historical_earnings_dates(ticker, start_date)
+            
+            if earnings_dates:
+                # Return the first future earnings date
+                today = datetime.now().date()
+                for date_str in sorted(earnings_dates):
+                    earnings_date = datetime.strptime(date_str, '%Y-%m-%d').date()
+                    if earnings_date >= today:
+                        return date_str
+        except Exception as e:
+            logger.debug(f"Could not get earnings dates from market data for {ticker}: {str(e)}")
+        
+        # Additional fallback: try to get earnings history from yfinance
+        try:
+            earnings_history = stock.earnings_history
+            if earnings_history is not None and not earnings_history.empty:
+                # Get the most recent earnings date and estimate next one
+                last_earnings = earnings_history.index[-1]
+                if hasattr(last_earnings, 'strftime'):
+                    last_date = last_earnings.date()
+                    # Estimate next earnings (roughly 90 days later)
+                    estimated_next = last_date + timedelta(days=90)
+                    today = datetime.now().date()
+                    if estimated_next >= today:
+                        logger.debug(f"Estimated next earnings date for {ticker}: {estimated_next.strftime('%Y-%m-%d')}")
+                        return estimated_next.strftime('%Y-%m-%d')
+        except Exception as e:
+            logger.debug(f"Could not get earnings history for {ticker}: {str(e)}")
+        
+        logger.debug(f"No earnings date found for {ticker}")
+        return None
+        
+    except Exception as e:
+        logger.error(f"Error getting next earnings date for {ticker}: {str(e)}")
+        return None
+
+
 def get_atm_iv(stock, expiration, strike):
     """
     Get at-the-money implied volatility for a specific expiration and strike.
@@ -811,15 +941,16 @@ def calculate_spread_score(iv_differential, spread_cost, front_liquidity, back_l
             'iv_quality': iv_quality
         }
 
-def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], all_metrics_pass=False, run_full_analysis=False):
+def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], all_metrics_pass=False, run_full_analysis=False, earnings_date=None):
     """
-    Find the optimal calendar spread for a given ticker.
+    Find the optimal calendar spread for a given ticker, optimized for earnings trades.
     
     Args:
         ticker (str): Stock ticker symbol
         back_month_exp_options (list): List of days out to consider for back month expiration
         all_metrics_pass (bool): Whether all metrics pass thresholds
         run_full_analysis (bool): Whether to run full analysis with more simulations (5,000 vs 500)
+        earnings_date (str, optional): Earnings date in YYYY-MM-DD format. If not provided, will attempt to fetch it.
         
     Returns:
         dict or None: Details of the optimal calendar spread, or None if no worthwhile spread is found
@@ -869,9 +1000,46 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
         
         logger.info(f"{ticker} front month: {front_month}, days to expiration: {days_to_front_expiration}")
         
+        # Get earnings date if not provided
+        if earnings_date is None:
+            earnings_date = get_next_earnings_date(ticker)
+            if earnings_date:
+                logger.info(f"{ticker} next earnings date: {earnings_date}")
+            else:
+                logger.info(f"{ticker} no earnings date found, proceeding with standard analysis")
+        
+        # Check if we need to evaluate additional front month expirations for earnings trades
+        front_month_expirations = [front_month]
+        
+        if earnings_date:
+            try:
+                earnings_date_obj = datetime.strptime(earnings_date, "%Y-%m-%d").date()
+                days_to_earnings = (earnings_date_obj - today).days
+                
+                # If front month expiration is within 3 days of earnings, also evaluate N+1 expiration
+                if abs(days_to_front_expiration - days_to_earnings) <= 3:
+                    logger.info(f"{ticker} front month expiration ({front_month}) is within 3 days of earnings ({earnings_date})")
+                    
+                    # Find the next expiration (N+1)
+                    if len(future_dates) > 1:
+                        next_front_month_date = future_dates[1]
+                        next_front_month = next_front_month_date.strftime("%Y-%m-%d")
+                        front_month_expirations.append(next_front_month)
+                        logger.info(f"{ticker} also evaluating N+1 expiration: {next_front_month}")
+                    
+            except Exception as e:
+                logger.warning(f"Error processing earnings date for {ticker}: {str(e)}")
+        
+        logger.info(f"{ticker} evaluating front month expirations: {front_month_expirations}")
+        
         # Define a function to evaluate a single spread combination
         def evaluate_spread(params):
-            days_out, strike, option_type = params
+            if len(params) == 4:
+                days_out, strike, option_type, front_exp = params
+            else:
+                # Backward compatibility
+                days_out, strike, option_type = params
+                front_exp = front_month
             
             # Reject strikes far from current price
             if abs(strike - current_price) / current_price > 0.30:
@@ -884,13 +1052,15 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
             back_month = find_closest_expiration(exp_dates, target_date)
             back_month_date = datetime.strptime(back_month, "%Y-%m-%d").date()
             
-            # Calculate days between expirations
-            days_between_expirations = (back_month_date - front_month_date).days
+            # Calculate days between expirations using the specific front expiration
+            front_exp_date = datetime.strptime(front_exp, "%Y-%m-%d").date()
+            days_between_expirations = (back_month_date - front_exp_date).days
+            days_to_front_expiration_specific = (front_exp_date - today).days
             
             # Calculate key metrics for this potential spread
             try:
-                logger.debug(f"DIAGNOSTIC: Retrieving front month IV for {ticker} {option_type} strike ${strike}, expiration {front_month}")
-                front_iv = get_atm_iv(stock, front_month, strike)
+                logger.debug(f"DIAGNOSTIC: Retrieving front month IV for {ticker} {option_type} strike ${strike}, expiration {front_exp}")
+                front_iv = get_atm_iv(stock, front_exp, strike)
                 
                 logger.debug(f"DIAGNOSTIC: Retrieving back month IV for {ticker} {option_type} strike ${strike}, expiration {back_month}")
                 back_iv = get_atm_iv(stock, back_month, strike)
@@ -905,7 +1075,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 # Add detailed diagnostics for missing IV data
                 try:
                     # Check front month data
-                    front_chain = stock.option_chain(front_month)
+                    front_chain = stock.option_chain(front_exp)
                     front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
                     front_at_strike = front_options[front_options['strike'] == strike]
                     
@@ -948,7 +1118,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 return None
             
             # Get pricing information
-            spread_cost = calculate_spread_cost(stock, front_month, back_month, strike, option_type)
+            spread_cost = calculate_spread_cost(stock, front_exp, back_month, strike, option_type)
             
             # Skip if spread cost is invalid
             if spread_cost <= 0:
@@ -957,7 +1127,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
             
             # Get option details for more accurate calculations
             try:
-                front_chain = stock.option_chain(front_month)
+                front_chain = stock.option_chain(front_exp)
                 back_chain = stock.option_chain(back_month)
                 
                 front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
@@ -980,7 +1150,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                     front_option,
                     back_option,
                     current_price,
-                    days_to_front_expiration,
+                    days_to_front_expiration_specific,
                     days_between_expirations
                 )
                 
@@ -995,7 +1165,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 iv_crush_model = model_iv_crush_earnings(
                     front_iv,
                     back_iv,
-                    days_to_front_expiration,
+                    days_to_front_expiration_specific,
                     ticker
                 )
                 
@@ -1006,7 +1176,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                     front_option,
                     back_option,
                     current_price,
-                    days_to_front_expiration,
+                    days_to_front_expiration_specific,
                     days_between_expirations,
                     num_simulations=num_simulations
                 )
@@ -1029,7 +1199,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 monte_carlo_results = None
             
             # Calculate liquidity metrics
-            front_liquidity = get_liquidity_score(stock, front_month, strike, option_type)
+            front_liquidity = get_liquidity_score(stock, front_exp, strike, option_type)
             back_liquidity = get_liquidity_score(stock, back_month, strike, option_type)
             
             # Calculate combined liquidity score for the calendar spread
@@ -1058,7 +1228,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 back_liquidity['score'],
                 strike_distance_from_atm=abs(strike - current_price),
                 days_between_expirations=days_between_expirations,
-                days_to_front_expiration=days_to_front_expiration,
+                days_to_front_expiration=days_to_front_expiration_specific,
                 monte_carlo_results=monte_carlo_results,  # Pass Monte Carlo results
                 spread_impact=combined_liquidity['spread_impact']  # Pass spread impact
             )
@@ -1085,7 +1255,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 'score': float(score),
                 'spread': {
                     'strike': float(strike),
-                    'frontMonth': front_month,
+                    'frontMonth': front_exp,
                     'backMonth': back_month,
                     'spreadCost': float(spread_cost),
                     'ivDifferential': float(iv_differential),
@@ -1096,7 +1266,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                     'backLiquidity': back_liquidity,
                     'combinedLiquidity': combined_liquidity,
                     'daysBetweenExpirations': days_between_expirations,
-                    'daysToFrontExpiration': days_to_front_expiration,
+                    'daysToFrontExpiration': days_to_front_expiration_specific,
                     'score': float(score),
                     'optionType': option_type,
                     'realisticReturnOnRisk': float(return_on_risk),
@@ -1105,7 +1275,10 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                     # Add these new fields for the frontend:
                     'estimatedMaxProfit': float(est_max_profit),
                     'returnOnRisk': float(return_on_risk),
-                    'enhancedProbability': float(monte_carlo_results['probability_of_profit'] if monte_carlo_results else probability)
+                    'enhancedProbability': float(monte_carlo_results['probability_of_profit'] if monte_carlo_results else probability),
+                    # Add earnings-specific information
+                    'earningsDate': earnings_date,
+                    'isEarningsTrade': earnings_date is not None
                 }
             }
             
@@ -1140,23 +1313,31 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
             
             return result
         
-        # Get strikes near current price (using wider range)
-        strikes = get_strikes_near_price(stock, front_month, current_price, range_percent=15)
-        logger.info(f"{ticker} considering {len(strikes)} strikes near price: {strikes}")
-        
-        # Create a list of all combinations to evaluate - use puts for strikes below current price and calls for strikes above
+        # Create a list of all combinations to evaluate
         combinations = []
-        for days_out in back_month_exp_options:
-            for strike in strikes:
-                # Determine option type based on strike price relative to current price
-                if strike < current_price:
-                    option_type = 'put'
-                    logger.info(f"{ticker} strike ${strike} < current price ${current_price}: Using PUT calendar spread")
-                    combinations.append((days_out, strike, option_type))
-                else:
-                    option_type = 'call'
-                    logger.info(f"{ticker} strike ${strike} >= current price ${current_price}: Using CALL calendar spread")
-                    combinations.append((days_out, strike, option_type))
+        
+        # For each front month expiration, get appropriate strikes
+        for front_exp in front_month_expirations:
+            # Always use ATM strikes for calendar spreads (earnings-optimized approach)
+            # This focuses on the most efficient strikes regardless of whether we found an earnings date
+            strikes = get_atm_strikes_for_earnings(stock, front_exp, current_price)
+            if earnings_date:
+                logger.info(f"{ticker} using ATM strikes for confirmed earnings trade on {front_exp}: {strikes}")
+            else:
+                logger.info(f"{ticker} using ATM strikes for calendar spread on {front_exp}: {strikes}")
+            
+            # Create combinations for each back month option
+            for days_out in back_month_exp_options:
+                for strike in strikes:
+                    # Determine option type based on strike price relative to current price
+                    if strike < current_price:
+                        option_type = 'put'
+                        logger.info(f"{ticker} strike ${strike} < current price ${current_price}: Using PUT calendar spread")
+                        combinations.append((days_out, strike, option_type, front_exp))
+                    else:
+                        option_type = 'call'
+                        logger.info(f"{ticker} strike ${strike} >= current price ${current_price}: Using CALL calendar spread")
+                        combinations.append((days_out, strike, option_type, front_exp))
         
         # Process combinations sequentially to avoid race conditions
         best_spread = None
@@ -1166,14 +1347,18 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
         
         # Process each combination sequentially
         for combo in combinations:
-            days_out, strike, option_type = combo
+            if len(combo) == 4:
+                days_out, strike, option_type, front_exp = combo
+            else:
+                days_out, strike, option_type = combo
+                front_exp = front_month
             try:
-                logger.debug(f"DIAGNOSTIC: Evaluating {ticker} {option_type} strike ${strike}, days out {days_out}")
+                logger.debug(f"DIAGNOSTIC: Evaluating {ticker} {option_type} strike ${strike}, days out {days_out}, front exp {front_exp}")
                 result = evaluate_spread(combo)
                 if result and result['score'] > best_score:
                     best_score = result['score']
                     best_spread = result['spread']
-                    logger.info(f"{ticker} {option_type} strike ${strike}, days out {days_out}: New best score: {best_score}")
+                    logger.info(f"{ticker} {option_type} strike ${strike}, days out {days_out}, front exp {front_exp}: New best score: {best_score}")
             except Exception as e:
                 logger.warning(f"Error evaluating spread for {ticker} {option_type} strike ${strike}, days out {days_out}: {str(e)}")
         
@@ -3159,7 +3344,7 @@ def model_iv_crush_earnings(front_iv, back_iv, days_to_front_exp, ticker=None):
     }
 
 
-def analyze_options(ticker, run_full_analysis=False, strategy_type=None):
+def analyze_options(ticker, run_full_analysis=False, strategy_type=None, earnings_date=None):
     """
     Analyze options data for a given ticker and provide a recommendation.
     
@@ -3167,6 +3352,7 @@ def analyze_options(ticker, run_full_analysis=False, strategy_type=None):
         ticker (str): Stock ticker symbol
         run_full_analysis (bool): Whether to run full strategy analysis
         strategy_type (str, optional): Type of strategy to analyze ('calendar', 'naked', 'ironCondor')
+        earnings_date (str, optional): Earnings date in YYYY-MM-DD format for earnings-optimized analysis
         
     Returns:
         dict: Analysis results including metrics and recommendation
@@ -3321,7 +3507,20 @@ def analyze_options(ticker, run_full_analysis=False, strategy_type=None):
                 logger.info(f"Running full calendar spread analysis for {ticker}")
                 logger.warning(f"ANALYZE OPTIONS DEBUG: run_full_analysis={run_full_analysis}")
                 all_metrics_pass = avg_volume_pass and iv30_rv30_pass and ts_slope_pass
-                optimal_spread = find_optimal_calendar_spread(ticker, all_metrics_pass=all_metrics_pass, run_full_analysis=run_full_analysis)
+                
+                # Use provided earnings date or try to fetch it
+                analysis_earnings_date = earnings_date
+                if analysis_earnings_date:
+                    logger.info(f"Using provided earnings date for {ticker}: {analysis_earnings_date} - using earnings-optimized calendar spread analysis")
+                else:
+                    # Fallback: try to get earnings date if not provided
+                    analysis_earnings_date = get_next_earnings_date(ticker)
+                    if analysis_earnings_date:
+                        logger.info(f"Found earnings date for {ticker}: {analysis_earnings_date} - using earnings-optimized calendar spread analysis")
+                    else:
+                        logger.info(f"No earnings date found for {ticker} - using standard calendar spread analysis")
+                
+                optimal_spread = find_optimal_calendar_spread(ticker, all_metrics_pass=all_metrics_pass, run_full_analysis=run_full_analysis, earnings_date=analysis_earnings_date)
                 if optimal_spread:
                     # Add debug logging to see if monteCarloResults.numSimulations is present
                     if "monteCarloResults" in optimal_spread:
