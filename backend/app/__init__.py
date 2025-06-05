@@ -2,17 +2,54 @@ from flask import Flask
 from flask_cors import CORS
 import os
 import logging
+import sys
 from app.utils import CustomJSONEncoder
+
+# Configure enhanced logging (merged from run_direct.py)
+logging.basicConfig(
+    level=logging.DEBUG,  # Set to DEBUG to see detailed logs
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Set up logging
 logger = logging.getLogger(__name__)
+
+# Suppress excessive debug logging from external libraries
+logging.getLogger('yfinance').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('peewee').setLevel(logging.WARNING)
+logging.getLogger('werkzeug').setLevel(logging.WARNING)
+
+# Import configuration
+try:
+    from config import YF_RATE_LIMIT, SEQUENTIAL_PROCESSING, QUICK_FILTER
+    logger.info("Loaded configuration from config.py")
+except ImportError:
+    # Default configuration if config.py is not found
+    logger.warning("config.py not found, using default configuration")
+    YF_RATE_LIMIT = {"rate": 5, "per": 1.0, "burst": 10}
+    SEQUENTIAL_PROCESSING = {
+        "api_calls_per_ticker": 8,
+        "requests_per_minute": 60,
+        "max_consecutive_requests": 10,
+        "pause_duration": 2.0
+    }
+    QUICK_FILTER = {"min_price": 2.50, "min_volume": 1500000}
+
+# Import earnings history functionality
+try:
+    from run_direct_earnings_history import register_earnings_history_endpoint
+    logger.info("Loaded earnings history module")
+except ImportError:
+    logger.warning("run_direct_earnings_history.py not found, earnings history endpoint will not be available")
+    register_earnings_history_endpoint = None
 
 def create_app(test_config=None):
     # Create and configure the app
     app = Flask(__name__, instance_relative_config=True)
     
-    # Enable CORS
-    CORS(app)
+    # Enable CORS with enhanced settings (merged from run_direct.py)
+    CORS(app, resources={r"/*": {"origins": "*", "supports_credentials": True}})
     
     # Configure Flask to properly handle JSON serialization
     app.json_encoder = CustomJSONEncoder
@@ -44,12 +81,20 @@ def create_app(test_config=None):
     except Exception as e:
         logger.warning(f"Failed to initialize rate limiter: {str(e)}")
         
-    # Initialize market data provider
+    # Initialize market data provider and log which API is being used
     try:
         from app.market_data import market_data
-        logger.info(f"Market data provider initialized: {market_data.__class__.__name__}")
+        logger.warning(f"Initialized market data provider: {market_data.__class__.__name__}")
     except Exception as e:
-        logger.warning(f"Failed to initialize market data provider: {str(e)}")
+        logger.error(f"Failed to initialize market data provider: {str(e)}")
+
+    # Register earnings history endpoint if available
+    if register_earnings_history_endpoint:
+        try:
+            register_earnings_history_endpoint(app)
+            logger.info("Registered earnings history endpoint")
+        except Exception as e:
+            logger.error(f"Failed to register earnings history endpoint: {str(e)}")
 
     # Register blueprints
     from app.routes import api_bp
