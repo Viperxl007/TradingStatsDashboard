@@ -5,7 +5,7 @@
   "main": "src/index.tsx",
   "scripts": {
     "start": "concurrently \"pnpm run start:frontend\" \"pnpm run start:backend:direct\"",
-    "start:frontend": "cross-env PORT=3001 react-scripts start",
+    "start:frontend": "cross-env PORT=3001 BROWSER=none react-scripts start",
     "start:backend": "cd backend && python run.py",
     "start:direct": "concurrently \"pnpm run start:frontend\" \"pnpm run start:backend:direct\"",
     "start:backend:direct": "cd backend && python run_direct.py",

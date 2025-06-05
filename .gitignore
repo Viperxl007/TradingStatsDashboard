@@ -49,3 +49,42 @@ yarn-error.log*
 
 # Local configuration files
 backend/local_config.py
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Backup files
+*.bak
+*.backup
+*.tmp
+*~
+
+# Log files
+*.log
+logs/
+*.log.*
+
+# Additional environment files
+.env*
+!.env.example
+config.local.*
+
+# IDE files (additional)
+.vscode/settings.json
+.vscode/launch.json
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
