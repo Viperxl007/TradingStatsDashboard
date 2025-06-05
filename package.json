@@ -4,11 +4,9 @@
   "description": "A dashboard for analyzing trading statistics, importing data from spreadsheets, and providing performance insights.",
   "main": "src/index.tsx",
   "scripts": {
-    "start": "concurrently \"pnpm run start:frontend\" \"pnpm run start:backend:direct\"",
+    "start": "concurrently \"pnpm run start:frontend\" \"pnpm run start:backend\"",
     "start:frontend": "cross-env PORT=3001 BROWSER=none react-scripts start",
     "start:backend": "cd backend && python run.py",
-    "start:direct": "concurrently \"pnpm run start:frontend\" \"pnpm run start:backend:direct\"",
-    "start:backend:direct": "cd backend && python run_direct.py",
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject"
