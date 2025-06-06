@@ -368,9 +368,20 @@ export class TradeTrackerDB {
       largestLoss: 0,
       profitFactor: 0,
       expectancy: 0,
+      sharpeRatio: 0,
       averageDuration: 0,
       byStrategy: {} as Record<StrategyType, { count: number; winRate: number; netProfitLoss: number }>,
-      byTicker: {} as Record<string, { count: number; winRate: number; netProfitLoss: number }>
+      byTicker: {} as Record<string, { count: number; winRate: number; netProfitLoss: number }>,
+      byIvRvRatio: {
+        high: { count: 0, winRate: 0, netProfitLoss: 0 },
+        medium: { count: 0, winRate: 0, netProfitLoss: 0 },
+        low: { count: 0, winRate: 0, netProfitLoss: 0 }
+      },
+      byTsSlope: {
+        positive: { count: 0, winRate: 0, netProfitLoss: 0 },
+        neutral: { count: 0, winRate: 0, netProfitLoss: 0 },
+        negative: { count: 0, winRate: 0, netProfitLoss: 0 }
+      }
     };
     
     // Return early if no closed trades
@@ -460,6 +471,32 @@ export class TradeTrackerDB {
     statistics.netProfitLoss = statistics.totalProfit - statistics.totalLoss;
     statistics.profitFactor = statistics.totalLoss > 0 ? statistics.totalProfit / statistics.totalLoss : 0;
     statistics.expectancy = statistics.winRate * statistics.averageProfit - (1 - statistics.winRate) * statistics.averageLoss;
+    
+    // Calculate Sharpe ratio (risk-adjusted return)
+    if (closedTrades.length > 1) {
+      // Calculate returns for each trade (as percentage of entry price)
+      const returns: number[] = [];
+      for (const trade of closedTrades) {
+        if (trade.profitLoss !== undefined && trade.entryPrice > 0) {
+          const returnPct = (trade.profitLoss / (trade.entryPrice * trade.quantity)) * 100;
+          returns.push(returnPct);
+        }
+      }
+      
+      if (returns.length > 1) {
+        // Calculate mean return
+        const meanReturn = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
+        
+        // Calculate standard deviation of returns
+        const variance = returns.reduce((sum, ret) => sum + Math.pow(ret - meanReturn, 2), 0) / (returns.length - 1);
+        const stdDev = Math.sqrt(variance);
+        
+        // Sharpe ratio = (mean return - risk-free rate) / standard deviation
+        // Assuming risk-free rate of 0 for simplicity (can be adjusted later)
+        statistics.sharpeRatio = stdDev > 0 ? meanReturn / stdDev : 0;
+      }
+    }
+    
     statistics.averageDuration = closedTrades.length > 0 ? totalDuration / closedTrades.length : 0;
     
     // Format strategy stats
@@ -476,6 +513,83 @@ export class TradeTrackerDB {
     for (const ticker in tickerStats) {
       const stats = tickerStats[ticker];
       statistics.byTicker[ticker] = {
+        count: stats.count,
+        winRate: stats.count > 0 ? stats.wins / stats.count : 0,
+        netProfitLoss: stats.profit - stats.loss
+      };
+    }
+    
+    // Calculate IV/RV and TS Slope statistics for calendar spreads
+    const ivRvStats = { high: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 },
+                       medium: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 },
+                       low: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 } };
+    
+    const tsSlopeStats = { positive: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 },
+                          neutral: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 },
+                          negative: { count: 0, wins: 0, losses: 0, profit: 0, loss: 0 } };
+    
+    // Process calendar spread trades for IV/RV and TS Slope analysis
+    for (const trade of closedTrades) {
+      if (trade.strategy === 'calendar_spread' && trade.metadata && trade.profitLoss !== undefined) {
+        const { ivRvRatioAtEntry, tsSlopeAtEntry } = trade.metadata;
+        
+        // Skip if we don't have the required metadata
+        if (ivRvRatioAtEntry === undefined || tsSlopeAtEntry === undefined) continue;
+        
+        // Categorize by IV/RV ratio
+        let ivRvCategory: 'high' | 'medium' | 'low';
+        if (ivRvRatioAtEntry > 1.2) {
+          ivRvCategory = 'high';
+        } else if (ivRvRatioAtEntry >= 0.8) {
+          ivRvCategory = 'medium';
+        } else {
+          ivRvCategory = 'low';
+        }
+        
+        ivRvStats[ivRvCategory].count++;
+        if (trade.profitLoss > 0) {
+          ivRvStats[ivRvCategory].wins++;
+          ivRvStats[ivRvCategory].profit += trade.profitLoss;
+        } else {
+          ivRvStats[ivRvCategory].losses++;
+          ivRvStats[ivRvCategory].loss += Math.abs(trade.profitLoss);
+        }
+        
+        // Categorize by TS Slope
+        let tsSlopeCategory: 'positive' | 'neutral' | 'negative';
+        if (tsSlopeAtEntry > 0.1) {
+          tsSlopeCategory = 'positive';
+        } else if (tsSlopeAtEntry >= -0.1) {
+          tsSlopeCategory = 'neutral';
+        } else {
+          tsSlopeCategory = 'negative';
+        }
+        
+        tsSlopeStats[tsSlopeCategory].count++;
+        if (trade.profitLoss > 0) {
+          tsSlopeStats[tsSlopeCategory].wins++;
+          tsSlopeStats[tsSlopeCategory].profit += trade.profitLoss;
+        } else {
+          tsSlopeStats[tsSlopeCategory].losses++;
+          tsSlopeStats[tsSlopeCategory].loss += Math.abs(trade.profitLoss);
+        }
+      }
+    }
+    
+    // Format IV/RV stats
+    for (const category of ['high', 'medium', 'low'] as const) {
+      const stats = ivRvStats[category];
+      statistics.byIvRvRatio[category] = {
+        count: stats.count,
+        winRate: stats.count > 0 ? stats.wins / stats.count : 0,
+        netProfitLoss: stats.profit - stats.loss
+      };
+    }
+    
+    // Format TS Slope stats
+    for (const category of ['positive', 'neutral', 'negative'] as const) {
+      const stats = tsSlopeStats[category];
+      statistics.byTsSlope[category] = {
         count: stats.count,
         winRate: stats.count > 0 ? stats.wins / stats.count : 0,
         netProfitLoss: stats.profit - stats.loss

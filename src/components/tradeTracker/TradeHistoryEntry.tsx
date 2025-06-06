@@ -22,11 +22,12 @@ import {
   Button,
   useToast
 } from '@chakra-ui/react';
-import { ChevronDownIcon, InfoIcon, DeleteIcon } from '@chakra-ui/icons';
+import { ChevronDownIcon, InfoIcon, DeleteIcon, EditIcon } from '@chakra-ui/icons';
 import { AnyTradeEntry, OptionTradeEntry } from '../../types/tradeTracker';
 import { useData } from '../../context/DataContext';
 import { ActionType } from '../../context/DataContext';
 import { formatDisplayDate } from '../../utils/dateUtils';
+import EditTradeModal from './EditTradeModal';
 
 interface TradeHistoryEntryProps {
   trade: AnyTradeEntry;
@@ -40,10 +41,24 @@ interface TradeHistoryEntryProps {
 const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
   const { isOpen, onToggle } = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
+  const { isOpen: isEditOpen, onOpen: onEditOpen, onClose: onEditClose } = useDisclosure();
   const { dispatch } = useData();
   const [isDeleting, setIsDeleting] = useState(false);
   const toast = useToast();
   const cancelRef = React.useRef<HTMLButtonElement>(null);
+  
+  // Function to determine spread type for calendar spreads
+  const getSpreadType = () => {
+    if (trade.strategy === 'calendar_spread' && 'legs' in trade && trade.legs && trade.legs.length > 0) {
+      // For calendar spreads, show the option type (CALL or PUT)
+      const firstLeg = trade.legs[0];
+      return firstLeg.optionType.toUpperCase();
+    }
+    // For other strategies, show direction
+    return trade.direction === 'long' ? 'LONG' : 'SHORT';
+  };
+  
+  const spreadType = getSpreadType();
   
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -65,19 +80,27 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
     return formatDisplayDate(dateString);
   };
   
-  // Get status badge color
-  const getStatusColor = (status: string) => {
-    switch (status) {
+  // Get status badge color and text
+  const getStatusInfo = (trade: AnyTradeEntry) => {
+    // If status is 'open' but no entry price, it's still an idea
+    if (trade.status === 'open' && (!trade.entryPrice || trade.entryPrice === 0)) {
+      return { text: 'IDEA', color: 'yellow' };
+    }
+    
+    switch (trade.status) {
       case 'open':
-        return 'green';
+        return { text: 'OPEN', color: 'green' };
       case 'closed':
-        return 'blue';
+        return { text: 'CLOSED', color: 'blue' };
       case 'cancelled':
-        return 'red';
+        return { text: 'CANCELLED', color: 'red' };
       default:
-        return 'gray';
+        return { text: String(trade.status).toUpperCase(), color: 'gray' };
     }
   };
+  
+  const statusInfo = getStatusInfo(trade);
+  
   
   // Get P&L color
   const getPnLColor = (pnl: number | undefined) => {
@@ -183,10 +206,10 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
         <VStack align="start" spacing={1}>
           <HStack>
             <Text fontWeight="bold" fontSize="lg">{trade.ticker}</Text>
-            <Badge colorScheme={getStatusColor(trade.status)}>{trade.status}</Badge>
+            <Badge colorScheme={statusInfo.color}>{statusInfo.text}</Badge>
             <Badge variant="outline">{trade.strategy.replace('_', ' ')}</Badge>
-            <Badge colorScheme={trade.direction === 'long' ? 'blue' : 'purple'}>
-              {trade.direction}
+            <Badge colorScheme={spreadType === 'CALL' ? 'green' : spreadType === 'PUT' ? 'red' : trade.direction === 'long' ? 'blue' : 'purple'}>
+              {spreadType}
             </Badge>
           </HStack>
           
@@ -278,6 +301,29 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
                   <Text>{formatCurrency(trade.fees)}</Text>
                 </Box>
               )}
+              
+              {/* Calendar Spread Metrics */}
+              {trade.strategy === 'calendar_spread' && trade.metadata && (
+                <>
+                  {trade.metadata.ivRvRatioAtEntry && (
+                    <Box minW="200px">
+                      <Text fontSize="sm" color="gray.500">IV/RV Ratio at Entry</Text>
+                      <Text fontWeight="medium" color={trade.metadata.ivRvRatioAtEntry > 1.2 ? 'green.500' : 'orange.500'}>
+                        {trade.metadata.ivRvRatioAtEntry.toFixed(2)}
+                      </Text>
+                    </Box>
+                  )}
+                  
+                  {trade.metadata.tsSlopeAtEntry !== undefined && (
+                    <Box minW="200px">
+                      <Text fontSize="sm" color="gray.500">TS Slope at Entry</Text>
+                      <Text fontWeight="medium" color={Math.abs(trade.metadata.tsSlopeAtEntry) > 0.02 ? 'green.500' : 'orange.500'}>
+                        {trade.metadata.tsSlopeAtEntry.toFixed(3)}
+                      </Text>
+                    </Box>
+                  )}
+                </>
+              )}
             </Flex>
             
             {/* Option Legs (if applicable) */}
@@ -335,6 +381,19 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
             
             {/* Action Buttons */}
             <Flex justifyContent="flex-end" mt={2} gap={2}>
+              <Tooltip label="Edit trade">
+                <IconButton
+                  aria-label="Edit trade"
+                  icon={<EditIcon />}
+                  size="sm"
+                  variant="ghost"
+                  colorScheme="blue"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onEditOpen();
+                  }}
+                />
+              </Tooltip>
               <Tooltip label="Delete trade">
                 <IconButton
                   aria-label="Delete trade"
@@ -395,6 +454,13 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
           </AlertDialogContent>
         </AlertDialogOverlay>
       </AlertDialog>
+      
+      {/* Edit Trade Modal */}
+      <EditTradeModal
+        isOpen={isEditOpen}
+        onClose={onEditClose}
+        trade={trade}
+      />
     </Box>
   );
 };

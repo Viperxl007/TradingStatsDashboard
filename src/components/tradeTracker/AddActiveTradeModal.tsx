@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   Modal,
   ModalOverlay,
@@ -36,48 +36,39 @@ import {
 import { AddIcon, CheckIcon } from '@chakra-ui/icons';
 import { useData } from '../../context/DataContext';
 import { ActionType } from '../../context/DataContext';
-import { AnyTradeEntry, StrategyType, OptionLeg, OptionType } from '../../types/tradeTracker';
+import { StrategyType, OptionLeg, OptionType, AnyTradeEntry } from '../../types/tradeTracker';
 
-interface TradeDetailsModalProps {
+interface AddActiveTradeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  trade: AnyTradeEntry;
 }
 
 /**
- * TradeDetailsModal Component
+ * AddActiveTradeModal Component
  * 
- * This component provides a modal form for viewing and editing trade details.
+ * This component provides a modal form for adding a new active trade directly.
  */
-const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, trade }) => {
+const AddActiveTradeModal: React.FC<AddActiveTradeModalProps> = ({ isOpen, onClose }) => {
   const { dispatch } = useData();
   const toast = useToast();
   
   // Form state
-  const [ticker, setTicker] = useState(trade.ticker);
-  const [strategy, setStrategy] = useState<StrategyType>(trade.strategy);
-  const [entryDate, setEntryDate] = useState(trade.entryDate);
-  const [entryPrice, setEntryPrice] = useState(trade.entryPrice);
-  const [quantity, setQuantity] = useState(trade.quantity);
-  const [notes, setNotes] = useState(trade.notes);
+  const [ticker, setTicker] = useState('');
+  const [strategy, setStrategy] = useState<StrategyType>('calendar_spread');
+  const [entryDate, setEntryDate] = useState(getCurrentDateString());
+  const [entryPrice, setEntryPrice] = useState(0);
+  const [quantity, setQuantity] = useState(1);
+  const [notes, setNotes] = useState('');
   const [currentTag, setCurrentTag] = useState('');
-  const [tags, setTags] = useState<string[]>(trade.tags);
+  const [tags, setTags] = useState<string[]>([]);
   
   // Option-specific state
-  const [underlyingPrice, setUnderlyingPrice] = useState(
-    'underlyingPrice' in trade ? trade.underlyingPrice : 0
-  );
-  const [legs, setLegs] = useState<OptionLeg[]>(
-    'legs' in trade ? trade.legs : []
-  );
+  const [underlyingPrice, setUnderlyingPrice] = useState(0);
+  const [legs, setLegs] = useState<OptionLeg[]>([]);
   
   // Calendar spread metadata state
-  const [ivRvRatio, setIvRvRatio] = useState<number>(
-    trade.metadata?.ivRvRatioAtEntry || 0
-  );
-  const [tsSlope, setTsSlope] = useState<number>(
-    trade.metadata?.tsSlopeAtEntry || 0
-  );
+  const [ivRvRatio, setIvRvRatio] = useState<number>(0);
+  const [tsSlope, setTsSlope] = useState<number>(0);
   
   // Form validation
   const [errors, setErrors] = useState<{
@@ -90,28 +81,28 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
   // Colors
   const tagBg = useColorModeValue('gray.100', 'gray.700');
   
-  // Reset form when trade changes
-  useEffect(() => {
-    setTicker(trade.ticker);
-    setStrategy(trade.strategy);
-    setEntryDate(trade.entryDate);
-    setEntryPrice(trade.entryPrice);
-    setQuantity(trade.quantity);
-    setNotes(trade.notes);
-    setTags(trade.tags);
-    
-    if ('underlyingPrice' in trade) {
-      setUnderlyingPrice(trade.underlyingPrice);
-    }
-    
-    if ('legs' in trade) {
-      setLegs(trade.legs);
-    }
-    
-    // Reset calendar spread metadata
-    setIvRvRatio(trade.metadata?.ivRvRatioAtEntry || 0);
-    setTsSlope(trade.metadata?.tsSlopeAtEntry || 0);
-  }, [trade]);
+  // Get current date string
+  function getCurrentDateString(): string {
+    const now = new Date();
+    return now.toISOString().split('T')[0];
+  }
+  
+  // Reset form
+  const resetForm = () => {
+    setTicker('');
+    setStrategy('calendar_spread');
+    setEntryDate(getCurrentDateString());
+    setEntryPrice(0);
+    setQuantity(1);
+    setNotes('');
+    setTags([]);
+    setCurrentTag('');
+    setUnderlyingPrice(0);
+    setLegs([]);
+    setIvRvRatio(0);
+    setTsSlope(0);
+    setErrors({});
+  };
   
   // Handle form submission
   const handleSubmit = async () => {
@@ -146,98 +137,121 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
       return;
     }
     
-    // Create updated trade object
-    let updatedTrade: AnyTradeEntry;
-    
-    if (strategy === 'stock') {
-      updatedTrade = {
-        ...trade,
-        ticker: ticker.toUpperCase(),
-        strategy,
-        entryDate,
-        entryPrice,
-        quantity,
-        notes,
-        tags,
-        updatedAt: Date.now()
-      };
-    } else {
-      // Create metadata object for calendar spreads
-      let metadata = { ...trade.metadata };
-      
-      if (strategy === 'calendar_spread') {
-        metadata = {
-          ...metadata,
-          ivRvRatioAtEntry: ivRvRatio || undefined,
-          tsSlopeAtEntry: tsSlope || undefined
-        };
-      }
-      
-      updatedTrade = {
-        ...trade,
-        ticker: ticker.toUpperCase(),
-        strategy,
-        entryDate,
-        entryPrice,
-        quantity,
-        notes,
-        tags,
-        updatedAt: Date.now(),
-        underlyingPrice,
-        legs,
-        metadata
-      };
-    }
-    
     try {
       // Import the tradeTrackerDB service
       const { tradeTrackerDB } = await import('../../services/tradeTrackerDB');
       
-      // Dispatch action to update trade
+      // Create new trade object with proper typing
+      let newTrade: AnyTradeEntry;
+      
+      if (strategy === 'stock') {
+        newTrade = {
+          id: `trade_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          ticker: ticker.toUpperCase(),
+          strategy: 'stock',
+          direction: 'long' as const,
+          entryDate,
+          entryPrice,
+          quantity,
+          status: 'open' as const,
+          fees: 0,
+          notes,
+          tags,
+          createdAt: Date.now(),
+          updatedAt: Date.now()
+        };
+      } else {
+        // Create metadata object for calendar spreads
+        let metadata = undefined;
+        if (strategy === 'calendar_spread') {
+          metadata = {
+            ivRvRatioAtEntry: ivRvRatio || undefined,
+            tsSlopeAtEntry: tsSlope || undefined
+          };
+        }
+        
+        newTrade = {
+          id: `trade_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+          ticker: ticker.toUpperCase(),
+          strategy,
+          direction: 'long' as const,
+          entryDate,
+          entryPrice,
+          quantity,
+          status: 'open' as const,
+          fees: 0,
+          notes,
+          tags,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+          underlyingPrice,
+          legs,
+          metadata
+        };
+      }
+      
+      // Dispatch action to create trade
       dispatch({
-        type: ActionType.UPDATE_TRADE_START,
-        payload: updatedTrade
+        type: ActionType.CREATE_TRADE_START,
+        payload: newTrade
       });
       
-      // Update trade in database
-      await tradeTrackerDB.updateTrade(updatedTrade);
+      // Create trade in database
+      await tradeTrackerDB.createTrade(newTrade);
       
       // Dispatch success action
       dispatch({
-        type: ActionType.UPDATE_TRADE_SUCCESS,
-        payload: updatedTrade
+        type: ActionType.CREATE_TRADE_SUCCESS,
+        payload: newTrade
+      });
+      
+      // Recalculate statistics
+      const allTrades = await tradeTrackerDB.getAllTrades();
+      const statistics = await tradeTrackerDB.calculateStatistics(allTrades);
+      dispatch({
+        type: ActionType.CALCULATE_TRADE_STATISTICS,
+        payload: statistics
       });
       
       // Show success toast
       toast({
-        title: 'Trade updated',
-        description: `${ticker.toUpperCase()} trade has been updated`,
+        title: 'Active trade added',
+        description: `${ticker.toUpperCase()} trade has been added successfully`,
         status: 'success',
-        duration: 5000,
+        duration: 3000,
         isClosable: true,
       });
       
-      // Close modal
+      // Reset form and close modal
+      resetForm();
       onClose();
     } catch (error) {
       // Dispatch error action
       dispatch({
-        type: ActionType.UPDATE_TRADE_ERROR,
-        payload: error instanceof Error ? error.message : 'Failed to update trade'
+        type: ActionType.CREATE_TRADE_ERROR,
+        payload: error instanceof Error ? error.message : 'Failed to add trade'
       });
       
       // Show error toast
       toast({
         title: 'Error',
-        description: 'Failed to update trade',
+        description: 'Failed to add trade',
         status: 'error',
-        duration: 5000,
+        duration: 3000,
         isClosable: true,
       });
     }
   };
   
-  // Handle adding a tag
+  // Handle tag input
+  const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addTag();
+    }
+  };
+  
+  // Add tag
   const addTag = () => {
     if (currentTag.trim() && !tags.includes(currentTag.trim())) {
       setTags([...tags, currentTag.trim()]);
@@ -245,87 +259,77 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
     }
   };
   
-  // Handle removing a tag
+  // Remove tag
   const removeTag = (index: number) => {
     setTags(tags.filter((_, i) => i !== index));
   };
   
-  // Handle tag input keydown
-  const handleTagKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      e.preventDefault();
-      addTag();
-    }
-  };
-  
-  // Handle adding an option leg
+  // Add option leg
   const addLeg = () => {
     const newLeg: OptionLeg = {
       optionType: 'call',
-      strike: underlyingPrice,
-      expiration: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+      strike: 0,
+      expiration: '',
       premium: 0,
       quantity: 1,
       isLong: true
     };
-    
     setLegs([...legs, newLeg]);
   };
   
-  // Handle removing an option leg
-  const removeLeg = (index: number) => {
-    setLegs(legs.filter((_, i) => i !== index));
-  };
-  
-  // Handle updating an option leg
+  // Update option leg
   const updateLeg = (index: number, field: keyof OptionLeg, value: any) => {
     const updatedLegs = [...legs];
-    updatedLegs[index] = {
-      ...updatedLegs[index],
-      [field]: value
-    };
+    updatedLegs[index] = { ...updatedLegs[index], [field]: value };
     setLegs(updatedLegs);
+  };
+  
+  // Remove option leg
+  const removeLeg = (index: number) => {
+    setLegs(legs.filter((_, i) => i !== index));
   };
   
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="xl">
       <ModalOverlay />
       <ModalContent>
-        <ModalHeader>Edit Trade: {trade.ticker}</ModalHeader>
+        <ModalHeader>Add New Active Trade</ModalHeader>
         <ModalCloseButton />
         
         <ModalBody>
           <VStack spacing={4} align="stretch">
-            <FormControl isRequired isInvalid={!!errors.ticker}>
-              <FormLabel>Ticker Symbol</FormLabel>
-              <Input
-                placeholder="e.g., AAPL"
-                value={ticker}
-                onChange={(e) => setTicker(e.target.value)}
-              />
-              {errors.ticker && <FormErrorMessage>{errors.ticker}</FormErrorMessage>}
-            </FormControl>
-            
-            <FormControl>
-              <FormLabel>Strategy</FormLabel>
-              <Select
-                value={strategy}
-                onChange={(e) => setStrategy(e.target.value as StrategyType)}
-              >
-                <option value="stock">Stock</option>
-                <option value="single_option">Single Option</option>
-                <option value="vertical_spread">Vertical Spread</option>
-                <option value="iron_condor">Iron Condor</option>
-                <option value="calendar_spread">Calendar Spread</option>
-                <option value="diagonal_spread">Diagonal Spread</option>
-                <option value="covered_call">Covered Call</option>
-                <option value="protective_put">Protective Put</option>
-                <option value="straddle">Straddle</option>
-                <option value="strangle">Strangle</option>
-                <option value="butterfly">Butterfly</option>
-                <option value="custom">Custom</option>
-              </Select>
-            </FormControl>
+            <HStack spacing={4}>
+              <FormControl isRequired isInvalid={!!errors.ticker}>
+                <FormLabel>Ticker</FormLabel>
+                <Input
+                  placeholder="AAPL"
+                  value={ticker}
+                  onChange={(e) => setTicker(e.target.value.toUpperCase())}
+                />
+                {errors.ticker && <FormErrorMessage>{errors.ticker}</FormErrorMessage>}
+              </FormControl>
+              
+              <FormControl isRequired>
+                <FormLabel>Strategy</FormLabel>
+                <Select
+                  value={strategy}
+                  onChange={(e) => setStrategy(e.target.value as StrategyType)}
+                >
+                  <option value="stock">Stock</option>
+                  <option value="single_option">Single Option</option>
+                  <option value="vertical_spread">Vertical Spread</option>
+                  <option value="iron_condor">Iron Condor</option>
+                  <option value="calendar_spread">Calendar Spread</option>
+                  <option value="diagonal_spread">Diagonal Spread</option>
+                  <option value="covered_call">Covered Call</option>
+                  <option value="protective_put">Protective Put</option>
+                  <option value="straddle">Straddle</option>
+                  <option value="strangle">Strangle</option>
+                  <option value="butterfly">Butterfly</option>
+                  <option value="custom">Custom</option>
+                </Select>
+              </FormControl>
+            </HStack>
             
             <FormControl isRequired isInvalid={!!errors.entryDate}>
               <FormLabel>Entry Date</FormLabel>
@@ -364,7 +368,6 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
                 {errors.quantity && <FormErrorMessage>{errors.quantity}</FormErrorMessage>}
               </FormControl>
             </HStack>
-            
             
             {strategy !== 'stock' && (
               <>
@@ -441,6 +444,17 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
                               </FormControl>
                               
                               <FormControl>
+                                <FormLabel>Expiration</FormLabel>
+                                <Input
+                                  type="date"
+                                  value={leg.expiration}
+                                  onChange={(e) => updateLeg(index, 'expiration', e.target.value)}
+                                />
+                              </FormControl>
+                            </HStack>
+                            
+                            <HStack spacing={4}>
+                              <FormControl>
                                 <FormLabel>Premium</FormLabel>
                                 <Input
                                   type="number"
@@ -449,17 +463,6 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
                                   value={leg.premium}
                                   onChange={(e) => updateLeg(index, 'premium', parseFloat(e.target.value) || 0)}
                                   placeholder="0.00"
-                                />
-                              </FormControl>
-                            </HStack>
-                            
-                            <HStack spacing={4}>
-                              <FormControl>
-                                <FormLabel>Expiration</FormLabel>
-                                <Input
-                                  type="date"
-                                  value={leg.expiration}
-                                  onChange={(e) => updateLeg(index, 'expiration', e.target.value)}
                                 />
                               </FormControl>
                               
@@ -578,8 +581,8 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
           <Button variant="ghost" mr={3} onClick={onClose}>
             Cancel
           </Button>
-          <Button colorScheme="brand" onClick={handleSubmit} leftIcon={<CheckIcon />}>
-            Save Changes
+          <Button colorScheme="brand" onClick={handleSubmit}>
+            Add Active Trade
           </Button>
         </ModalFooter>
       </ModalContent>
@@ -587,4 +590,4 @@ const TradeDetailsModal: React.FC<TradeDetailsModalProps> = ({ isOpen, onClose, 
   );
 };
 
-export default TradeDetailsModal;
+export default AddActiveTradeModal;

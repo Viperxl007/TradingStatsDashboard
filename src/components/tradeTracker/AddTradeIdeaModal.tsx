@@ -262,16 +262,6 @@ const AddTradeIdeaModal: React.FC<AddTradeIdeaModalProps> = ({ isOpen, onClose }
                 </Select>
               </FormControl>
               
-              <FormControl>
-                <FormLabel>Direction</FormLabel>
-                <Select
-                  value={direction}
-                  onChange={(e) => setDirection(e.target.value as TradeDirection)}
-                >
-                  <option value="long">Long</option>
-                  <option value="short">Short</option>
-                </Select>
-              </FormControl>
             </HStack>
             
             <FormControl isRequired isInvalid={!!errors.entryDate}>

@@ -365,6 +365,7 @@ const initialState: DataState = {
       largestLoss: 0,
       profitFactor: 0,
       expectancy: 0,
+      sharpeRatio: 0,
       averageDuration: 0,
       byStrategy: {
         stock: { count: 0, winRate: 0, netProfitLoss: 0 },
@@ -380,7 +381,17 @@ const initialState: DataState = {
         butterfly: { count: 0, winRate: 0, netProfitLoss: 0 },
         custom: { count: 0, winRate: 0, netProfitLoss: 0 }
       },
-      byTicker: {}
+      byTicker: {},
+      byIvRvRatio: {
+        high: { count: 0, winRate: 0, netProfitLoss: 0 },
+        medium: { count: 0, winRate: 0, netProfitLoss: 0 },
+        low: { count: 0, winRate: 0, netProfitLoss: 0 }
+      },
+      byTsSlope: {
+        positive: { count: 0, winRate: 0, netProfitLoss: 0 },
+        neutral: { count: 0, winRate: 0, netProfitLoss: 0 },
+        negative: { count: 0, winRate: 0, netProfitLoss: 0 }
+      }
     },
     filters: {
       tickers: [],

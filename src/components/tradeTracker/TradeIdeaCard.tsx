@@ -336,16 +336,6 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
                 </Text>
               )}
             </VStack>
-            <Badge colorScheme={direction === 'long' ? 'green' : 'red'} ml={2}>
-              {direction === 'long' ? 'LONG' : 'SHORT'}
-            </Badge>
-            {earningsTime && (
-              <Tooltip label={earningsTime === 'BMO' ? 'Pre-market earnings' : earningsTime === 'AMC' ? 'After-hours earnings' : 'Earnings time'}>
-                <Badge ml={2} colorScheme="purple">
-                  {earningsTime === 'BMO' ? <SunIcon /> : earningsTime === 'AMC' ? <MoonIcon /> : earningsTime}
-                </Badge>
-              </Tooltip>
-            )}
           </HStack>
           
           <Menu>
