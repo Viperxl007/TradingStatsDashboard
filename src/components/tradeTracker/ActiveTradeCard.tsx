@@ -20,7 +20,6 @@ import {
   StatLabel,
   StatNumber,
   StatHelpText,
-  StatArrow,
   useDisclosure,
   useToast,
   AlertDialog,
@@ -29,7 +28,15 @@ import {
   AlertDialogHeader,
   AlertDialogContent,
   AlertDialogOverlay,
-  Button
+  Button,
+  Table,
+  Thead,
+  Tbody,
+  Tr,
+  Th,
+  Td,
+  TableContainer,
+  Spinner
 } from '@chakra-ui/react';
 import {
   ChevronRightIcon,
@@ -38,7 +45,8 @@ import {
   CheckIcon,
   InfoIcon,
   CloseIcon,
-  AddIcon
+  AddIcon,
+  RepeatIcon
 } from '@chakra-ui/icons';
 import { AnyTradeEntry, StrategyType } from '../../types/tradeTracker';
 import TradeDetailsModal from './TradeDetailsModal';
@@ -103,12 +111,42 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
     takeProfit
   } = trade;
   
+  // Function to determine spread type for calendar spreads
+  const getSpreadType = () => {
+    if (strategy === 'calendar_spread' && 'legs' in trade && trade.legs && trade.legs.length > 0) {
+      // For calendar spreads, show the option type (CALL or PUT)
+      const firstLeg = trade.legs[0];
+      return firstLeg.optionType.toUpperCase();
+    }
+    // For other strategies, show direction
+    return direction === 'long' ? 'LONG' : 'SHORT';
+  };
+  
+  const spreadType = getSpreadType();
+  
   const detailsModal = useDisclosure();
   const closeTradeModal = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
   const toast = useToast();
   const { dispatch } = useData();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isFetchingPrices, setIsFetchingPrices] = useState(false);
+  const [lastPriceFetch, setLastPriceFetch] = useState<Date | null>(
+    trade.metadata?.lastPriceFetch ? new Date(trade.metadata.lastPriceFetch) : null
+  );
+  const [currentLegPrices, setCurrentLegPrices] = useState<{[key: string]: number}>(
+    trade.metadata?.currentLegPrices || {}
+  );
+  
+  // Sync local state with trade prop changes (for "Fetch All" updates)
+  React.useEffect(() => {
+    if (trade.metadata?.currentLegPrices) {
+      setCurrentLegPrices(trade.metadata.currentLegPrices);
+    }
+    if (trade.metadata?.lastPriceFetch) {
+      setLastPriceFetch(new Date(trade.metadata.lastPriceFetch));
+    }
+  }, [trade.metadata?.currentLegPrices, trade.metadata?.lastPriceFetch]);
   const cancelRef = React.useRef<HTMLButtonElement>(null);
   
   const bgColor = useColorModeValue('white', 'gray.800');
@@ -193,18 +231,174 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
     }
   };
   
-  // Calculate current P&L (this would be more sophisticated in a real app)
-  const calculatePnL = () => {
-    // This is a placeholder. In a real app, you would:
-    // 1. Get the current price from an API
-    // 2. Calculate P&L based on position type, entry price, and current price
-    // For now, we'll just use a random value for demonstration
-    const randomPnL = (Math.random() * 2 - 1) * entryPrice * quantity * 0.1;
-    return randomPnL;
+  // Fetch latest option prices from dedicated API endpoint
+  const fetchLatestPrices = async () => {
+    if (!('legs' in trade) || !trade.legs || trade.legs.length === 0) {
+      toast({
+        title: 'No option legs found',
+        description: 'This trade does not have option legs to fetch prices for',
+        status: 'warning',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+
+    setIsFetchingPrices(true);
+    try {
+      // Prepare contract specifications for the dedicated API
+      const contracts = trade.legs.map(leg => ({
+        optionType: leg.optionType,
+        strike: leg.strike,
+        expiration: leg.expiration,
+        quantity: leg.quantity,
+        isLong: leg.isLong
+      }));
+
+      // Call the dedicated option price fetching endpoint
+      const response = await fetch(`http://localhost:5000/api/fetch-option-prices/${ticker}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          contracts: contracts
+        })
+      });
+      
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
+      }
+      
+      const priceData = await response.json();
+      
+      if (!priceData.success) {
+        throw new Error(priceData.error || 'Failed to fetch option prices');
+      }
+      
+      // Extract prices from the response
+      const newPrices: {[key: string]: number} = priceData.prices || {};
+      
+      // Validate that we got prices for all legs
+      const expectedLegs = trade.legs.length;
+      const receivedPrices = Object.keys(newPrices).length;
+      
+      if (receivedPrices === 0) {
+        throw new Error('No option prices were retrieved');
+      }
+      
+      setCurrentLegPrices(newPrices);
+      setLastPriceFetch(new Date());
+      
+      // Update the trade in the database with current prices
+      try {
+        const { tradeTrackerDB } = await import('../../services/tradeTrackerDB');
+        
+        // Create updated trade with current prices stored in metadata
+        const updatedTrade = {
+          ...trade,
+          metadata: {
+            ...trade.metadata,
+            currentLegPrices: newPrices,
+            lastPriceFetch: new Date().toISOString(),
+            priceUpdateHistory: [
+              ...(trade.metadata?.priceUpdateHistory || []),
+              {
+                timestamp: new Date().toISOString(),
+                prices: newPrices
+              }
+            ].slice(-10) // Keep only last 10 price updates
+          },
+          updatedAt: Date.now()
+        };
+        
+        // Update in database
+        await tradeTrackerDB.updateTrade(updatedTrade);
+        
+        // Dispatch update to context for immediate UI update
+        dispatch({
+          type: ActionType.UPDATE_TRADE_SUCCESS,
+          payload: updatedTrade
+        });
+        
+        const updatedLegs = Object.keys(newPrices).filter(key => {
+          const legIndex = parseInt(key.split('_')[1]);
+          return newPrices[key] !== trade.legs[legIndex].premium;
+        });
+        
+        let toastDescription = `Fetched live option prices for ${ticker}`;
+        if (priceData.errors && priceData.errors.length > 0) {
+          toastDescription += ` (${updatedLegs.length} legs updated, ${priceData.errors.length} warnings)`;
+        } else {
+          toastDescription += ` (${updatedLegs.length} legs updated)`;
+        }
+        
+        toast({
+          title: 'Real-time prices updated & saved',
+          description: toastDescription,
+          status: 'success',
+          duration: 3000,
+          isClosable: true,
+        });
+      } catch (dbError) {
+        console.error('Error saving price update to database:', dbError);
+        
+        const updatedLegs = Object.keys(newPrices).filter(key => {
+          const legIndex = parseInt(key.split('_')[1]);
+          return newPrices[key] !== trade.legs[legIndex].premium;
+        });
+        
+        toast({
+          title: 'Prices updated (save failed)',
+          description: `Fetched live prices for ${ticker} but failed to save to database`,
+          status: 'warning',
+          duration: 3000,
+          isClosable: true,
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching option prices:', error);
+      toast({
+        title: 'Failed to fetch prices',
+        description: error instanceof Error ? error.message : 'Could not retrieve latest option prices',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    } finally {
+      setIsFetchingPrices(false);
+    }
   };
-  
-  const currentPnL = calculatePnL();
-  const pnlPercentage = (currentPnL / (entryPrice * quantity)) * 100;
+
+  // Calculate real spread P&L based on current vs entry prices
+  const calculateSpreadPnL = () => {
+    if (!('legs' in trade) || !trade.legs || trade.legs.length === 0) {
+      return { pnl: 0, percentage: 0 };
+    }
+
+    let totalEntryValue = 0;
+    let totalCurrentValue = 0;
+
+    trade.legs.forEach((leg, index) => {
+      const legKey = `leg_${index}`;
+      const currentPrice = currentLegPrices[legKey] || leg.premium;
+      
+      // Calculate leg value (premium * quantity * multiplier)
+      const legMultiplier = leg.isLong ? 1 : -1;
+      const entryValue = leg.premium * leg.quantity * legMultiplier * 100; // $100 per contract
+      const currentValue = currentPrice * leg.quantity * legMultiplier * 100;
+      
+      totalEntryValue += entryValue;
+      totalCurrentValue += currentValue;
+    });
+
+    const pnl = totalCurrentValue - totalEntryValue;
+    const percentage = totalEntryValue !== 0 ? (pnl / Math.abs(totalEntryValue)) * 100 : 0;
+
+    return { pnl, percentage };
+  };
+
+  const { pnl: currentPnL, percentage: pnlPercentage } = calculateSpreadPnL();
   
   return (
     <Box
@@ -217,65 +411,168 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
       _hover={{ boxShadow: 'md', borderColor: 'brand.300' }}
       transition="all 0.2s"
     >
-      <Flex p={4} direction={{ base: 'column', md: 'row' }} alignItems="flex-start">
-        <VStack align="flex-start" flex="1" spacing={2} mr={{ base: 0, md: 4 }} mb={{ base: 4, md: 0 }}>
-          <Flex width="100%" justifyContent="space-between" alignItems="center">
+      {/* Header Section */}
+      <Flex p={4} justifyContent="space-between" alignItems="center" borderBottom="1px" borderColor={borderColor}>
+        <HStack spacing={4}>
+          <VStack align="flex-start" spacing={1}>
             <HStack>
               <Text fontSize="xl" fontWeight="bold" color={textColor}>
                 {ticker}
               </Text>
-              <Badge colorScheme={direction === 'long' ? 'green' : 'red'} ml={2}>
-                {direction === 'long' ? 'LONG' : 'SHORT'}
+              <Badge colorScheme={spreadType === 'CALL' ? 'green' : spreadType === 'PUT' ? 'red' : direction === 'long' ? 'green' : 'red'}>
+                {spreadType}
+              </Badge>
+              <Badge colorScheme={strategyColors[strategy]} variant="outline">
+                {strategyNames[strategy]}
               </Badge>
             </HStack>
-            
-            <Menu>
-              <MenuButton
-                as={IconButton}
-                aria-label="Options"
-                icon={<ChevronRightIcon />}
-                variant="ghost"
-                size="sm"
-              />
-              <MenuList>
-                <MenuItem icon={<EditIcon />} onClick={detailsModal.onOpen}>Edit Trade</MenuItem>
-                <MenuItem icon={<AddIcon />}>Add Adjustment</MenuItem>
-                <MenuItem icon={<CloseIcon />} onClick={closeTradeModal.onOpen}>Close Trade</MenuItem>
-                <MenuItem icon={<DeleteIcon />} color="red.500" onClick={onDeleteOpen}>Delete</MenuItem>
-              </MenuList>
-            </Menu>
-          </Flex>
-          
-          <Badge colorScheme={strategyColors[strategy]}>
-            {strategyNames[strategy]}
-          </Badge>
-          
-          <HStack spacing={4} mt={1}>
-            <Tooltip label="Entry Date" placement="top">
-              <HStack>
-                <InfoIcon boxSize={3} color="gray.500" />
-                <Text fontSize="sm" color={mutedColor}>
-                  {formatDate(entryDate)}
+            <HStack spacing={4} fontSize="sm" color={mutedColor}>
+              <Text>Entry: {formatDate(entryDate)}</Text>
+              <Text>{daysInTrade()} days</Text>
+              {/* Display IV/RV and TS Slope for calendar spreads */}
+              {strategy === 'calendar_spread' && trade.metadata && (
+                <>
+                  {trade.metadata.ivRvRatioAtEntry && (
+                    <Text>
+                      IV/RV: <Text as="span" fontWeight="medium" color={trade.metadata.ivRvRatioAtEntry > 1.2 ? 'green.500' : 'orange.500'}>
+                        {trade.metadata.ivRvRatioAtEntry.toFixed(2)}
+                      </Text>
+                    </Text>
+                  )}
+                  {trade.metadata.tsSlopeAtEntry && (
+                    <Text>
+                      TS: <Text as="span" fontWeight="medium" color={Math.abs(trade.metadata.tsSlopeAtEntry) > 0.02 ? 'green.500' : 'orange.500'}>
+                        {trade.metadata.tsSlopeAtEntry.toFixed(3)}
+                      </Text>
+                    </Text>
+                  )}
+                </>
+              )}
+              {lastPriceFetch && (
+                <Text>
+                  Last updated: {lastPriceFetch.toLocaleTimeString()}
                 </Text>
-              </HStack>
-            </Tooltip>
-            
-            <Tooltip label="Days in Trade" placement="top">
-              <HStack>
-                <InfoIcon boxSize={3} color="gray.500" />
-                <Text fontSize="sm" color={mutedColor}>
-                  {daysInTrade()} days
-                </Text>
-              </HStack>
-            </Tooltip>
-          </HStack>
-          
-          <Text fontSize="sm" color={mutedColor} noOfLines={2}>
-            {notes || 'No notes provided'}
-          </Text>
-          
+              )}
+            </HStack>
+          </VStack>
+        </HStack>
+
+        <HStack spacing={3}>
+          {/* Real-time P&L Display */}
+          <VStack align="end" spacing={0}>
+            <Text fontSize="lg" fontWeight="bold" color={currentPnL >= 0 ? 'green.500' : 'red.500'}>
+              ${currentPnL.toFixed(2)}
+            </Text>
+            <HStack spacing={1}>
+              <Text fontSize="sm" color={currentPnL >= 0 ? 'green.500' : 'red.500'}>
+                {currentPnL >= 0 ? '▲' : '▼'} {Math.abs(pnlPercentage).toFixed(2)}%
+              </Text>
+            </HStack>
+          </VStack>
+
+          {/* Fetch Prices Button */}
+          <Button
+            leftIcon={isFetchingPrices ? <Spinner size="xs" /> : <RepeatIcon />}
+            size="sm"
+            colorScheme="blue"
+            variant="outline"
+            onClick={fetchLatestPrices}
+            isLoading={isFetchingPrices}
+            loadingText="Fetching..."
+          >
+            Fetch Latest
+          </Button>
+
+          {/* Actions Menu */}
+          <Menu>
+            <MenuButton
+              as={IconButton}
+              aria-label="Options"
+              icon={<ChevronRightIcon />}
+              variant="ghost"
+              size="sm"
+            />
+            <MenuList>
+              <MenuItem icon={<EditIcon />} onClick={detailsModal.onOpen}>Edit Trade</MenuItem>
+              <MenuItem icon={<AddIcon />}>Add Adjustment</MenuItem>
+              <MenuItem icon={<CloseIcon />} onClick={closeTradeModal.onOpen}>Close Trade</MenuItem>
+              <MenuItem icon={<DeleteIcon />} color="red.500" onClick={onDeleteOpen}>Delete</MenuItem>
+            </MenuList>
+          </Menu>
+        </HStack>
+      </Flex>
+
+      {/* Option Legs Table */}
+      {('legs' in trade) && trade.legs && trade.legs.length > 0 && (
+        <TableContainer>
+          <Table size="sm" variant="simple">
+            <Thead>
+              <Tr>
+                <Th>Leg</Th>
+                <Th>Type</Th>
+                <Th>Position</Th>
+                <Th>Strike</Th>
+                <Th>Expiration</Th>
+                <Th>Qty</Th>
+                <Th>Entry Premium</Th>
+                <Th>Current Premium</Th>
+                <Th>Leg P&L</Th>
+              </Tr>
+            </Thead>
+            <Tbody>
+              {trade.legs.map((leg, index) => {
+                const legKey = `leg_${index}`;
+                const currentPrice = currentLegPrices[legKey] || leg.premium;
+                const legMultiplier = leg.isLong ? 1 : -1;
+                const entryValue = leg.premium * leg.quantity * legMultiplier * 100;
+                const currentValue = currentPrice * leg.quantity * legMultiplier * 100;
+                const legPnL = currentValue - entryValue;
+
+                return (
+                  <Tr key={index}>
+                    <Td fontWeight="medium">Leg {index + 1}</Td>
+                    <Td>
+                      <Badge colorScheme={leg.optionType === 'call' ? 'green' : 'red'} size="sm">
+                        {leg.optionType.toUpperCase()}
+                      </Badge>
+                    </Td>
+                    <Td>
+                      <Badge colorScheme={leg.isLong ? 'blue' : 'purple'} size="sm">
+                        {leg.isLong ? 'LONG' : 'SHORT'}
+                      </Badge>
+                    </Td>
+                    <Td>${leg.strike.toFixed(2)}</Td>
+                    <Td>{formatDate(leg.expiration)}</Td>
+                    <Td>{leg.quantity}</Td>
+                    <Td>${leg.premium.toFixed(2)}</Td>
+                    <Td>
+                      <Text color={currentPrice !== leg.premium ? (currentPrice > leg.premium ? 'green.500' : 'red.500') : 'inherit'}>
+                        ${currentPrice.toFixed(2)}
+                      </Text>
+                    </Td>
+                    <Td>
+                      <Text color={legPnL >= 0 ? 'green.500' : 'red.500'} fontWeight="medium">
+                        ${legPnL.toFixed(2)}
+                      </Text>
+                    </Td>
+                  </Tr>
+                );
+              })}
+            </Tbody>
+          </Table>
+        </TableContainer>
+      )}
+
+      {/* Notes and Tags */}
+      {(notes || tags.length > 0) && (
+        <Box p={4} borderTop="1px" borderColor={borderColor} bg={useColorModeValue('gray.50', 'gray.700')}>
+          {notes && (
+            <Text fontSize="sm" color={mutedColor} mb={2}>
+              <Text as="span" fontWeight="medium">Notes:</Text> {notes}
+            </Text>
+          )}
           {tags.length > 0 && (
-            <HStack spacing={2} mt={1} flexWrap="wrap">
+            <HStack spacing={2} flexWrap="wrap">
               {tags.map((tag, index) => (
                 <Tag size="sm" key={index} colorScheme="gray" borderRadius="full">
                   <TagLabel>{tag}</TagLabel>
@@ -283,75 +580,8 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
               ))}
             </HStack>
           )}
-        </VStack>
-        
-        <VStack
-          align="stretch"
-          spacing={2}
-          minW={{ base: '100%', md: '200px' }}
-          borderTop={{ base: '1px solid', md: 'none' }}
-          borderColor={{ base: borderColor, md: 'transparent' }}
-          pt={{ base: 3, md: 0 }}
-        >
-          <Stat
-            bg={statBgColor}
-            p={2}
-            borderRadius="md"
-            size="sm"
-          >
-            <StatLabel fontSize="xs">Current P&L</StatLabel>
-            <StatNumber fontSize="md" color={currentPnL >= 0 ? 'green.500' : 'red.500'}>
-              ${currentPnL.toFixed(2)}
-            </StatNumber>
-            <StatHelpText mb={0}>
-              <StatArrow type={currentPnL >= 0 ? 'increase' : 'decrease'} />
-              {Math.abs(pnlPercentage).toFixed(2)}%
-            </StatHelpText>
-          </Stat>
-          
-          <HStack justify="space-between" fontSize="sm">
-            <Text fontWeight="medium">Entry:</Text>
-            <Text>${entryPrice.toFixed(2)}</Text>
-          </HStack>
-          
-          <HStack justify="space-between" fontSize="sm">
-            <Text fontWeight="medium">Quantity:</Text>
-            <Text>{quantity}</Text>
-          </HStack>
-          
-          {stopLoss && (
-            <HStack justify="space-between" fontSize="sm">
-              <Text fontWeight="medium">Stop Loss:</Text>
-              <Text color="red.500">${stopLoss.toFixed(2)}</Text>
-            </HStack>
-          )}
-          
-          {takeProfit && (
-            <HStack justify="space-between" fontSize="sm">
-              <Text fontWeight="medium">Take Profit:</Text>
-              <Text color="green.500">${takeProfit.toFixed(2)}</Text>
-            </HStack>
-          )}
-          
-          <HStack mt={2} justify="flex-end">
-            <IconButton
-              aria-label="Edit trade"
-              icon={<EditIcon />}
-              size="sm"
-              variant="ghost"
-              onClick={detailsModal.onOpen}
-            />
-            <IconButton
-              aria-label="Close trade"
-              icon={<CloseIcon />}
-              size="sm"
-              variant="ghost"
-              colorScheme="red"
-              onClick={closeTradeModal.onOpen}
-            />
-          </HStack>
-        </VStack>
-      </Flex>
+        </Box>
+      )}
       
       {/* Trade Details Modal */}
       <TradeDetailsModal 

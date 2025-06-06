@@ -81,11 +81,26 @@ export interface OptionLeg {
 }
 
 /**
+ * Calendar spread specific data stored in metadata
+ */
+export interface CalendarSpreadData {
+  strikePrice: number;            // Strike price for the spread
+  shortMonthCredit: number;       // Credit received from short month
+  longMonthDebit: number;         // Debit paid for long month
+  totalDebit: number;             // Net debit for the spread
+  shortExpiration: string;        // Short month expiration date
+  longExpiration: string;         // Long month expiration date
+  ivRvRatioAtEntry: number;       // IV/RV ratio when trade was opened
+  tsSlopeAtEntry: number;         // TS Slope when trade was opened
+  brokerFees: number;             // Broker fees for the trade
+}
+
+/**
  * Option trade entry
  */
 export interface OptionTradeEntry extends TradeEntry {
-  strategy: 'single_option' | 'vertical_spread' | 'iron_condor' | 'calendar_spread' | 
-            'diagonal_spread' | 'covered_call' | 'protective_put' | 'straddle' | 
+  strategy: 'single_option' | 'vertical_spread' | 'iron_condor' | 'calendar_spread' |
+            'diagonal_spread' | 'covered_call' | 'protective_put' | 'straddle' |
             'strangle' | 'butterfly' | 'custom';
   legs: OptionLeg[];              // Option legs in the trade
   underlyingPrice: number;        // Price of the underlying at entry
@@ -128,6 +143,7 @@ export interface TradeStatistics {
   largestLoss: number;             // Largest single loss
   profitFactor: number;            // Profit factor (total profit / total loss)
   expectancy: number;              // Average expected profit/loss per trade
+  sharpeRatio: number;             // Sharpe ratio (risk-adjusted return)
   averageDuration: number;         // Average trade duration in days
   byStrategy: Record<StrategyType, {
     count: number;                 // Number of trades with this strategy
@@ -139,6 +155,16 @@ export interface TradeStatistics {
     winRate: number;               // Win rate for this ticker
     netProfitLoss: number;         // Net profit/loss for this ticker
   }>;
+  byIvRvRatio: {
+    high: { count: number; winRate: number; netProfitLoss: number; }; // IV/RV > 1.2
+    medium: { count: number; winRate: number; netProfitLoss: number; }; // IV/RV 0.8-1.2
+    low: { count: number; winRate: number; netProfitLoss: number; }; // IV/RV < 0.8
+  };
+  byTsSlope: {
+    positive: { count: number; winRate: number; netProfitLoss: number; }; // TS Slope > 0
+    neutral: { count: number; winRate: number; netProfitLoss: number; }; // TS Slope -0.1 to 0.1
+    negative: { count: number; winRate: number; netProfitLoss: number; }; // TS Slope < -0.1
+  };
 }
 
 /**

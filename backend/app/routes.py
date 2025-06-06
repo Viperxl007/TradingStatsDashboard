@@ -35,6 +35,7 @@ from app.earnings_calendar import (
 from app.data_fetcher import get_stock_info, get_current_price
 from app.rate_limiter import update_rate_limiter_config, yf_rate_limiter, get_current_price
 from .earnings_history import get_earnings_history, get_earnings_performance_stats
+from .option_price_fetcher import fetch_specific_option_prices, validate_option_contracts
 
 # Import configuration
 try:
@@ -568,6 +569,74 @@ def get_ticker_earnings_history(ticker):
             "error": str(e),
             "ticker": ticker,
             "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/fetch-option-prices/<ticker>', methods=['POST'])
+def fetch_option_prices(ticker):
+    """
+    Fetch real-time prices for specific option contracts.
+    
+    This endpoint is EXCLUSIVELY for the Active Trades panel to get current prices
+    for exact option contracts in a spread using yfinance.
+    
+    Expected POST body:
+    {
+        "contracts": [
+            {
+                "optionType": "call",
+                "strike": 150.0,
+                "expiration": "2025-07-18",
+                "quantity": 1,
+                "isLong": true
+            },
+            ...
+        ]
+    }
+    """
+    try:
+        # Validate request
+        if not request.is_json:
+            return jsonify({
+                "success": False,
+                "error": "Request must be JSON",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        data = request.get_json()
+        
+        # Validate required fields
+        if 'contracts' not in data:
+            return jsonify({
+                "success": False,
+                "error": "Missing 'contracts' field in request body",
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        contracts = data['contracts']
+        
+        # Validate contract specifications
+        validation_errors = validate_option_contracts(contracts)
+        if validation_errors:
+            return jsonify({
+                "success": False,
+                "error": "Invalid contract specifications",
+                "validation_errors": validation_errors,
+                "timestamp": datetime.now().isoformat()
+            }), 400
+        
+        # Fetch prices using yfinance
+        logger.info(f"Fetching option prices for {ticker} with {len(contracts)} contracts")
+        result = fetch_specific_option_prices(ticker.upper(), contracts)
+        
+        # Return the result
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error in fetch_option_prices for {ticker}: {str(e)}")
+        return jsonify({
+            "success": False,
+            "error": f"Internal server error: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }), 500
 
 # Error handlers

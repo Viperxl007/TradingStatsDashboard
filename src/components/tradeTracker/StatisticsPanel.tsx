@@ -131,8 +131,8 @@ const StatisticsPanel: React.FC = () => {
       </Flex>
       
       {/* Summary Statistics */}
-      <Grid 
-        templateColumns={{ base: 'repeat(1, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(4, 1fr)' }}
+      <Grid
+        templateColumns={{ base: 'repeat(1, 1fr)', sm: 'repeat(2, 1fr)', md: 'repeat(3, 1fr)', lg: 'repeat(4, 1fr)', xl: 'repeat(5, 1fr)' }}
         gap={4}
         mb={6}
       >
@@ -200,10 +200,10 @@ const StatisticsPanel: React.FC = () => {
         </GridItem>
         
         <GridItem>
-          <Box 
-            p={4} 
-            borderRadius="lg" 
-            bg={cardBgColor} 
+          <Box
+            p={4}
+            borderRadius="lg"
+            bg={cardBgColor}
             borderWidth="1px"
             borderColor={borderColor}
             height="100%"
@@ -215,6 +215,27 @@ const StatisticsPanel: React.FC = () => {
               </StatNumber>
               <StatHelpText>
                 Expected value per trade
+              </StatHelpText>
+            </Stat>
+          </Box>
+        </GridItem>
+        
+        <GridItem>
+          <Box
+            p={4}
+            borderRadius="lg"
+            bg={cardBgColor}
+            borderWidth="1px"
+            borderColor={borderColor}
+            height="100%"
+          >
+            <Stat>
+              <StatLabel>Sharpe Ratio</StatLabel>
+              <StatNumber color={getValueColor(statistics.sharpeRatio)}>
+                {statistics.sharpeRatio.toFixed(3)}
+              </StatNumber>
+              <StatHelpText>
+                Risk-adjusted return
               </StatHelpText>
             </Stat>
           </Box>

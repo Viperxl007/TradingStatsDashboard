@@ -18,11 +18,14 @@ import {
   MenuList,
   MenuItem,
   IconButton,
-  Badge
+  Badge,
+  useToast,
+  Spinner
 } from '@chakra-ui/react';
-import { SearchIcon, ChevronDownIcon, SettingsIcon, AddIcon } from '@chakra-ui/icons';
+import { SearchIcon, ChevronDownIcon, SettingsIcon, AddIcon, RepeatIcon } from '@chakra-ui/icons';
 import { useData } from '../../context/DataContext';
-import { AnyTradeEntry } from '../../types/tradeTracker';
+import { AnyTradeEntry, OptionTradeEntry, OptionLeg } from '../../types/tradeTracker';
+import { ActionType } from '../../context/DataContext';
 import ActiveTradeCard from './ActiveTradeCard';
 import ConvertToTradeModal from './ConvertToTradeModal';
 import { useDisclosure } from '@chakra-ui/react';
@@ -33,7 +36,7 @@ import { useDisclosure } from '@chakra-ui/react';
  * This component displays a list of active trades with filtering and sorting options.
  */
 const ActiveTradesPanel: React.FC = () => {
-  const { state } = useData();
+  const { state, dispatch } = useData();
   const { tradeTrackerData } = state;
   const { filteredTrades } = tradeTrackerData;
   
@@ -41,8 +44,10 @@ const ActiveTradesPanel: React.FC = () => {
   const [sortBy, setSortBy] = useState('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedTradeIdea, setSelectedTradeIdea] = useState<AnyTradeEntry | null>(null);
+  const [isFetchingAll, setIsFetchingAll] = useState(false);
   
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const toast = useToast();
   
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -117,6 +122,140 @@ const ActiveTradesPanel: React.FC = () => {
     onOpen();
   };
   
+  // Fetch all prices for active trades
+  const fetchAllPrices = async () => {
+    const optionTrades = activeTrades.filter(trade =>
+      'legs' in trade && trade.legs && trade.legs.length > 0
+    ) as OptionTradeEntry[];
+    
+    if (optionTrades.length === 0) {
+      toast({
+        title: 'No option trades found',
+        description: 'There are no active option trades to update prices for',
+        status: 'info',
+        duration: 3000,
+        isClosable: true,
+      });
+      return;
+    }
+    
+    setIsFetchingAll(true);
+    let successCount = 0;
+    let errorCount = 0;
+    
+    try {
+      // Process trades sequentially to avoid overwhelming the API
+      for (const trade of optionTrades) {
+        try {
+          // Prepare contract specifications for the dedicated API
+          const contracts = trade.legs.map((leg: OptionLeg) => ({
+            optionType: leg.optionType,
+            strike: leg.strike,
+            expiration: leg.expiration,
+            quantity: leg.quantity,
+            isLong: leg.isLong
+          }));
+
+          // Call the dedicated option price fetching endpoint
+          const response = await fetch(`http://localhost:5000/api/fetch-option-prices/${trade.ticker}`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              contracts: contracts
+            })
+          });
+          
+          if (!response.ok) {
+            throw new Error(`API request failed: ${response.status}`);
+          }
+          
+          const priceData = await response.json();
+          
+          if (!priceData.success) {
+            throw new Error(priceData.error || 'Failed to fetch option prices');
+          }
+          
+          // Extract prices from the response
+          const newPrices: {[key: string]: number} = priceData.prices || {};
+          
+          if (Object.keys(newPrices).length > 0) {
+            // Update the trade in the database with current prices
+            const { tradeTrackerDB } = await import('../../services/tradeTrackerDB');
+            
+            // Create updated trade with current prices stored in metadata
+            const updatedTrade = {
+              ...trade,
+              metadata: {
+                ...trade.metadata,
+                currentLegPrices: newPrices,
+                lastPriceFetch: new Date().toISOString(),
+                priceUpdateHistory: [
+                  ...(trade.metadata?.priceUpdateHistory || []),
+                  {
+                    timestamp: new Date().toISOString(),
+                    prices: newPrices
+                  }
+                ].slice(-10) // Keep only last 10 price updates
+              },
+              updatedAt: Date.now()
+            };
+            
+            // Update in database
+            await tradeTrackerDB.updateTrade(updatedTrade);
+            
+            // Dispatch update to context for immediate UI update
+            dispatch({
+              type: ActionType.UPDATE_TRADE_SUCCESS,
+              payload: updatedTrade
+            });
+            
+            successCount++;
+          }
+          
+          // Add a small delay between requests to be respectful to the API
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+        } catch (error) {
+          console.error(`Error fetching prices for ${trade.ticker}:`, error);
+          errorCount++;
+        }
+      }
+      
+      // Show summary toast
+      if (successCount > 0) {
+        toast({
+          title: 'Bulk price update completed',
+          description: `Updated prices for ${successCount} trades${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+          status: successCount === optionTrades.length ? 'success' : 'warning',
+          duration: 4000,
+          isClosable: true,
+        });
+      } else {
+        toast({
+          title: 'Price update failed',
+          description: 'Could not update prices for any trades',
+          status: 'error',
+          duration: 4000,
+          isClosable: true,
+        });
+      }
+      
+    } catch (error) {
+      console.error('Error in bulk price fetch:', error);
+      toast({
+        title: 'Bulk update failed',
+        description: 'An error occurred during the bulk price update',
+        status: 'error',
+        duration: 4000,
+        isClosable: true,
+      });
+    } finally {
+      setIsFetchingAll(false);
+    }
+  };
+  
   return (
     <Box>
       <Flex mb={4} direction={{ base: 'column', md: 'row' }} gap={4}>
@@ -135,6 +274,22 @@ const ActiveTradesPanel: React.FC = () => {
         <Spacer />
         
         <HStack spacing={2}>
+          {/* Fetch All Button */}
+          {activeTrades.length > 0 && (
+            <Button
+              leftIcon={isFetchingAll ? <Spinner size="xs" /> : <RepeatIcon />}
+              size="sm"
+              colorScheme="green"
+              variant="outline"
+              onClick={fetchAllPrices}
+              isLoading={isFetchingAll}
+              loadingText="Updating..."
+              isDisabled={isFetchingAll}
+            >
+              Fetch All
+            </Button>
+          )}
+          
           <Select
             value={sortBy}
             onChange={handleSortChange}

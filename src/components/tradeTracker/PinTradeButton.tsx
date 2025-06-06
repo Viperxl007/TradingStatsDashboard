@@ -319,16 +319,6 @@ const PinTradeButton: React.FC<PinTradeButtonProps> = ({
                 </Select>
               </FormControl>
               
-              <FormControl>
-                <FormLabel>Direction</FormLabel>
-                <Select
-                  value={selectedDirection}
-                  onChange={(e) => setSelectedDirection(e.target.value as TradeDirection)}
-                >
-                  <option value="long">Long</option>
-                  <option value="short">Short</option>
-                </Select>
-              </FormControl>
               
               <FormControl>
                 <FormLabel>Notes</FormLabel>

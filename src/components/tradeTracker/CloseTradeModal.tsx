@@ -31,7 +31,8 @@ import {
   Divider,
   RadioGroup,
   Radio,
-  Stack
+  Stack,
+  useColorModeValue
 } from '@chakra-ui/react';
 import { CheckIcon } from '@chakra-ui/icons';
 import { useData } from '../../context/DataContext';
@@ -57,35 +58,62 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
   // Form state
   const [exitDate, setExitDate] = useState(getCurrentDateString());
   const [exitPrice, setExitPrice] = useState(trade.entryPrice);
-  const [fees, setFees] = useState(trade.fees);
+  const [fees, setFees] = useState(0); // Initialize fees to 0 for manual entry
   const [notes, setNotes] = useState('');
   const [closeReason, setCloseReason] = useState('target_reached');
+  
+  // Calendar spread specific state
+  const [creditReceived, setCreditReceived] = useState(0);
   
   // Form validation
   const [errors, setErrors] = useState<{
     exitDate?: string;
     exitPrice?: string;
+    creditReceived?: string;
   }>({});
   
   // Calculate profit/loss
   const calculateProfitLoss = () => {
-    const entryValue = trade.entryPrice * trade.quantity;
-    const exitValue = exitPrice * trade.quantity;
-    
-    // For long positions, profit = exit - entry
-    // For short positions, profit = entry - exit
-    let profitLoss = trade.direction === 'long' 
-      ? exitValue - entryValue 
-      : entryValue - exitValue;
-    
-    // Subtract fees
-    profitLoss -= fees;
-    
-    return profitLoss;
+    if (trade.strategy === 'calendar_spread') {
+      // For calendar spreads: P&L = Credit Received - Total Debit Paid - Fees
+      // Option prices are per-share, so multiply by 100 to get per-contract amounts
+      const totalDebitPaid = trade.entryPrice * trade.quantity * 100;
+      const totalCreditReceived = creditReceived * trade.quantity * 100;
+      const result = totalCreditReceived - totalDebitPaid - fees;
+      
+      // Debug logging
+      console.log('Calendar Spread P&L Calculation:', {
+        entryPrice: trade.entryPrice,
+        quantity: trade.quantity,
+        totalDebitPaid,
+        creditReceived,
+        totalCreditReceived,
+        fees,
+        result
+      });
+      
+      return result;
+    } else {
+      // For other strategies, also multiply by 100 for contract amounts
+      const entryValue = trade.entryPrice * trade.quantity * 100;
+      const exitValue = exitPrice * trade.quantity * 100;
+      
+      // For long positions, profit = exit - entry
+      // For short positions, profit = entry - exit
+      let profitLoss = trade.direction === 'long'
+        ? exitValue - entryValue
+        : entryValue - exitValue;
+      
+      // Fees are entered as total dollar amount, not per-contract
+      profitLoss -= fees;
+      
+      return profitLoss;
+    }
   };
   
   const profitLoss = calculateProfitLoss();
-  const profitLossPercentage = (profitLoss / (trade.entryPrice * trade.quantity)) * 100;
+  // Calculate percentage based on actual contract amounts (multiply by 100)
+  const profitLossPercentage = (profitLoss / (trade.entryPrice * trade.quantity * 100)) * 100;
   
   // Handle form submission
   const handleSubmit = async () => {
@@ -93,6 +121,7 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
     const newErrors: {
       exitDate?: string;
       exitPrice?: string;
+      creditReceived?: string;
     } = {};
     
     if (!exitDate) {
@@ -106,8 +135,16 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
       }
     }
     
-    if (exitPrice <= 0) {
-      newErrors.exitPrice = 'Exit price must be greater than 0';
+    if (trade.strategy === 'calendar_spread') {
+      // For calendar spreads, validate credit received
+      if (creditReceived < 0) {
+        newErrors.creditReceived = 'Credit received cannot be negative';
+      }
+    } else {
+      // For other strategies, validate exit price
+      if (exitPrice <= 0) {
+        newErrors.exitPrice = 'Exit price must be greater than 0';
+      }
     }
     
     setErrors(newErrors);
@@ -122,7 +159,8 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
       ...trade,
       status: 'closed' as TradeStatus,
       exitDate,
-      exitPrice,
+      // For calendar spreads, use creditReceived as exitPrice; for others, use exitPrice
+      exitPrice: trade.strategy === 'calendar_spread' ? creditReceived : exitPrice,
       fees,
       profitLoss,
       notes: trade.notes + (notes ? `\n\nClose notes: ${notes}` : ''),
@@ -187,12 +225,18 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
         
         <ModalBody>
           <VStack spacing={4} align="stretch">
-            <Box 
-              p={4} 
-              borderWidth="1px" 
-              borderRadius="md" 
-              bg={profitLoss >= 0 ? 'green.50' : 'red.50'}
-              borderColor={profitLoss >= 0 ? 'green.200' : 'red.200'}
+            <Box
+              p={4}
+              borderWidth="1px"
+              borderRadius="md"
+              bg={profitLoss >= 0
+                ? useColorModeValue('green.50', 'green.900')
+                : useColorModeValue('red.50', 'red.900')
+              }
+              borderColor={profitLoss >= 0
+                ? useColorModeValue('green.200', 'green.600')
+                : useColorModeValue('red.200', 'red.600')
+              }
             >
               <Stat>
                 <StatLabel>Estimated P&L</StatLabel>
@@ -216,37 +260,50 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
               {errors.exitDate && <FormErrorMessage>{errors.exitDate}</FormErrorMessage>}
             </FormControl>
             
-            <FormControl isRequired isInvalid={!!errors.exitPrice}>
-              <FormLabel>Exit Price</FormLabel>
-              <NumberInput
-                value={exitPrice}
-                onChange={(_, value) => setExitPrice(value)}
-                min={0}
-                precision={2}
-              >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
-              {errors.exitPrice && <FormErrorMessage>{errors.exitPrice}</FormErrorMessage>}
-            </FormControl>
+            {trade.strategy === 'calendar_spread' ? (
+              <FormControl isInvalid={!!errors.creditReceived}>
+                <FormLabel>Credit Received When Closing</FormLabel>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={creditReceived}
+                  onChange={(e) => setCreditReceived(parseFloat(e.target.value) || 0)}
+                  placeholder="0.00"
+                />
+                <Text fontSize="xs" color="gray.500" mt={1}>
+                  Enter the total credit received per contract when closing the spread
+                </Text>
+                {errors.creditReceived && <FormErrorMessage>{errors.creditReceived}</FormErrorMessage>}
+              </FormControl>
+            ) : (
+              <FormControl isRequired isInvalid={!!errors.exitPrice}>
+                <FormLabel>Exit Price</FormLabel>
+                <Input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  value={exitPrice}
+                  onChange={(e) => setExitPrice(parseFloat(e.target.value) || 0)}
+                  placeholder="0.00"
+                />
+                {errors.exitPrice && <FormErrorMessage>{errors.exitPrice}</FormErrorMessage>}
+              </FormControl>
+            )}
             
             <FormControl>
               <FormLabel>Fees</FormLabel>
-              <NumberInput
+              <Input
+                type="number"
+                step="0.01"
+                min="0"
                 value={fees}
-                onChange={(_, value) => setFees(value)}
-                min={0}
-                precision={2}
-              >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
+                onChange={(e) => setFees(parseFloat(e.target.value) || 0)}
+                placeholder="8.00"
+              />
+              <Text fontSize="xs" color="gray.500" mt={1}>
+                Enter fees in actual dollar amount (e.g., $8.00 for $8 in fees)
+              </Text>
             </FormControl>
             
             <FormControl>

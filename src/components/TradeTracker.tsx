@@ -35,6 +35,7 @@ import ActiveTradesPanel from './tradeTracker/ActiveTradesPanel';
 import TradeHistoryPanel from './tradeTracker/TradeHistoryPanel';
 import StatisticsPanel from './tradeTracker/StatisticsPanel';
 import AddTradeIdeaModal from './tradeTracker/AddTradeIdeaModal';
+import AddActiveTradeModal from './tradeTracker/AddActiveTradeModal';
 
 /**
  * TradeTracker Component
@@ -48,6 +49,7 @@ const TradeTracker: React.FC = () => {
   const { isLoading, error } = tradeTrackerData;
   const [activeTab, setActiveTab] = useState(0);
   const { isOpen, onOpen, onClose } = useDisclosure();
+  const { isOpen: isActiveTradeModalOpen, onOpen: onActiveTradeModalOpen, onClose: onActiveTradeModalClose } = useDisclosure();
   const { isOpen: isAlertOpen, onOpen: onAlertOpen, onClose: onAlertClose } = useDisclosure();
   const toast = useToast();
   const cancelRef = React.useRef<HTMLButtonElement>(null);
@@ -181,9 +183,9 @@ const TradeTracker: React.FC = () => {
             <Button
               leftIcon={<AddIcon />}
               colorScheme="brand"
-              onClick={onOpen}
+              onClick={activeTab === 1 ? onActiveTradeModalOpen : onOpen}
             >
-              Add Trade Idea
+              {activeTab === 1 ? 'Add Active Trade' : 'Add Trade Idea'}
             </Button>
           </HStack>
           
@@ -229,6 +231,9 @@ const TradeTracker: React.FC = () => {
       
       {/* Add Trade Idea Modal */}
       <AddTradeIdeaModal isOpen={isOpen} onClose={onClose} />
+      
+      {/* Add Active Trade Modal */}
+      <AddActiveTradeModal isOpen={isActiveTradeModalOpen} onClose={onActiveTradeModalClose} />
       
       {/* Clear All Data Confirmation Dialog */}
       <AlertDialog

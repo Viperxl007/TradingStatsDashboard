@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   ModalOverlay,
@@ -68,11 +68,61 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
     'legs' in tradeIdea ? tradeIdea.legs : []
   );
   
+  // Calendar spread specific state
+  const [strikePrice, setStrikePrice] = useState(0);
+  const [shortMonthCredit, setShortMonthCredit] = useState(0);
+  const [longMonthDebit, setLongMonthDebit] = useState(0);
+  const [shortExpiration, setShortExpiration] = useState('');
+  const [longExpiration, setLongExpiration] = useState('');
+  const [ivRvRatio, setIvRvRatio] = useState(0);
+  const [tsSlope, setTsSlope] = useState(0);
+  
+  // Calculate total debit for calendar spread
+  const totalDebit = longMonthDebit - shortMonthCredit;
+  
+  // Pre-populate broker fees for calendar spreads ($4 per contract = $8 per spread)
+  const [brokerFees, setBrokerFees] = useState(
+    tradeIdea.strategy === 'calendar_spread' ? quantity * 8 : fees
+  );
+  
+  // Pre-populate data from trade idea metadata
+  useEffect(() => {
+    if (tradeIdea.metadata) {
+      // Pre-populate IV/RV ratio and TS Slope from trade idea
+      if (tradeIdea.metadata.metrics) {
+        setIvRvRatio(tradeIdea.metadata.metrics.iv30Rv30 || 0);
+        setTsSlope(tradeIdea.metadata.metrics.tsSlope || 0);
+      }
+      
+      // Pre-populate strike price from closest strikes
+      if (tradeIdea.metadata.closestStrikes && tradeIdea.metadata.closestStrikes.length > 0) {
+        setStrikePrice(tradeIdea.metadata.closestStrikes[0]);
+      }
+      
+      // Pre-populate underlying price
+      if (tradeIdea.metadata.currentPrice) {
+        setUnderlyingPrice(tradeIdea.metadata.currentPrice);
+      }
+    }
+  }, [tradeIdea]);
+  
+  // Update broker fees when quantity changes for calendar spreads
+  useEffect(() => {
+    if (tradeIdea.strategy === 'calendar_spread') {
+      setBrokerFees(quantity * 8); // $8 per spread ($4 per contract)
+    }
+  }, [quantity, tradeIdea.strategy]);
+  
   // Form validation
   const [errors, setErrors] = useState<{
     entryDate?: string;
     entryPrice?: string;
     quantity?: string;
+    shortMonthCredit?: string;
+    longMonthDebit?: string;
+    strikePrice?: string;
+    shortExpiration?: string;
+    longExpiration?: string;
   }>({});
   
   // Handle form submission
@@ -82,14 +132,47 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
       entryDate?: string;
       entryPrice?: string;
       quantity?: string;
+      shortMonthCredit?: string;
+      longMonthDebit?: string;
+      strikePrice?: string;
+      shortExpiration?: string;
+      longExpiration?: string;
     } = {};
     
     if (!entryDate) {
       newErrors.entryDate = 'Entry date is required';
     }
     
-    if (entryPrice <= 0) {
-      newErrors.entryPrice = 'Entry price must be greater than 0';
+    if (tradeIdea.strategy === 'calendar_spread') {
+      // For calendar spreads, validate specific fields
+      if (longMonthDebit <= 0) {
+        newErrors.longMonthDebit = 'Long month debit must be greater than 0';
+      }
+      
+      if (shortMonthCredit < 0) {
+        newErrors.shortMonthCredit = 'Short month credit cannot be negative';
+      }
+      
+      if (strikePrice <= 0) {
+        newErrors.strikePrice = 'Strike price must be greater than 0';
+      }
+      
+      if (!shortExpiration) {
+        newErrors.shortExpiration = 'Short expiration date is required';
+      }
+      
+      if (!longExpiration) {
+        newErrors.longExpiration = 'Long expiration date is required';
+      }
+      
+      if (shortExpiration && longExpiration && shortExpiration >= longExpiration) {
+        newErrors.longExpiration = 'Long expiration must be after short expiration';
+      }
+    } else {
+      // For other strategies, validate entry price
+      if (entryPrice <= 0) {
+        newErrors.entryPrice = 'Entry price must be greater than 0';
+      }
     }
     
     if (quantity <= 0) {
@@ -120,19 +203,36 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
         updatedAt: Date.now()
       };
     } else {
+      // For calendar spreads, store specific data in metadata
+      const updatedMetadata = tradeIdea.strategy === 'calendar_spread' ? {
+        ...tradeIdea.metadata,
+        calendarSpreadData: {
+          strikePrice,
+          shortMonthCredit,
+          longMonthDebit,
+          totalDebit,
+          shortExpiration,
+          longExpiration,
+          ivRvRatioAtEntry: ivRvRatio,
+          tsSlopeAtEntry: tsSlope,
+          brokerFees
+        }
+      } : tradeIdea.metadata;
+      
       activeTrade = {
         ...tradeIdea,
         entryDate,
-        entryPrice,
+        entryPrice: tradeIdea.strategy === 'calendar_spread' ? totalDebit : entryPrice,
         quantity,
         stopLoss: stopLoss || undefined,
         takeProfit: takeProfit || undefined,
-        fees,
+        fees: tradeIdea.strategy === 'calendar_spread' ? brokerFees : fees,
         notes: tradeIdea.notes + (notes ? `\n\nEntry notes: ${notes}` : ''),
         tags: [...tradeIdea.tags, 'active'],
         updatedAt: Date.now(),
         underlyingPrice,
-        legs
+        legs,
+        metadata: updatedMetadata
       };
     }
     
@@ -222,8 +322,8 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
         
         <ModalBody>
           <VStack spacing={4} align="stretch">
-            <Box p={3} bg="blue.50" borderRadius="md">
-              <Text fontWeight="medium">
+            <Box p={3} bg="blue.50" _dark={{ bg: "blue.800", borderColor: "blue.600" }} borderRadius="md" borderWidth="1px" borderColor="blue.200">
+              <Text fontWeight="medium" color="blue.800" _dark={{ color: "blue.100" }}>
                 Converting trade idea to active trade. Please enter execution details.
               </Text>
             </Box>
@@ -238,103 +338,167 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
               {errors.entryDate && <FormErrorMessage>{errors.entryDate}</FormErrorMessage>}
             </FormControl>
             
-            <HStack spacing={4}>
-              <FormControl isRequired isInvalid={!!errors.entryPrice}>
-                <FormLabel>Entry Price</FormLabel>
-                <NumberInput
-                  value={entryPrice}
-                  onChange={(_, value) => setEntryPrice(value)}
-                  min={0}
-                  precision={2}
-                >
-                  <NumberInputField />
-                  <NumberInputStepper>
-                    <NumberIncrementStepper />
-                    <NumberDecrementStepper />
-                  </NumberInputStepper>
-                </NumberInput>
-                {errors.entryPrice && <FormErrorMessage>{errors.entryPrice}</FormErrorMessage>}
-              </FormControl>
-              
-              <FormControl isRequired isInvalid={!!errors.quantity}>
-                <FormLabel>Quantity</FormLabel>
-                <NumberInput
-                  value={quantity}
-                  onChange={(_, value) => setQuantity(value)}
-                  min={1}
-                  precision={0}
-                >
-                  <NumberInputField />
-                  <NumberInputStepper>
-                    <NumberIncrementStepper />
-                    <NumberDecrementStepper />
-                  </NumberInputStepper>
-                </NumberInput>
-                {errors.quantity && <FormErrorMessage>{errors.quantity}</FormErrorMessage>}
-              </FormControl>
-            </HStack>
-            
-            <HStack spacing={4}>
-              <FormControl>
-                <FormLabel>Stop Loss</FormLabel>
-                <NumberInput
-                  value={stopLoss}
-                  onChange={(_, value) => setStopLoss(value)}
-                  min={0}
-                  precision={2}
-                >
-                  <NumberInputField />
-                  <NumberInputStepper>
-                    <NumberIncrementStepper />
-                    <NumberDecrementStepper />
-                  </NumberInputStepper>
-                </NumberInput>
-              </FormControl>
-              
-              <FormControl>
-                <FormLabel>Take Profit</FormLabel>
-                <NumberInput
-                  value={takeProfit}
-                  onChange={(_, value) => setTakeProfit(value)}
-                  min={0}
-                  precision={2}
-                >
-                  <NumberInputField />
-                  <NumberInputStepper>
-                    <NumberIncrementStepper />
-                    <NumberDecrementStepper />
-                  </NumberInputStepper>
-                </NumberInput>
-              </FormControl>
-            </HStack>
-            
-            <FormControl>
-              <FormLabel>Fees</FormLabel>
-              <NumberInput
-                value={fees}
-                onChange={(_, value) => setFees(value)}
-                min={0}
-                precision={2}
-              >
-                <NumberInputField />
-                <NumberInputStepper>
-                  <NumberIncrementStepper />
-                  <NumberDecrementStepper />
-                </NumberInputStepper>
-              </NumberInput>
-            </FormControl>
-            
-            {tradeIdea.strategy !== 'stock' && (
+            {tradeIdea.strategy === 'calendar_spread' ? (
               <>
-                <Divider my={2} />
+                <HStack spacing={4}>
+                  <FormControl isRequired isInvalid={!!errors.strikePrice}>
+                    <FormLabel>Strike Price</FormLabel>
+                    <Input
+                      type="number"
+                      value={strikePrice}
+                      onChange={(e) => setStrikePrice(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                    {errors.strikePrice && <FormErrorMessage>{errors.strikePrice}</FormErrorMessage>}
+                  </FormControl>
+                  
+                  <FormControl isRequired isInvalid={!!errors.quantity}>
+                    <FormLabel>Number of Contracts</FormLabel>
+                    <NumberInput
+                      value={quantity}
+                      onChange={(_, value) => setQuantity(value)}
+                      min={1}
+                      precision={0}
+                    >
+                      <NumberInputField />
+                      <NumberInputStepper>
+                        <NumberIncrementStepper />
+                        <NumberDecrementStepper />
+                      </NumberInputStepper>
+                    </NumberInput>
+                    {errors.quantity && <FormErrorMessage>{errors.quantity}</FormErrorMessage>}
+                  </FormControl>
+                </HStack>
+                
+                <HStack spacing={4}>
+                  <FormControl isRequired isInvalid={!!errors.shortExpiration}>
+                    <FormLabel>Short Month Expiration</FormLabel>
+                    <Input
+                      type="date"
+                      value={shortExpiration}
+                      onChange={(e) => setShortExpiration(e.target.value)}
+                    />
+                    {errors.shortExpiration && <FormErrorMessage>{errors.shortExpiration}</FormErrorMessage>}
+                  </FormControl>
+                  
+                  <FormControl isRequired isInvalid={!!errors.longExpiration}>
+                    <FormLabel>Long Month Expiration</FormLabel>
+                    <Input
+                      type="date"
+                      value={longExpiration}
+                      onChange={(e) => setLongExpiration(e.target.value)}
+                    />
+                    {errors.longExpiration && <FormErrorMessage>{errors.longExpiration}</FormErrorMessage>}
+                  </FormControl>
+                </HStack>
+                
+                <HStack spacing={4}>
+                  <FormControl>
+                    <FormLabel>Credit Received (Short Month)</FormLabel>
+                    <Input
+                      type="number"
+                      value={shortMonthCredit}
+                      onChange={(e) => setShortMonthCredit(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                  </FormControl>
+                  
+                  <FormControl isRequired isInvalid={!!errors.longMonthDebit}>
+                    <FormLabel>Debit Paid (Long Month)</FormLabel>
+                    <Input
+                      type="number"
+                      value={longMonthDebit}
+                      onChange={(e) => setLongMonthDebit(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                    {errors.longMonthDebit && <FormErrorMessage>{errors.longMonthDebit}</FormErrorMessage>}
+                  </FormControl>
+                </HStack>
+                
+                <Box
+                  p={4}
+                  bg="blue.50"
+                  _dark={{ bg: "blue.800", borderColor: "blue.600" }}
+                  borderRadius="md"
+                  borderWidth="1px"
+                  borderColor="blue.200"
+                >
+                  <Text fontWeight="semibold" color="blue.800" _dark={{ color: "blue.100" }}>
+                    Total Debit for Spread: ${totalDebit.toFixed(2)} per contract
+                  </Text>
+                  <Text fontSize="sm" color="blue.600" _dark={{ color: "blue.200" }} mt={1}>
+                    Total Cost: ${(totalDebit * quantity + brokerFees).toFixed(2)} (including ${brokerFees.toFixed(2)} broker fees)
+                  </Text>
+                </Box>
+                
+                <HStack spacing={4}>
+                  <FormControl>
+                    <FormLabel>IV/RV Ratio at Entry</FormLabel>
+                    <Input
+                      type="number"
+                      value={ivRvRatio}
+                      onChange={(e) => setIvRvRatio(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                  </FormControl>
+                  
+                  <FormControl>
+                    <FormLabel>TS Slope at Entry</FormLabel>
+                    <Input
+                      type="number"
+                      value={tsSlope}
+                      onChange={(e) => setTsSlope(parseFloat(e.target.value) || 0)}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                  </FormControl>
+                </HStack>
                 
                 <FormControl>
-                  <FormLabel>Underlying Price</FormLabel>
-                  <NumberInput
-                    value={underlyingPrice}
-                    onChange={(_, value) => setUnderlyingPrice(value)}
+                  <FormLabel>Broker Fees</FormLabel>
+                  <Input
+                    type="number"
+                    value={brokerFees}
+                    onChange={(e) => setBrokerFees(parseFloat(e.target.value) || 0)}
                     min={0}
-                    precision={2}
+                    step={0.01}
+                    placeholder="0.00"
+                  />
+                  <Text fontSize="xs" color="gray.500" mt={1}>
+                    Default: $8 per spread ($4 per contract)
+                  </Text>
+                </FormControl>
+              </>
+            ) : (
+              <HStack spacing={4}>
+                <FormControl isRequired isInvalid={!!errors.entryPrice}>
+                  <FormLabel>Entry Price</FormLabel>
+                  <Input
+                    type="number"
+                    value={entryPrice}
+                    onChange={(e) => setEntryPrice(parseFloat(e.target.value) || 0)}
+                    min={0}
+                    step={0.01}
+                    placeholder="0.00"
+                  />
+                  {errors.entryPrice && <FormErrorMessage>{errors.entryPrice}</FormErrorMessage>}
+                </FormControl>
+                
+                <FormControl isRequired isInvalid={!!errors.quantity}>
+                  <FormLabel>Quantity</FormLabel>
+                  <NumberInput
+                    value={quantity}
+                    onChange={(_, value) => setQuantity(value)}
+                    min={1}
+                    precision={0}
                   >
                     <NumberInputField />
                     <NumberInputStepper>
@@ -342,6 +506,67 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
                       <NumberDecrementStepper />
                     </NumberInputStepper>
                   </NumberInput>
+                  {errors.quantity && <FormErrorMessage>{errors.quantity}</FormErrorMessage>}
+                </FormControl>
+              </HStack>
+            )}
+            
+            {tradeIdea.strategy !== 'calendar_spread' && (
+              <>
+                <HStack spacing={4}>
+                  <FormControl>
+                    <FormLabel>Stop Loss</FormLabel>
+                    <Input
+                      type="number"
+                      value={stopLoss}
+                      onChange={(e) => setStopLoss(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                  </FormControl>
+                  
+                  <FormControl>
+                    <FormLabel>Take Profit</FormLabel>
+                    <Input
+                      type="number"
+                      value={takeProfit}
+                      onChange={(e) => setTakeProfit(parseFloat(e.target.value) || 0)}
+                      min={0}
+                      step={0.01}
+                      placeholder="0.00"
+                    />
+                  </FormControl>
+                </HStack>
+                
+                <FormControl>
+                  <FormLabel>Fees</FormLabel>
+                  <Input
+                    type="number"
+                    value={fees}
+                    onChange={(e) => setFees(parseFloat(e.target.value) || 0)}
+                    min={0}
+                    step={0.01}
+                    placeholder="0.00"
+                  />
+                </FormControl>
+              </>
+            )}
+            
+            {tradeIdea.strategy !== 'stock' && tradeIdea.strategy !== 'calendar_spread' && (
+              <>
+                <Divider my={2} />
+                
+                <FormControl>
+                  <FormLabel>Underlying Price</FormLabel>
+                  <Input
+                    type="number"
+                    value={underlyingPrice}
+                    onChange={(e) => setUnderlyingPrice(parseFloat(e.target.value) || 0)}
+                    min={0}
+                    step={0.01}
+                    placeholder="0.00"
+                  />
                 </FormControl>
                 
                 <Box>
