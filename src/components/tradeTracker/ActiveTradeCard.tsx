@@ -48,9 +48,10 @@ import {
   AddIcon,
   RepeatIcon
 } from '@chakra-ui/icons';
-import { AnyTradeEntry, StrategyType } from '../../types/tradeTracker';
+import { AnyTradeEntry, StrategyType, OptionLeg } from '../../types/tradeTracker';
 import TradeDetailsModal from './TradeDetailsModal';
 import CloseTradeModal from './CloseTradeModal';
+import ExpirationOutcomeModal from './ExpirationOutcomeModal';
 import { useData } from '../../context/DataContext';
 import { ActionType } from '../../context/DataContext';
 import { daysBetween, formatDisplayDate } from '../../utils/dateUtils';
@@ -127,6 +128,7 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
   const detailsModal = useDisclosure();
   const closeTradeModal = useDisclosure();
   const { isOpen: isDeleteOpen, onOpen: onDeleteOpen, onClose: onDeleteClose } = useDisclosure();
+  const { isOpen: isExpirationModalOpen, onOpen: onExpirationModalOpen, onClose: onExpirationModalClose } = useDisclosure();
   const toast = useToast();
   const { dispatch } = useData();
   const [isDeleting, setIsDeleting] = useState(false);
@@ -137,6 +139,7 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
   const [currentLegPrices, setCurrentLegPrices] = useState<{[key: string]: number}>(
     trade.metadata?.currentLegPrices || {}
   );
+  const [expiredLegNeedingOutcome, setExpiredLegNeedingOutcome] = useState<OptionLeg | null>(null);
   
   // Sync local state with trade prop changes (for "Fetch All" updates)
   React.useEffect(() => {
@@ -246,6 +249,23 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
 
     setIsFetchingPrices(true);
     try {
+      // Check for expired legs that need outcome logging
+      const currentDate = new Date();
+      const expiredLegsNeedingOutcome = trade.legs.filter((leg: OptionLeg) => {
+        const expirationDate = new Date(leg.expiration);
+        const isExpired = expirationDate < currentDate;
+        const hasOutcome = leg.expirationOutcome !== undefined;
+        return isExpired && !hasOutcome;
+      });
+
+      // If there are expired legs needing outcomes, prompt for the first one
+      if (expiredLegsNeedingOutcome.length > 0) {
+        setExpiredLegNeedingOutcome(expiredLegsNeedingOutcome[0]);
+        onExpirationModalOpen();
+        setIsFetchingPrices(false);
+        return;
+      }
+
       // Prepare contract specifications for the dedicated API
       const contracts = trade.legs.map(leg => ({
         optionType: leg.optionType,
@@ -370,6 +390,82 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
     }
   };
 
+  // Handle expiration outcome logging
+  const handleExpirationOutcome = async (outcome: { priceAtExpiration: number; wasForced: boolean }) => {
+    if (!expiredLegNeedingOutcome || !('legs' in trade)) return;
+
+    try {
+      const { tradeTrackerDB } = await import('../../services/tradeTrackerDB');
+      
+      // Find the leg index
+      const legIndex = trade.legs.findIndex((leg: OptionLeg) =>
+        leg.optionType === expiredLegNeedingOutcome.optionType &&
+        leg.strike === expiredLegNeedingOutcome.strike &&
+        leg.expiration === expiredLegNeedingOutcome.expiration
+      );
+
+      if (legIndex === -1) {
+        throw new Error('Could not find the expired leg in the trade');
+      }
+
+      // Update the leg with expiration outcome
+      const updatedLegs = [...trade.legs];
+      updatedLegs[legIndex] = {
+        ...updatedLegs[legIndex],
+        expirationOutcome: {
+          priceAtExpiration: outcome.priceAtExpiration,
+          loggedAt: Date.now(),
+          wasForced: outcome.wasForced
+        }
+      };
+
+      // Create updated trade
+      const updatedTrade = {
+        ...trade,
+        legs: updatedLegs,
+        updatedAt: Date.now()
+      } as AnyTradeEntry;
+
+      // Update in database
+      await tradeTrackerDB.updateTrade(updatedTrade);
+      
+      // Dispatch update to context
+      dispatch({
+        type: ActionType.UPDATE_TRADE_SUCCESS,
+        payload: updatedTrade
+      });
+
+      // Clear the expired leg state
+      setExpiredLegNeedingOutcome(null);
+
+      // Check if there are more expired legs needing outcomes
+      const remainingExpiredLegs = updatedLegs.filter((leg: OptionLeg) => {
+        const expirationDate = new Date(leg.expiration);
+        const isExpired = expirationDate < new Date();
+        const hasOutcome = leg.expirationOutcome !== undefined;
+        return isExpired && !hasOutcome;
+      });
+
+      // If there are more, prompt for the next one
+      if (remainingExpiredLegs.length > 0) {
+        setTimeout(() => {
+          setExpiredLegNeedingOutcome(remainingExpiredLegs[0]);
+          onExpirationModalOpen();
+        }, 500); // Small delay to let the modal close first
+      }
+
+    } catch (error) {
+      console.error('Error logging expiration outcome:', error);
+      toast({
+        title: 'Error',
+        description: 'Failed to log expiration outcome',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    }
+  };
+
   // Calculate real spread P&L based on current vs entry prices
   const calculateSpreadPnL = () => {
     if (!('legs' in trade) || !trade.legs || trade.legs.length === 0) {
@@ -379,9 +475,24 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
     let totalEntryValue = 0;
     let totalCurrentValue = 0;
 
-    trade.legs.forEach((leg, index) => {
+    trade.legs.forEach((leg: OptionLeg, index: number) => {
       const legKey = `leg_${index}`;
-      const currentPrice = currentLegPrices[legKey] || leg.premium;
+      
+      // Check if leg has expired and has an outcome logged
+      const currentDate = new Date();
+      const expirationDate = new Date(leg.expiration);
+      const isExpired = expirationDate < currentDate;
+      const hasExpirationOutcome = leg.expirationOutcome !== undefined;
+      
+      let currentPrice: number;
+      
+      if (isExpired && hasExpirationOutcome) {
+        // Use the logged expiration outcome price
+        currentPrice = leg.expirationOutcome!.priceAtExpiration;
+      } else {
+        // Use current market price or entry price as fallback
+        currentPrice = currentLegPrices[legKey] || leg.premium;
+      }
       
       // Calculate leg value (premium * quantity * multiplier)
       const legMultiplier = leg.isLong ? 1 : -1;
@@ -517,20 +628,49 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
                 <Th>Entry Premium</Th>
                 <Th>Current Premium</Th>
                 <Th>Leg P&L</Th>
+                <Th>Actions</Th>
               </Tr>
             </Thead>
             <Tbody>
-              {trade.legs.map((leg, index) => {
+              {trade.legs.map((leg: OptionLeg, index: number) => {
                 const legKey = `leg_${index}`;
-                const currentPrice = currentLegPrices[legKey] || leg.premium;
+                
+                // Check if leg has expired and has an outcome logged
+                const currentDate = new Date();
+                const expirationDate = new Date(leg.expiration);
+                const isExpired = expirationDate < currentDate;
+                const hasExpirationOutcome = leg.expirationOutcome !== undefined;
+                
+                let currentPrice: number;
+                let priceSource: string;
+                
+                if (isExpired && hasExpirationOutcome) {
+                  // Use the logged expiration outcome price
+                  currentPrice = leg.expirationOutcome!.priceAtExpiration;
+                  priceSource = leg.expirationOutcome!.wasForced ? 'Forced Close' : 'Expired Worthless';
+                } else if (isExpired && !hasExpirationOutcome) {
+                  // Expired but no outcome logged - show as needing attention
+                  currentPrice = leg.premium;
+                  priceSource = 'Needs Outcome';
+                } else {
+                  // Use current market price or entry price as fallback
+                  currentPrice = currentLegPrices[legKey] || leg.premium;
+                  priceSource = currentLegPrices[legKey] ? 'Live Price' : 'Entry Price';
+                }
+                
                 const legMultiplier = leg.isLong ? 1 : -1;
                 const entryValue = leg.premium * leg.quantity * legMultiplier * 100;
                 const currentValue = currentPrice * leg.quantity * legMultiplier * 100;
                 const legPnL = currentValue - entryValue;
 
                 return (
-                  <Tr key={index}>
-                    <Td fontWeight="medium">Leg {index + 1}</Td>
+                  <Tr key={index} bg={isExpired && !hasExpirationOutcome ? 'orange.50' : 'inherit'}>
+                    <Td fontWeight="medium">
+                      Leg {index + 1}
+                      {isExpired && !hasExpirationOutcome && (
+                        <Badge colorScheme="orange" size="sm" ml={1}>!</Badge>
+                      )}
+                    </Td>
                     <Td>
                       <Badge colorScheme={leg.optionType === 'call' ? 'green' : 'red'} size="sm">
                         {leg.optionType.toUpperCase()}
@@ -542,18 +682,64 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
                       </Badge>
                     </Td>
                     <Td>${leg.strike.toFixed(2)}</Td>
-                    <Td>{formatDate(leg.expiration)}</Td>
+                    <Td>
+                      <VStack align="start" spacing={0}>
+                        <Text fontSize="sm">{formatDate(leg.expiration)}</Text>
+                        {isExpired && (
+                          <Badge
+                            colorScheme={hasExpirationOutcome ? 'gray' : 'orange'}
+                            size="xs"
+                          >
+                            {hasExpirationOutcome ? 'EXPIRED' : 'NEEDS OUTCOME'}
+                          </Badge>
+                        )}
+                      </VStack>
+                    </Td>
                     <Td>{leg.quantity}</Td>
                     <Td>${leg.premium.toFixed(2)}</Td>
                     <Td>
-                      <Text color={currentPrice !== leg.premium ? (currentPrice > leg.premium ? 'green.500' : 'red.500') : 'inherit'}>
-                        ${currentPrice.toFixed(2)}
+                      <VStack align="start" spacing={0}>
+                        <Text
+                          color={
+                            isExpired && !hasExpirationOutcome ? 'orange.500' :
+                            currentPrice !== leg.premium ? (currentPrice > leg.premium ? 'green.500' : 'red.500') : 'inherit'
+                          }
+                        >
+                          ${currentPrice.toFixed(2)}
+                        </Text>
+                        <Text fontSize="xs" color="gray.500">
+                          {priceSource}
+                        </Text>
+                      </VStack>
+                    </Td>
+                    <Td>
+                      <Text
+                        color={
+                          isExpired && !hasExpirationOutcome ? 'orange.500' :
+                          legPnL >= 0 ? 'green.500' : 'red.500'
+                        }
+                        fontWeight="medium"
+                      >
+                        ${legPnL.toFixed(2)}
                       </Text>
                     </Td>
                     <Td>
-                      <Text color={legPnL >= 0 ? 'green.500' : 'red.500'} fontWeight="medium">
-                        ${legPnL.toFixed(2)}
-                      </Text>
+                      {isExpired && !hasExpirationOutcome && (
+                        <Tooltip label="Log expiration outcome">
+                          <IconButton
+                            aria-label="Update outcome"
+                            icon={<EditIcon />}
+                            size="xs"
+                            variant="ghost"
+                            colorScheme="orange"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setExpiredLegNeedingOutcome(leg);
+                              onExpirationModalOpen();
+                            }}
+                          />
+                        </Tooltip>
+                      )}
                     </Td>
                   </Tr>
                 );
@@ -630,6 +816,16 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
           </AlertDialogContent>
         </AlertDialogOverlay>
       </AlertDialog>
+      
+      {/* Expiration Outcome Modal */}
+      {expiredLegNeedingOutcome && (
+        <ExpirationOutcomeModal
+          isOpen={isExpirationModalOpen}
+          onClose={onExpirationModalClose}
+          expiredLeg={expiredLegNeedingOutcome}
+          onOutcomeLogged={handleExpirationOutcome}
+        />
+      )}
     </Box>
   );
 };

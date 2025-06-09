@@ -19,7 +19,7 @@ import {
   MenuItem,
   IconButton
 } from '@chakra-ui/react';
-import { SearchIcon, ChevronDownIcon, SettingsIcon } from '@chakra-ui/icons';
+import { SearchIcon, ChevronDownIcon, SettingsIcon, ViewIcon, ViewOffIcon } from '@chakra-ui/icons';
 import { useData } from '../../context/DataContext';
 import { AnyTradeEntry } from '../../types/tradeTracker';
 import TradeIdeaCard from './TradeIdeaCard';
@@ -37,6 +37,7 @@ const TradeIdeasPanel: React.FC = () => {
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState('date');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [isCompactView, setIsCompactView] = useState(false);
   
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -78,7 +79,20 @@ const TradeIdeasPanel: React.FC = () => {
       
       switch (sortBy) {
         case 'date':
-          comparison = new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime();
+          // Sort by earnings date if available, otherwise fall back to entry date
+          const aEarningsDate = a.metadata?.earningsDate;
+          const bEarningsDate = b.metadata?.earningsDate;
+          
+          if (aEarningsDate && bEarningsDate) {
+            comparison = new Date(aEarningsDate).getTime() - new Date(bEarningsDate).getTime();
+          } else if (aEarningsDate && !bEarningsDate) {
+            comparison = -1; // Ideas with earnings dates come first
+          } else if (!aEarningsDate && bEarningsDate) {
+            comparison = 1; // Ideas with earnings dates come first
+          } else {
+            // Both don't have earnings dates, sort by entry date
+            comparison = new Date(a.entryDate).getTime() - new Date(b.entryDate).getTime();
+          }
           break;
         case 'ticker':
           comparison = a.ticker.localeCompare(b.ticker);
@@ -112,6 +126,11 @@ const TradeIdeasPanel: React.FC = () => {
     setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
   };
   
+  // Toggle compact view
+  const toggleCompactView = () => {
+    setIsCompactView(!isCompactView);
+  };
+  
   return (
     <Box>
       <Flex mb={4} direction={{ base: 'column', md: 'row' }} gap={4}>
@@ -136,7 +155,7 @@ const TradeIdeasPanel: React.FC = () => {
             width="auto"
             borderRadius="md"
           >
-            <option value="date">Date</option>
+            <option value="date">Earnings Date</option>
             <option value="ticker">Ticker</option>
             <option value="strategy">Strategy</option>
           </Select>
@@ -146,6 +165,14 @@ const TradeIdeasPanel: React.FC = () => {
             icon={<ChevronDownIcon transform={sortOrder === 'asc' ? 'rotate(180deg)' : undefined} />}
             onClick={toggleSortOrder}
             variant="outline"
+          />
+          
+          <IconButton
+            aria-label={isCompactView ? 'Show detailed view' : 'Show compact view'}
+            icon={isCompactView ? <ViewIcon /> : <ViewOffIcon />}
+            onClick={toggleCompactView}
+            variant="outline"
+            colorScheme={isCompactView ? 'orange' : 'gray'}
           />
           
           <Menu>
@@ -191,7 +218,7 @@ const TradeIdeasPanel: React.FC = () => {
               </Text>
               <VStack spacing={4} align="stretch">
                 {sortedActiveIdeas.map((idea) => (
-                  <TradeIdeaCard key={idea.id} tradeIdea={idea} />
+                  <TradeIdeaCard key={idea.id} tradeIdea={idea} isCompactView={isCompactView} />
                 ))}
               </VStack>
             </Box>
@@ -208,7 +235,7 @@ const TradeIdeasPanel: React.FC = () => {
               </Text>
               <VStack spacing={4} align="stretch">
                 {sortedExpiredIdeas.map((idea) => (
-                  <TradeIdeaCard key={idea.id} tradeIdea={idea} />
+                  <TradeIdeaCard key={idea.id} tradeIdea={idea} isCompactView={isCompactView} />
                 ))}
               </VStack>
             </Box>

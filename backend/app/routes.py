@@ -143,22 +143,24 @@ def quick_filter_ticker(ticker_symbol):
         # Get stock data
         stock = yf.Ticker(ticker_symbol)
         
-        # Get current price and volume
-        history = stock.history(period="1d")
+        # Get current price and 30-day average volume (matching main analysis)
+        history = stock.history(period="3mo")  # Get 3 months of data for 30-day rolling average
         
         if history.empty:
             logger.warning(f"No price data for {ticker_symbol}")
             return False
             
         current_price = history['Close'].iloc[-1]
-        avg_volume = history['Volume'].iloc[-1]
+        # Calculate 30-day rolling average volume to match main analysis logic
+        # This ensures consistency between quick filter and full analysis
+        avg_volume = history['Volume'].rolling(30).mean().dropna().iloc[-1]
         
         # Check if price and volume meet minimum requirements
         price_pass = current_price >= QUICK_FILTER.get("min_price", 2.50)
         volume_pass = avg_volume >= QUICK_FILTER.get("min_volume", 1500000)
         
         logger.info(f"{ticker_symbol}: Price ${current_price:.2f} ({'PASS' if price_pass else 'FAIL'}), "
-                   f"Volume {avg_volume:.0f} ({'PASS' if volume_pass else 'FAIL'})")
+                   f"30-day Avg Volume {avg_volume:.0f} ({'PASS' if volume_pass else 'FAIL'})")
         
         return price_pass and volume_pass
     except Exception as e:

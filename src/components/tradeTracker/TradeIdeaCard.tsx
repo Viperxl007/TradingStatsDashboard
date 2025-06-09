@@ -93,6 +93,7 @@ const strategyColors: Record<StrategyType, string> = {
 
 interface TradeIdeaCardProps {
   tradeIdea: AnyTradeEntry;
+  isCompactView?: boolean;
 }
 
 /**
@@ -100,7 +101,7 @@ interface TradeIdeaCardProps {
  * 
  * This component displays a single trade idea in a card format.
  */
-const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
+const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView = false }) => {
   const {
     id,
     ticker,
@@ -338,7 +339,26 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
             </VStack>
           </HStack>
           
-          <Menu>
+          <HStack spacing={3}>
+            {/* Earnings Date in Header */}
+            {earningsDate && (
+              <VStack align="flex-end" spacing={0}>
+                <Text fontSize="sm" fontWeight="medium" color={textColor}>
+                  {formatDisplayDate(earningsDate)}
+                </Text>
+                {earningsTime && (
+                  <Badge
+                    colorScheme={earningsTime === 'BMO' ? 'orange' : 'purple'}
+                    variant="solid"
+                    fontSize="xs"
+                  >
+                    {earningsTime === 'BMO' ? '☀️ BMO' : earningsTime === 'AMC' ? '🌙 AMC' : earningsTime}
+                  </Badge>
+                )}
+              </VStack>
+            )}
+            
+            <Menu>
             <MenuButton
               as={IconButton}
               aria-label="Options"
@@ -352,6 +372,7 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
               <MenuItem icon={<DeleteIcon />} color="red.500" onClick={onDeleteOpen}>Delete</MenuItem>
             </MenuList>
           </Menu>
+          </HStack>
         </Flex>
         
         {/* Strategy badge and earnings info */}
@@ -367,141 +388,145 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
           )}
         </HStack>
         
-        {/* Main content grid */}
-        <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap={4} width="100%" mb={3}>
-          {/* Left column - Trade details */}
-          <GridItem>
-            <VStack align="flex-start" spacing={3}>
-              {/* Current price */}
-              {currentPrice > 0 && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">Current Price</StatLabel>
-                  <StatNumber fontSize="md">${currentPrice.toFixed(2)}</StatNumber>
-                </Stat>
-              )}
-              
-              {/* Expected move */}
-              {expectedMove && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">Expected Move</StatLabel>
-                  <StatNumber fontSize="md">{expectedMove}</StatNumber>
-                </Stat>
-              )}
-              
-              {/* Earnings Date and Time */}
-              {earningsDate && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">Earnings Date</StatLabel>
-                  <StatNumber fontSize="md">
-                    <HStack spacing={2}>
-                      <Text>
-                        {formatDisplayDate(earningsDate)}
-                      </Text>
-                      {earningsTime && (
-                        <Badge
-                          colorScheme={earningsTime === 'BMO' ? 'orange' : 'purple'}
-                          variant="solid"
-                          fontSize="xs"
-                        >
-                          {earningsTime === 'BMO' ? '☀️ BMO' : earningsTime === 'AMC' ? '🌙 AMC' : earningsTime}
+        {/* Main content grid - conditionally rendered based on compact view */}
+        {!isCompactView && (
+          <Grid templateColumns={{ base: "1fr", md: "1fr 1fr" }} gap={4} width="100%" mb={3}>
+            {/* Left column - Trade details */}
+            <GridItem>
+              <VStack align="flex-start" spacing={3}>
+                {/* Current price */}
+                {currentPrice > 0 && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">Current Price</StatLabel>
+                    <StatNumber fontSize="md">${currentPrice.toFixed(2)}</StatNumber>
+                  </Stat>
+                )}
+                
+                {/* Expected move */}
+                {expectedMove && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">Expected Move</StatLabel>
+                    <StatNumber fontSize="md">{expectedMove}</StatNumber>
+                  </Stat>
+                )}
+                
+                {/* Earnings Date and Time */}
+                {earningsDate && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">Earnings Date</StatLabel>
+                    <StatNumber fontSize="md">
+                      <HStack spacing={2}>
+                        <Text>
+                          {formatDisplayDate(earningsDate)}
+                        </Text>
+                        {earningsTime && (
+                          <Badge
+                            colorScheme={earningsTime === 'BMO' ? 'orange' : 'purple'}
+                            variant="solid"
+                            fontSize="xs"
+                          >
+                            {earningsTime === 'BMO' ? '☀️ BMO' : earningsTime === 'AMC' ? '🌙 AMC' : earningsTime}
+                          </Badge>
+                        )}
+                      </HStack>
+                    </StatNumber>
+                  </Stat>
+                )}
+                
+                {/* Estimated spread cost */}
+                {estimatedSpreadCost > 0 && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">Est. Spread Cost</StatLabel>
+                    <StatNumber fontSize="md">${estimatedSpreadCost.toFixed(2)}</StatNumber>
+                  </Stat>
+                )}
+                
+                {/* Closest strikes */}
+                {closestStrikes && closestStrikes.length > 0 && (
+                  <Box>
+                    <Text fontSize="xs" fontWeight="medium">Closest Strikes:</Text>
+                    <HStack spacing={2} mt={1}>
+                      {closestStrikes.map((strike: number | string, idx: number) => (
+                        <Badge key={idx} variant="outline" colorScheme="blue">
+                          ${typeof strike === 'number' ? strike.toFixed(2) : strike}
                         </Badge>
-                      )}
+                      ))}
                     </HStack>
-                  </StatNumber>
-                </Stat>
-              )}
-              
-              {/* Estimated spread cost */}
-              {estimatedSpreadCost > 0 && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">Est. Spread Cost</StatLabel>
-                  <StatNumber fontSize="md">${estimatedSpreadCost.toFixed(2)}</StatNumber>
-                </Stat>
-              )}
-              
-              {/* Closest strikes */}
-              {closestStrikes && closestStrikes.length > 0 && (
-                <Box>
-                  <Text fontSize="xs" fontWeight="medium">Closest Strikes:</Text>
-                  <HStack spacing={2} mt={1}>
-                    {closestStrikes.map((strike: number | string, idx: number) => (
-                      <Badge key={idx} variant="outline" colorScheme="blue">
-                        ${typeof strike === 'number' ? strike.toFixed(2) : strike}
-                      </Badge>
-                    ))}
-                  </HStack>
-                </Box>
-              )}
-            </VStack>
-          </GridItem>
-          
-          {/* Right column - Metrics */}
-          <GridItem>
-            <VStack align="flex-start" spacing={3}>
-              {/* Volume */}
-              {metrics.avgVolume > 0 && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">Volume</StatLabel>
-                  <StatNumber
-                    fontSize="md"
-                    color={getMetricColor('volume', metrics.avgVolume)}
-                    fontWeight="bold"
-                  >
-                    {metrics.avgVolume.toLocaleString()}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs" mt={0}>
-                    {metrics.avgVolume >= 1500000 ? '✓ Above 1.5M' : '✗ Below 1.5M'}
-                  </StatHelpText>
-                </Stat>
-              )}
-              
-              {/* IV/RV */}
-              {metrics.iv30Rv30 > 0 && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">IV/RV</StatLabel>
-                  <StatNumber
-                    fontSize="md"
-                    color={getMetricColor('iv', metrics.iv30Rv30)}
-                    fontWeight="bold"
-                  >
-                    {metrics.iv30Rv30.toFixed(2)}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs" mt={0}>
-                    {metrics.iv30Rv30 >= 1.25 ? '✓ Above 1.25' : '✗ Below 1.25'}
-                  </StatHelpText>
-                </Stat>
-              )}
-              
-              {/* TS Slope */}
-              {metrics.tsSlope !== 0 && (
-                <Stat size="sm">
-                  <StatLabel fontSize="xs">TS Slope</StatLabel>
-                  <StatNumber
-                    fontSize="md"
-                    color={getMetricColor('slope', metrics.tsSlope)}
-                    fontWeight="bold"
-                  >
-                    {metrics.tsSlope.toFixed(5)}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs" mt={0}>
-                    {metrics.tsSlope <= -0.00406 ? '✓ Below -0.00406' : '✗ Above -0.00406'}
-                  </StatHelpText>
-                </Stat>
-              )}
-            </VStack>
-          </GridItem>
-        </Grid>
+                  </Box>
+                )}
+              </VStack>
+            </GridItem>
+            
+            {/* Right column - Metrics */}
+            <GridItem>
+              <VStack align="flex-start" spacing={3}>
+                {/* Volume */}
+                {metrics.avgVolume > 0 && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">Volume</StatLabel>
+                    <StatNumber
+                      fontSize="md"
+                      color={getMetricColor('volume', metrics.avgVolume)}
+                      fontWeight="bold"
+                    >
+                      {metrics.avgVolume.toLocaleString()}
+                    </StatNumber>
+                    <StatHelpText fontSize="xs" mt={0}>
+                      {metrics.avgVolume >= 1500000 ? '✓ Above 1.5M' : '✗ Below 1.5M'}
+                    </StatHelpText>
+                  </Stat>
+                )}
+                
+                {/* IV/RV */}
+                {metrics.iv30Rv30 > 0 && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">IV/RV</StatLabel>
+                    <StatNumber
+                      fontSize="md"
+                      color={getMetricColor('iv', metrics.iv30Rv30)}
+                      fontWeight="bold"
+                    >
+                      {metrics.iv30Rv30.toFixed(2)}
+                    </StatNumber>
+                    <StatHelpText fontSize="xs" mt={0}>
+                      {metrics.iv30Rv30 >= 1.25 ? '✓ Above 1.25' : '✗ Below 1.25'}
+                    </StatHelpText>
+                  </Stat>
+                )}
+                
+                {/* TS Slope */}
+                {metrics.tsSlope !== 0 && (
+                  <Stat size="sm">
+                    <StatLabel fontSize="xs">TS Slope</StatLabel>
+                    <StatNumber
+                      fontSize="md"
+                      color={getMetricColor('slope', metrics.tsSlope)}
+                      fontWeight="bold"
+                    >
+                      {metrics.tsSlope.toFixed(5)}
+                    </StatNumber>
+                    <StatHelpText fontSize="xs" mt={0}>
+                      {metrics.tsSlope <= -0.00406 ? '✓ Below -0.00406' : '✗ Above -0.00406'}
+                    </StatHelpText>
+                  </Stat>
+                )}
+              </VStack>
+            </GridItem>
+          </Grid>
+        )}
         
-        {/* Notes section */}
-        <Box width="100%" mb={3}>
-          <Text fontSize="xs" fontWeight="medium" mb={1}>Notes:</Text>
-          <Text fontSize="sm" color={mutedColor} noOfLines={3}>
-            {notes || 'No notes provided'}
-          </Text>
-        </Box>
+        {/* Notes section - conditionally rendered */}
+        {!isCompactView && (
+          <Box width="100%" mb={3}>
+            <Text fontSize="xs" fontWeight="medium" mb={1}>Notes:</Text>
+            <Text fontSize="sm" color={mutedColor} noOfLines={3}>
+              {notes || 'No notes provided'}
+            </Text>
+          </Box>
+        )}
         
-        {/* Tags */}
-        {tags.length > 0 && (
+        {/* Tags - conditionally rendered */}
+        {!isCompactView && tags.length > 0 && (
           <HStack spacing={2} mt={1} mb={3} flexWrap="wrap">
             {tags.map((tag, index) => (
               <Tag size="sm" key={index} colorScheme="gray" borderRadius="full">
@@ -511,10 +536,11 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
           </HStack>
         )}
         
-        <Divider my={3} />
+        {!isCompactView && <Divider my={3} />}
         
-        {/* Footer with dates and action buttons */}
-        <Flex width="100%" justifyContent="space-between" alignItems="center">
+        {/* Footer with dates and action buttons - conditionally rendered */}
+        {!isCompactView && (
+          <Flex width="100%" justifyContent="space-between" alignItems="center">
           <VStack align="flex-start" spacing={1}>
             <Tooltip label="Target entry date" placement="top">
               <HStack>
@@ -594,9 +620,11 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
             )}
           </HStack>
         </Flex>
+        )}
         
-        {/* Deeper Analysis Section */}
-        <Collapse in={showDeeperAnalysis} animateOpacity>
+        {/* Deeper Analysis Section - conditionally rendered */}
+        {!isCompactView && (
+          <Collapse in={showDeeperAnalysis} animateOpacity>
           <Box mt={4} p={4} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             {isLoadingAnalysis ? (
               <Flex justify="center" align="center" py={8}>
@@ -725,6 +753,7 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea }) => {
             )}
           </Box>
         </Collapse>
+        )}
       </Flex>
       
       {/* Convert to Trade Modal */}
