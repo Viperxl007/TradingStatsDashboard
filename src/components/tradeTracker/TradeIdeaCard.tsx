@@ -120,6 +120,10 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView 
   const [isLoadingAnalysis, setIsLoadingAnalysis] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
   
+  // State for metrics refresh
+  const [isRefreshingMetrics, setIsRefreshingMetrics] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  
   // Function to get color based on metric thresholds
   const getMetricColor = (metric: 'volume' | 'iv' | 'slope', value: number) => {
     switch (metric) {
@@ -211,6 +215,68 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView 
     fetchDeeperAnalysis();
   };
   
+  // Function to refresh core metrics
+  const refreshMetrics = async () => {
+    setIsRefreshingMetrics(true);
+    try {
+      const response = await fetch(`http://localhost:5000/api/refresh-metrics/${ticker}`);
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success) {
+          // Update local state for immediate UI feedback
+          setLastRefreshTime(new Date());
+          
+          // Update the trade idea record in the database with refreshed metrics
+          const updatedTradeIdea = {
+            ...tradeIdea,
+            metadata: {
+              ...metadata,
+              metrics: {
+                ...metadata?.metrics,
+                avgVolume: data.metrics.avgVolume,
+                iv30Rv30: data.metrics.iv30Rv30,
+                tsSlope: data.metrics.tsSlope
+              },
+              lastMetricsRefresh: new Date().toISOString()
+            }
+          };
+          
+          // Save to database
+          await tradeTrackerDB.updateTrade(updatedTradeIdea);
+          
+          // Update context for immediate UI sync across components
+          dispatch({
+            type: ActionType.UPDATE_TRADE_SUCCESS,
+            payload: updatedTradeIdea
+          });
+          
+          toast({
+            title: 'Metrics Updated',
+            description: `Core metrics refreshed and saved for ${ticker}`,
+            status: 'success',
+            duration: 2000,
+            isClosable: true,
+          });
+        } else {
+          throw new Error(data.error || 'Failed to refresh metrics');
+        }
+      } else {
+        throw new Error('Failed to fetch updated metrics');
+      }
+    } catch (error) {
+      console.error('Error refreshing metrics:', error);
+      toast({
+        title: 'Refresh Failed',
+        description: 'Could not refresh metrics. Please try again.',
+        status: 'error',
+        duration: 3000,
+        isClosable: true,
+      });
+    } finally {
+      setIsRefreshingMetrics(false);
+    }
+  };
+  
   // Get existing analysis data
   const existingAnalysis = metadata?.deeperAnalysis || analysisData;
 
@@ -292,6 +358,14 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView 
   const earningsTime = metadata?.earningsTime || ''; // 'BMO' (pre-market) or 'AMC' (after-hours)
   const closestStrikes = metadata?.closestStrikes || [];
   const estimatedSpreadCost = metadata?.estimatedSpreadCost || 0;
+  const lastMetricsRefresh = metadata?.lastMetricsRefresh;
+  
+  // Use persisted metrics from database if available, otherwise fall back to temporary refresh state
+  const displayMetrics = {
+    avgVolume: metrics.avgVolume || 0,
+    iv30Rv30: metrics.iv30Rv30 || 0,
+    tsSlope: metrics.tsSlope || 0
+  };
   
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
@@ -460,53 +534,81 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView 
             {/* Right column - Metrics */}
             <GridItem>
               <VStack align="flex-start" spacing={3}>
+                {/* Metrics Header with Refresh Button */}
+                <HStack justify="space-between" width="100%">
+                  <Text fontSize="xs" fontWeight="semibold" color="gray.600">
+                    Core Metrics
+                  </Text>
+                  <Tooltip label="Refresh core metrics" placement="top">
+                    <IconButton
+                      aria-label="Refresh metrics"
+                      icon={isRefreshingMetrics ? <Spinner size="xs" /> : <RepeatIcon />}
+                      size="xs"
+                      variant="ghost"
+                      onClick={refreshMetrics}
+                      isLoading={isRefreshingMetrics}
+                      colorScheme="blue"
+                    />
+                  </Tooltip>
+                </HStack>
+                
+                {/* Last refresh timestamp */}
+                {(lastRefreshTime || lastMetricsRefresh) && (
+                  <Text fontSize="xs" color="gray.500">
+                    Updated: {lastRefreshTime ?
+                      lastRefreshTime.toLocaleTimeString() :
+                      new Date(lastMetricsRefresh).toLocaleTimeString()
+                    }
+                  </Text>
+                )}
+                
                 {/* Volume */}
-                {metrics.avgVolume > 0 && (
+                {displayMetrics.avgVolume > 0 && (
                   <Stat size="sm">
                     <StatLabel fontSize="xs">Volume</StatLabel>
                     <StatNumber
                       fontSize="md"
-                      color={getMetricColor('volume', metrics.avgVolume)}
+                      color={getMetricColor('volume', displayMetrics.avgVolume)}
                       fontWeight="bold"
                     >
-                      {metrics.avgVolume.toLocaleString()}
+                      {displayMetrics.avgVolume.toLocaleString()}
                     </StatNumber>
                     <StatHelpText fontSize="xs" mt={0}>
-                      {metrics.avgVolume >= 1500000 ? '✓ Above 1.5M' : '✗ Below 1.5M'}
+                      {displayMetrics.avgVolume >= 1500000 ? '✓ Above 1.5M' : '✗ Below 1.5M'}
                     </StatHelpText>
                   </Stat>
                 )}
                 
                 {/* IV/RV */}
-                {metrics.iv30Rv30 > 0 && (
+                {displayMetrics.iv30Rv30 > 0 && (
                   <Stat size="sm">
                     <StatLabel fontSize="xs">IV/RV</StatLabel>
                     <StatNumber
                       fontSize="md"
-                      color={getMetricColor('iv', metrics.iv30Rv30)}
+                      color={getMetricColor('iv', displayMetrics.iv30Rv30)}
                       fontWeight="bold"
                     >
-                      {metrics.iv30Rv30.toFixed(2)}
+                      {displayMetrics.iv30Rv30.toFixed(2)}
                     </StatNumber>
                     <StatHelpText fontSize="xs" mt={0}>
-                      {metrics.iv30Rv30 >= 1.25 ? '✓ Above 1.25' : '✗ Below 1.25'}
+                      {displayMetrics.iv30Rv30 >= 1.25 ? '✓ Above 1.25' : '✗ Below 1.25'}
                     </StatHelpText>
                   </Stat>
                 )}
                 
                 {/* TS Slope */}
-                {metrics.tsSlope !== 0 && (
+                {displayMetrics.tsSlope !== 0 && (
                   <Stat size="sm">
                     <StatLabel fontSize="xs">TS Slope</StatLabel>
                     <StatNumber
                       fontSize="md"
-                      color={getMetricColor('slope', metrics.tsSlope)}
+                      color={getMetricColor('slope', displayMetrics.tsSlope)}
                       fontWeight="bold"
                     >
-                      {metrics.tsSlope.toFixed(5)}
+                      {displayMetrics.tsSlope.toFixed(5)}
                     </StatNumber>
                     <StatHelpText fontSize="xs" mt={0}>
-                      {metrics.tsSlope <= -0.00406 ? '✓ Below -0.00406' : '✗ Above -0.00406'}
+                      {displayMetrics.tsSlope <= -0.00406 ? '✓ Below -0.00406' : '✗ Above -0.00406'}
                     </StatHelpText>
                   </Stat>
                 )}

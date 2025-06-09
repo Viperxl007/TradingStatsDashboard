@@ -14,6 +14,10 @@ import {
   GridItem,
   Tooltip,
   Icon,
+  Alert,
+  AlertIcon,
+  AlertTitle,
+  AlertDescription,
 } from '@chakra-ui/react';
 import { OptimalCalendarSpread } from '../types';
 import ScoreThermometer from './ScoreThermometer';
@@ -215,6 +219,49 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
             </Flex>
           </Flex>
         </Flex>
+        
+        {/* Liquidity Warning Display */}
+        {calendarSpread.liquidityWarnings && (
+          <Box mb={4}>
+            {(calendarSpread.liquidityWarnings.frontMonth.level !== 'safe' ||
+              calendarSpread.liquidityWarnings.backMonth.level !== 'safe') && (
+              <Alert
+                status={
+                  calendarSpread.liquidityWarnings.backMonth.level === 'high_risk' ||
+                  calendarSpread.liquidityWarnings.frontMonth.level === 'high_risk'
+                    ? 'error'
+                    : 'warning'
+                }
+                borderRadius="md"
+                mb={3}
+              >
+                <AlertIcon />
+                <Box>
+                  <AlertTitle>Liquidity Warning!</AlertTitle>
+                  <AlertDescription>
+                    <Text fontSize="sm" mb={2}>
+                      <strong>{calendarSpread.liquidityWarnings.thresholdInfo.tier}</strong> stock
+                      (Market Cap: ${(calendarSpread.liquidityWarnings.thresholdInfo.market_cap / 1_000_000_000).toFixed(1)}B)
+                    </Text>
+                    {calendarSpread.liquidityWarnings.frontMonth.level !== 'safe' && (
+                      <Text fontSize="sm" mb={1}>
+                        • Front month: {calendarSpread.liquidityWarnings.frontMonth.description}
+                      </Text>
+                    )}
+                    {calendarSpread.liquidityWarnings.backMonth.level !== 'safe' && (
+                      <Text fontSize="sm" mb={1}>
+                        • Back month: {calendarSpread.liquidityWarnings.backMonth.description}
+                      </Text>
+                    )}
+                    <Text fontSize="sm" fontStyle="italic">
+                      Consider smaller position sizes and be prepared for wider bid/ask spreads.
+                    </Text>
+                  </AlertDescription>
+                </Box>
+              </Alert>
+            )}
+          </Box>
+        )}
         
         <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">

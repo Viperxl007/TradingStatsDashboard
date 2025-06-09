@@ -161,6 +161,25 @@ export interface OptimalCalendarSpread {
       back: number;              // Amount of IV crush in back month
     };
   };
+  // Liquidity warning information
+  liquidityWarnings?: {
+    frontMonth: {
+      level: 'safe' | 'caution' | 'high_risk';
+      color: 'green' | 'yellow' | 'red';
+      description: string;
+    };
+    backMonth: {
+      level: 'safe' | 'caution' | 'high_risk';
+      color: 'green' | 'yellow' | 'red';
+      description: string;
+    };
+    threshold: number;
+    thresholdInfo: {
+      tier: string;
+      market_cap: number;
+      description: string;
+    };
+  };
 }
 
 /**

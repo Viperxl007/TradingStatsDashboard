@@ -36,7 +36,7 @@ const TradeIdeasPanel: React.FC = () => {
   
   const [searchText, setSearchText] = useState('');
   const [sortBy, setSortBy] = useState('date');
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
   const [isCompactView, setIsCompactView] = useState(false);
   
   const bgColor = useColorModeValue('white', 'gray.800');
