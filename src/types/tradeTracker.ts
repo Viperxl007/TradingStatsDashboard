@@ -78,6 +78,11 @@ export interface OptionLeg {
   premium: number;                 // Premium paid/received per contract
   quantity: number;                // Number of contracts
   isLong: boolean;                 // Whether the leg is long (true) or short (false)
+  expirationOutcome?: {            // Outcome when leg expires (for tracking expired legs)
+    priceAtExpiration: number;     // Price paid/received at expiration ($0 if expired worthless)
+    loggedAt: number;              // Unix timestamp when outcome was logged
+    wasForced: boolean;            // Whether broker forced buy-to-close (true) or expired worthless (false)
+  };
 }
 
 /**

@@ -472,13 +472,16 @@ export class TradeTrackerDB {
     statistics.profitFactor = statistics.totalLoss > 0 ? statistics.totalProfit / statistics.totalLoss : 0;
     statistics.expectancy = statistics.winRate * statistics.averageProfit - (1 - statistics.winRate) * statistics.averageLoss;
     
-    // Calculate Sharpe ratio (risk-adjusted return)
+    // Calculate Sharpe ratio (risk-adjusted return) - Finance Standard
     if (closedTrades.length > 1) {
-      // Calculate returns for each trade (as percentage of entry price)
+      // Calculate returns for each trade (as percentage of premium/capital at risk)
       const returns: number[] = [];
       for (const trade of closedTrades) {
         if (trade.profitLoss !== undefined && trade.entryPrice > 0) {
-          const returnPct = (trade.profitLoss / (trade.entryPrice * trade.quantity)) * 100;
+          // For options trading, calculate return on premium (capital at risk)
+          // This is more appropriate for options strategies than total position value
+          const capitalAtRisk = trade.entryPrice * trade.quantity;
+          const returnPct = (trade.profitLoss / capitalAtRisk) * 100;
           returns.push(returnPct);
         }
       }
@@ -487,13 +490,15 @@ export class TradeTrackerDB {
         // Calculate mean return
         const meanReturn = returns.reduce((sum, ret) => sum + ret, 0) / returns.length;
         
-        // Calculate standard deviation of returns
+        // Calculate standard deviation of returns (using sample standard deviation)
         const variance = returns.reduce((sum, ret) => sum + Math.pow(ret - meanReturn, 2), 0) / (returns.length - 1);
         const stdDev = Math.sqrt(variance);
         
-        // Sharpe ratio = (mean return - risk-free rate) / standard deviation
+        // Sharpe ratio = (mean return - risk-free rate) / standard deviation * sqrt(252)
+        // Annualized using 252 trading days per year (finance standard)
         // Assuming risk-free rate of 0 for simplicity (can be adjusted later)
-        statistics.sharpeRatio = stdDev > 0 ? meanReturn / stdDev : 0;
+        const annualizationFactor = Math.sqrt(252);
+        statistics.sharpeRatio = stdDev > 0 ? (meanReturn / stdDev) * annualizationFactor : 0;
       }
     }
     

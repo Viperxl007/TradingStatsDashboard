@@ -75,11 +75,23 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
   // Calculate profit/loss
   const calculateProfitLoss = () => {
     if (trade.strategy === 'calendar_spread') {
-      // For calendar spreads: P&L = Credit Received - Total Debit Paid - Fees
+      // For calendar spreads: P&L = Credit Received - Total Debit Paid - Fees + Expiration Outcomes
       // Option prices are per-share, so multiply by 100 to get per-contract amounts
       const totalDebitPaid = trade.entryPrice * trade.quantity * 100;
       const totalCreditReceived = creditReceived * trade.quantity * 100;
-      const result = totalCreditReceived - totalDebitPaid - fees;
+      
+      // Add expiration outcomes for expired legs
+      let expirationOutcomeValue = 0;
+      if ('legs' in trade && trade.legs) {
+        trade.legs.forEach(leg => {
+          if (leg.expirationOutcome) {
+            const legMultiplier = leg.isLong ? -1 : 1; // For long: cost is negative, for short: cost reduces profit
+            expirationOutcomeValue += leg.expirationOutcome.priceAtExpiration * leg.quantity * legMultiplier * 100;
+          }
+        });
+      }
+      
+      const result = totalCreditReceived - totalDebitPaid - fees + expirationOutcomeValue;
       
       // Debug logging
       console.log('Calendar Spread P&L Calculation:', {
@@ -89,6 +101,7 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
         creditReceived,
         totalCreditReceived,
         fees,
+        expirationOutcomeValue,
         result
       });
       
@@ -347,6 +360,46 @@ const CloseTradeModal: React.FC<CloseTradeModalProps> = ({ isOpen, onClose, trad
               <Text fontWeight="medium">Direction:</Text>
               <Text>{trade.direction === 'long' ? 'Long' : 'Short'}</Text>
             </HStack>
+            
+            {/* Show expiration outcomes if any exist */}
+            {'legs' in trade && trade.legs && trade.legs.some(leg => leg.expirationOutcome) && (
+              <>
+                <Divider />
+                <VStack align="stretch" spacing={2}>
+                  <Text fontWeight="medium">Expiration Outcomes:</Text>
+                  {trade.legs.map((leg, index) => {
+                    if (!leg.expirationOutcome) return null;
+                    
+                    const outcome = leg.expirationOutcome;
+                    const outcomeValue = outcome.priceAtExpiration * leg.quantity * 100;
+                    const isProfit = leg.isLong ? outcomeValue < 0 : outcomeValue > 0;
+                    
+                    return (
+                      <Box key={index} p={2} borderWidth="1px" borderRadius="md" bg={useColorModeValue('gray.50', 'gray.700')}>
+                        <HStack justify="space-between">
+                          <VStack align="start" spacing={0}>
+                            <Text fontSize="sm" fontWeight="medium">
+                              {leg.optionType.toUpperCase()} ${leg.strike} {new Date(leg.expiration).toLocaleDateString()}
+                            </Text>
+                            <Text fontSize="xs" color="gray.600">
+                              {outcome.wasForced ? 'Forced buy-to-close' : 'Expired worthless'}
+                            </Text>
+                          </VStack>
+                          <VStack align="end" spacing={0}>
+                            <Text fontSize="sm" fontWeight="medium" color={isProfit ? 'green.500' : 'red.500'}>
+                              ${outcome.priceAtExpiration.toFixed(2)}
+                            </Text>
+                            <Text fontSize="xs" color="gray.600">
+                              {isProfit ? 'Profit' : 'Loss'}: ${Math.abs(outcomeValue).toFixed(2)}
+                            </Text>
+                          </VStack>
+                        </HStack>
+                      </Box>
+                    );
+                  })}
+                </VStack>
+              </>
+            )}
           </VStack>
         </ModalBody>
         

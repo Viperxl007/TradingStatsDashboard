@@ -14,7 +14,7 @@ import math
 from datetime import datetime, timedelta
 from scipy.interpolate import interp1d
 from scipy.stats import norm
-from app.data_fetcher import get_stock_data, get_options_data, get_current_price
+from app.data_fetcher import get_stock_data, get_options_data, get_current_price, get_stock_info
 import yfinance as yf
 
 # Custom exception for data validation errors
@@ -200,6 +200,74 @@ def get_atm_strikes_for_earnings(stock, expiration, current_price):
         return []
 
 
+def get_common_atm_strikes(stock, front_expiration, back_expiration, current_price):
+    """
+    Get ATM strikes that exist in both front and back month expirations.
+    
+    Args:
+        stock (Ticker): yfinance Ticker object
+        front_expiration (str): Front month expiration date in YYYY-MM-DD format
+        back_expiration (str): Back month expiration date in YYYY-MM-DD format
+        current_price (float): Current stock price
+        
+    Returns:
+        list: List of common ATM strike prices that exist in both expirations
+    """
+    try:
+        # Get available strikes from both expirations
+        front_chain = stock.option_chain(front_expiration)
+        back_chain = stock.option_chain(back_expiration)
+        
+        if front_chain.calls.empty or back_chain.calls.empty:
+            logger.debug(f"Empty options chain - front_calls: {front_chain.calls.empty}, back_calls: {back_chain.calls.empty}")
+            return []
+        
+        # Get all available strikes from both months
+        front_strikes = set(front_chain.calls['strike'].unique())
+        back_strikes = set(back_chain.calls['strike'].unique())
+        
+        # Find intersection of strikes
+        common_strikes = front_strikes.intersection(back_strikes)
+        
+        if not common_strikes:
+            logger.debug(f"No common strikes between {front_expiration} and {back_expiration}")
+            logger.debug(f"Front strikes: {sorted(front_strikes)}")
+            logger.debug(f"Back strikes: {sorted(back_strikes)}")
+            return []
+        
+        # Convert to sorted list
+        common_strikes_list = sorted(list(common_strikes))
+        
+        # Find the best ATM strikes from common strikes
+        # We want strikes within 5% of current price, prioritizing closest to ATM
+        atm_strikes = []
+        
+        for strike in common_strikes_list:
+            distance_pct = abs((strike / current_price) - 1.0)
+            if distance_pct <= 0.05:  # Within 5% of current price
+                atm_strikes.append({
+                    'strike': strike,
+                    'distance_pct': distance_pct
+                })
+        
+        if not atm_strikes:
+            # If no strikes within 5%, take the closest available common strikes
+            logger.debug(f"No common strikes within 5% of current price ${current_price}, using closest available")
+            closest_strike = min(common_strikes_list, key=lambda x: abs(x - current_price))
+            atm_strikes = [{'strike': closest_strike, 'distance_pct': abs((closest_strike / current_price) - 1.0)}]
+        
+        # Sort by distance from current price and return just the strike prices
+        atm_strikes.sort(key=lambda x: x['distance_pct'])
+        result_strikes = [item['strike'] for item in atm_strikes[:3]]  # Return top 3 closest
+        
+        logger.info(f"Common ATM strikes between {front_expiration} and {back_expiration} at price ${current_price}: {result_strikes}")
+        return result_strikes
+        
+    except Exception as e:
+        logger.error(f"Error getting common ATM strikes: {str(e)}")
+        return []
+
+
 def get_next_earnings_date(ticker):
     """
     Get the next earnings date for a ticker.
@@ -269,6 +337,91 @@ def get_next_earnings_date(ticker):
     except Exception as e:
         logger.error(f"Error getting next earnings date for {ticker}: {str(e)}")
         return None
+
+
+def get_dynamic_liquidity_threshold(ticker):
+    """
+    Get dynamic liquidity threshold based on market cap tiers.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Returns:
+        dict: Contains threshold and tier information
+    """
+    try:
+        stock_info = get_stock_info(ticker)
+        market_cap = stock_info.get('marketCap', 0)
+        
+        # Define market cap tiers (in billions)
+        if market_cap >= 10_000_000_000:  # >= $10B
+            return {
+                'threshold': 4.0,
+                'tier': 'Large Cap',
+                'market_cap': market_cap,
+                'description': 'High liquidity expected'
+            }
+        elif market_cap >= 2_000_000_000:  # $2B - $10B
+            return {
+                'threshold': 2.5,
+                'tier': 'Mid Cap',
+                'market_cap': market_cap,
+                'description': 'Moderate liquidity acceptable'
+            }
+        elif market_cap >= 300_000_000:  # $300M - $2B
+            return {
+                'threshold': 1.5,
+                'tier': 'Small Cap',
+                'market_cap': market_cap,
+                'description': 'Limited liquidity is normal'
+            }
+        else:  # < $300M (should be filtered by price screener)
+            return {
+                'threshold': 1.0,
+                'tier': 'Micro Cap',
+                'market_cap': market_cap,
+                'description': 'Very limited liquidity - high execution risk'
+            }
+    except Exception as e:
+        logger.warning(f"Could not determine market cap for {ticker}: {str(e)}")
+        # Default to mid-cap threshold if we can't determine market cap
+        return {
+            'threshold': 2.5,
+            'tier': 'Unknown',
+            'market_cap': 0,
+            'description': 'Market cap unknown - using moderate threshold'
+        }
+
+
+def get_liquidity_warning_level(liquidity_score, threshold):
+    """
+    Determine the warning level for liquidity based on score vs threshold.
+    
+    Args:
+        liquidity_score (float): Current liquidity score
+        threshold (float): Required threshold
+        
+    Returns:
+        dict: Warning level and description
+    """
+    if liquidity_score >= threshold:
+        return {
+            'level': 'safe',
+            'color': 'green',
+            'description': 'Good liquidity for execution'
+        }
+    elif liquidity_score >= threshold - 0.5:
+        return {
+            'level': 'caution',
+            'color': 'yellow',
+            'description': 'Moderate liquidity - wider spreads possible'
+        }
+    else:
+        return {
+            'level': 'high_risk',
+            'color': 'red',
+            'description': 'Low liquidity - difficult execution expected'
+        }
 
 
 def get_atm_iv(stock, expiration, strike):
@@ -971,6 +1124,11 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
         
         logger.info(f"{ticker} current price: ${current_price}")
         
+        # Get dynamic liquidity threshold based on market cap
+        liquidity_info = get_dynamic_liquidity_threshold(ticker)
+        liquidity_threshold = liquidity_info['threshold']
+        logger.info(f"{ticker} liquidity threshold: {liquidity_threshold} ({liquidity_info['tier']}, Market Cap: ${liquidity_info['market_cap']:,.0f})")
+        
         # Get expiration dates
         exp_dates = stock.options
         if not exp_dates:
@@ -1033,7 +1191,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
         logger.info(f"{ticker} evaluating front month expirations: {front_month_expirations}")
         
         # Define a function to evaluate a single spread combination
-        def evaluate_spread(params):
+        def evaluate_spread(params, liquidity_threshold=2.5, liquidity_info=None):
             if len(params) == 4:
                 days_out, strike, option_type, front_exp = params
             else:
@@ -1215,10 +1373,15 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 logger.debug(f"Skipping {ticker} {option_type} strike ${strike}: insufficient spread cost (${spread_cost:.2f} < ${min_viable_cost:.2f})")
                 return None
                 
-            # Skip if back month liquidity is too low
-            if back_liquidity['score'] < 2.5:
-                logger.debug(f"Skipping {ticker} {option_type} strike ${strike}: insufficient back month liquidity ({back_liquidity['score']:.1f} < 4.0)")
-                return None
+            # Check liquidity against dynamic threshold and add warning information
+            back_liquidity_warning = get_liquidity_warning_level(back_liquidity['score'], liquidity_threshold)
+            front_liquidity_warning = get_liquidity_warning_level(front_liquidity['score'], liquidity_threshold)
+            
+            # Log liquidity status but don't filter out - let user decide
+            if back_liquidity['score'] < liquidity_threshold:
+                logger.debug(f"{ticker} {option_type} strike ${strike}: back month liquidity below threshold ({back_liquidity['score']:.1f} < {liquidity_threshold})")
+            if front_liquidity['score'] < liquidity_threshold:
+                logger.debug(f"{ticker} {option_type} strike ${strike}: front month liquidity below threshold ({front_liquidity['score']:.1f} < {liquidity_threshold})")
             
             # Calculate a composite score with our improved formula
             score_result = calculate_spread_score(
@@ -1278,7 +1441,17 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                     'enhancedProbability': float(monte_carlo_results['probability_of_profit'] if monte_carlo_results else probability),
                     # Add earnings-specific information
                     'earningsDate': earnings_date,
-                    'isEarningsTrade': earnings_date is not None
+                    'isEarningsTrade': earnings_date is not None,
+                    # Add liquidity warning information
+                    'liquidityWarnings': {
+                        'frontMonth': front_liquidity_warning,
+                        'backMonth': back_liquidity_warning,
+                        'threshold': liquidity_threshold,
+                        'thresholdInfo': liquidity_info if liquidity_info else {
+                            'tier': 'Unknown',
+                            'description': 'Market cap unknown'
+                        }
+                    }
                 }
             }
             
@@ -1316,19 +1489,28 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
         # Create a list of all combinations to evaluate
         combinations = []
         
-        # For each front month expiration, get appropriate strikes
+        # For each front month expiration, find common strikes with each back month
         for front_exp in front_month_expirations:
-            # Always use ATM strikes for calendar spreads (earnings-optimized approach)
-            # This focuses on the most efficient strikes regardless of whether we found an earnings date
-            strikes = get_atm_strikes_for_earnings(stock, front_exp, current_price)
-            if earnings_date:
-                logger.info(f"{ticker} using ATM strikes for confirmed earnings trade on {front_exp}: {strikes}")
-            else:
-                logger.info(f"{ticker} using ATM strikes for calendar spread on {front_exp}: {strikes}")
-            
             # Create combinations for each back month option
             for days_out in back_month_exp_options:
-                for strike in strikes:
+                # Find the back month expiration for this days_out
+                target_date = today + timedelta(days=days_out)
+                back_month = find_closest_expiration(exp_dates, target_date)
+                
+                # Get common ATM strikes between this specific front/back month pair
+                common_strikes = get_common_atm_strikes(stock, front_exp, back_month, current_price)
+                
+                if not common_strikes:
+                    logger.debug(f"{ticker}: No common strikes found between {front_exp} and {back_month}")
+                    continue
+                
+                if earnings_date:
+                    logger.info(f"{ticker} common ATM strikes for earnings trade {front_exp}/{back_month}: {common_strikes}")
+                else:
+                    logger.info(f"{ticker} common ATM strikes for calendar spread {front_exp}/{back_month}: {common_strikes}")
+                
+                # Create combinations for each common strike
+                for strike in common_strikes:
                     # Determine option type based on strike price relative to current price
                     if strike < current_price:
                         option_type = 'put'
@@ -1354,7 +1536,7 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
                 front_exp = front_month
             try:
                 logger.debug(f"DIAGNOSTIC: Evaluating {ticker} {option_type} strike ${strike}, days out {days_out}, front exp {front_exp}")
-                result = evaluate_spread(combo)
+                result = evaluate_spread(combo, liquidity_threshold, liquidity_info)
                 if result and result['score'] > best_score:
                     best_score = result['score']
                     best_spread = result['spread']
@@ -1362,8 +1544,8 @@ def find_optimal_calendar_spread(ticker, back_month_exp_options=[30, 45, 60], al
             except Exception as e:
                 logger.warning(f"Error evaluating spread for {ticker} {option_type} strike ${strike}, days out {days_out}: {str(e)}")
         
-        # Set a minimum threshold score (lowered from 5.0)
-        MINIMUM_VIABLE_SCORE = 3.0
+        # Set a minimum threshold score (lowered to show more results with warnings)
+        MINIMUM_VIABLE_SCORE = 1.0
         logger.info(f"{ticker} best score found: {best_score}, minimum threshold: {MINIMUM_VIABLE_SCORE}")
         
         if best_score < MINIMUM_VIABLE_SCORE:

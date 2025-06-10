@@ -20,13 +20,15 @@ import {
   IconButton,
   Badge,
   useToast,
-  Spinner
+  Spinner,
+  ButtonGroup
 } from '@chakra-ui/react';
-import { SearchIcon, ChevronDownIcon, SettingsIcon, AddIcon, RepeatIcon } from '@chakra-ui/icons';
+import { SearchIcon, ChevronDownIcon, SettingsIcon, AddIcon, RepeatIcon, ViewIcon, CalendarIcon } from '@chakra-ui/icons';
 import { useData } from '../../context/DataContext';
 import { AnyTradeEntry, OptionTradeEntry, OptionLeg } from '../../types/tradeTracker';
 import { ActionType } from '../../context/DataContext';
 import ActiveTradeCard from './ActiveTradeCard';
+import ActiveTradesCalendarView from './ActiveTradesCalendarView';
 import ConvertToTradeModal from './ConvertToTradeModal';
 import { useDisclosure } from '@chakra-ui/react';
 
@@ -45,6 +47,7 @@ const ActiveTradesPanel: React.FC = () => {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [selectedTradeIdea, setSelectedTradeIdea] = useState<AnyTradeEntry | null>(null);
   const [isFetchingAll, setIsFetchingAll] = useState(false);
+  const [viewMode, setViewMode] = useState<'list' | 'calendar'>('list');
   
   const { isOpen, onOpen, onClose } = useDisclosure();
   const toast = useToast();
@@ -259,70 +262,96 @@ const ActiveTradesPanel: React.FC = () => {
   return (
     <Box>
       <Flex mb={4} direction={{ base: 'column', md: 'row' }} gap={4}>
-        <InputGroup maxW={{ base: '100%', md: '300px' }}>
-          <InputLeftElement pointerEvents="none">
-            <SearchIcon color="gray.400" />
-          </InputLeftElement>
-          <Input
-            placeholder="Search active trades..."
-            value={searchText}
-            onChange={handleSearchChange}
-            borderRadius="md"
-          />
-        </InputGroup>
+        {/* View Toggle */}
+        <ButtonGroup size="sm" isAttached variant="outline">
+          <Button
+            leftIcon={<ViewIcon />}
+            onClick={() => setViewMode('list')}
+            colorScheme={viewMode === 'list' ? 'brand' : 'gray'}
+            variant={viewMode === 'list' ? 'solid' : 'outline'}
+          >
+            List
+          </Button>
+          <Button
+            leftIcon={<CalendarIcon />}
+            onClick={() => setViewMode('calendar')}
+            colorScheme={viewMode === 'calendar' ? 'brand' : 'gray'}
+            variant={viewMode === 'calendar' ? 'solid' : 'outline'}
+          >
+            Calendar
+          </Button>
+        </ButtonGroup>
+
+        {/* Search - only show in list view */}
+        {viewMode === 'list' && (
+          <InputGroup maxW={{ base: '100%', md: '300px' }}>
+            <InputLeftElement pointerEvents="none">
+              <SearchIcon color="gray.400" />
+            </InputLeftElement>
+            <Input
+              placeholder="Search active trades..."
+              value={searchText}
+              onChange={handleSearchChange}
+              borderRadius="md"
+            />
+          </InputGroup>
+        )}
         
         <Spacer />
         
-        <HStack spacing={2}>
-          {/* Fetch All Button */}
-          {activeTrades.length > 0 && (
-            <Button
-              leftIcon={isFetchingAll ? <Spinner size="xs" /> : <RepeatIcon />}
-              size="sm"
-              colorScheme="green"
-              variant="outline"
-              onClick={fetchAllPrices}
-              isLoading={isFetchingAll}
-              loadingText="Updating..."
-              isDisabled={isFetchingAll}
+        {/* Controls - only show in list view */}
+        {viewMode === 'list' && (
+          <HStack spacing={2}>
+            {/* Fetch All Button */}
+            {activeTrades.length > 0 && (
+              <Button
+                leftIcon={isFetchingAll ? <Spinner size="xs" /> : <RepeatIcon />}
+                size="sm"
+                colorScheme="green"
+                variant="outline"
+                onClick={fetchAllPrices}
+                isLoading={isFetchingAll}
+                loadingText="Updating..."
+                isDisabled={isFetchingAll}
+              >
+                Fetch All
+              </Button>
+            )}
+            
+            <Select
+              value={sortBy}
+              onChange={handleSortChange}
+              width="auto"
+              borderRadius="md"
             >
-              Fetch All
-            </Button>
-          )}
-          
-          <Select
-            value={sortBy}
-            onChange={handleSortChange}
-            width="auto"
-            borderRadius="md"
-          >
-            <option value="date">Date</option>
-            <option value="ticker">Ticker</option>
-            <option value="strategy">Strategy</option>
-            <option value="pnl">P&L</option>
-          </Select>
-          
-          <IconButton
-            aria-label={`Sort ${sortOrder === 'asc' ? 'ascending' : 'descending'}`}
-            icon={<ChevronDownIcon transform={sortOrder === 'asc' ? 'rotate(180deg)' : undefined} />}
-            onClick={toggleSortOrder}
-            variant="outline"
-          />
-          
-          <Menu>
-            <MenuButton
-              as={IconButton}
-              aria-label="Filter options"
-              icon={<SettingsIcon />}
+              <option value="date">Date</option>
+              <option value="ticker">Ticker</option>
+              <option value="strategy">Strategy</option>
+              <option value="pnl">P&L</option>
+            </Select>
+            
+            <IconButton
+              aria-label={`Sort ${sortOrder === 'asc' ? 'ascending' : 'descending'}`}
+              icon={<ChevronDownIcon transform={sortOrder === 'asc' ? 'rotate(180deg)' : undefined} />}
+              onClick={toggleSortOrder}
               variant="outline"
             />
-            <MenuList>
-              <MenuItem>Show All</MenuItem>
-              <MenuItem>Show Profitable Only</MenuItem>
-              <MenuItem>Show Losing Only</MenuItem>
-            </MenuList>
-          </Menu>
-        </HStack>
+            
+            <Menu>
+              <MenuButton
+                as={IconButton}
+                aria-label="Filter options"
+                icon={<SettingsIcon />}
+                variant="outline"
+              />
+              <MenuList>
+                <MenuItem>Show All</MenuItem>
+                <MenuItem>Show Profitable Only</MenuItem>
+                <MenuItem>Show Losing Only</MenuItem>
+              </MenuList>
+            </Menu>
+          </HStack>
+        )}
       </Flex>
       
       {tradeIdeas.length > 0 && (
@@ -361,40 +390,47 @@ const ActiveTradesPanel: React.FC = () => {
         </Flex>
       )}
       
-      {sortedTrades.length === 0 ? (
-        <Center 
-          p={8} 
-          borderWidth="1px" 
-          borderRadius="md" 
-          borderStyle="dashed"
-          borderColor={borderColor}
-        >
-          <VStack spacing={3}>
-            <Text fontSize="lg" color="gray.500">
-              No active trades found
-            </Text>
-            {tradeIdeas.length > 0 ? (
-              <Button 
-                colorScheme="brand" 
-                size="sm" 
-                leftIcon={<AddIcon />}
-                onClick={() => handleConvertTradeIdea(tradeIdeas[0])}
-              >
-                Convert Trade Idea to Active Trade
-              </Button>
-            ) : (
-              <Button colorScheme="brand" size="sm" leftIcon={<AddIcon />}>
-                Add Your First Trade
-              </Button>
-            )}
-          </VStack>
-        </Center>
+      {/* Render based on view mode */}
+      {viewMode === 'calendar' ? (
+        <ActiveTradesCalendarView trades={activeTrades} />
       ) : (
-        <VStack spacing={4} align="stretch">
-          {sortedTrades.map((trade) => (
-            <ActiveTradeCard key={trade.id} trade={trade} />
-          ))}
-        </VStack>
+        <>
+          {sortedTrades.length === 0 ? (
+            <Center
+              p={8}
+              borderWidth="1px"
+              borderRadius="md"
+              borderStyle="dashed"
+              borderColor={borderColor}
+            >
+              <VStack spacing={3}>
+                <Text fontSize="lg" color="gray.500">
+                  No active trades found
+                </Text>
+                {tradeIdeas.length > 0 ? (
+                  <Button
+                    colorScheme="brand"
+                    size="sm"
+                    leftIcon={<AddIcon />}
+                    onClick={() => handleConvertTradeIdea(tradeIdeas[0])}
+                  >
+                    Convert Trade Idea to Active Trade
+                  </Button>
+                ) : (
+                  <Button colorScheme="brand" size="sm" leftIcon={<AddIcon />}>
+                    Add Your First Trade
+                  </Button>
+                )}
+              </VStack>
+            </Center>
+          ) : (
+            <VStack spacing={4} align="stretch">
+              {sortedTrades.map((trade) => (
+                <ActiveTradeCard key={trade.id} trade={trade} />
+              ))}
+            </VStack>
+          )}
+        </>
       )}
       
       {/* Convert to Trade Modal */}

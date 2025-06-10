@@ -143,22 +143,24 @@ def quick_filter_ticker(ticker_symbol):
         # Get stock data
         stock = yf.Ticker(ticker_symbol)
         
-        # Get current price and volume
-        history = stock.history(period="1d")
+        # Get current price and 30-day average volume (matching main analysis)
+        history = stock.history(period="3mo")  # Get 3 months of data for 30-day rolling average
         
         if history.empty:
             logger.warning(f"No price data for {ticker_symbol}")
             return False
             
         current_price = history['Close'].iloc[-1]
-        avg_volume = history['Volume'].iloc[-1]
+        # Calculate 30-day rolling average volume to match main analysis logic
+        # This ensures consistency between quick filter and full analysis
+        avg_volume = history['Volume'].rolling(30).mean().dropna().iloc[-1]
         
         # Check if price and volume meet minimum requirements
         price_pass = current_price >= QUICK_FILTER.get("min_price", 2.50)
         volume_pass = avg_volume >= QUICK_FILTER.get("min_volume", 1500000)
         
         logger.info(f"{ticker_symbol}: Price ${current_price:.2f} ({'PASS' if price_pass else 'FAIL'}), "
-                   f"Volume {avg_volume:.0f} ({'PASS' if volume_pass else 'FAIL'})")
+                   f"30-day Avg Volume {avg_volume:.0f} ({'PASS' if volume_pass else 'FAIL'})")
         
         return price_pass and volume_pass
     except Exception as e:
@@ -568,6 +570,151 @@ def get_ticker_earnings_history(ticker):
         return jsonify({
             "error": str(e),
             "ticker": ticker,
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/refresh-metrics/<ticker>', methods=['GET'])
+def refresh_metrics(ticker):
+    """
+    Refresh the core metrics for a trade idea: volume, IV/RV ratio, and term structure slope.
+    
+    This endpoint uses the SAME calculation logic as the main analysis function to ensure
+    consistency between scan results and refresh results.
+    
+    Returns:
+    {
+        "ticker": "AAPL",
+        "metrics": {
+            "avgVolume": 50000000,
+            "iv30Rv30": 1.35,
+            "tsSlope": -0.00512
+        },
+        "timestamp": 1234567890.123,
+        "success": true
+    }
+    """
+    try:
+        ticker = ticker.upper().strip()
+        logger.info(f"Refreshing metrics for {ticker} using main analysis logic")
+        
+        # Import required functions from options_analyzer
+        from app.options_analyzer import get_current_price, filter_dates, build_term_structure, yang_zhang
+        from app.data_fetcher import get_stock_data
+        import concurrent.futures
+        
+        # Get stock data - same as main analysis
+        stock_data = get_stock_data(ticker)
+        if not stock_data or len(stock_data.options) == 0:
+            return jsonify({
+                "error": f"No options found for stock symbol '{ticker}'",
+                "ticker": ticker,
+                "success": False,
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+        # Filter expiration dates - same as main analysis
+        exp_dates = list(stock_data.options)
+        try:
+            exp_dates = filter_dates(exp_dates)
+        except Exception:
+            return jsonify({
+                "error": "Not enough option data",
+                "ticker": ticker,
+                "success": False,
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+        # Get options chains in parallel - same as main analysis
+        def fetch_option_chain(exp_date):
+            return exp_date, stock_data.option_chain(exp_date)
+        
+        options_chains = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(exp_dates))) as executor:
+            future_to_date = {executor.submit(fetch_option_chain, exp_date): exp_date for exp_date in exp_dates}
+            
+            for future in concurrent.futures.as_completed(future_to_date):
+                try:
+                    exp_date, chain = future.result()
+                    options_chains[exp_date] = chain
+                except Exception as e:
+                    logger.warning(f"Error fetching option chain for {ticker} on {future_to_date[future]}: {str(e)}")
+        
+        # Get current price - same as main analysis
+        underlying_price = get_current_price(stock_data)
+        if underlying_price is None:
+            return jsonify({
+                "error": "No market price found",
+                "ticker": ticker,
+                "success": False,
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+        # Calculate ATM IV for each expiration - same as main analysis
+        atm_iv = {}
+        for exp_date, chain in options_chains.items():
+            calls = chain.calls
+            puts = chain.puts
+            
+            if calls.empty or puts.empty:
+                continue
+            
+            call_diffs = (calls['strike'] - underlying_price).abs()
+            call_idx = call_diffs.idxmin()
+            call_iv = calls.loc[call_idx, 'impliedVolatility']
+            
+            put_diffs = (puts['strike'] - underlying_price).abs()
+            put_idx = put_diffs.idxmin()
+            put_iv = puts.loc[put_idx, 'impliedVolatility']
+            
+            atm_iv_value = (call_iv + put_iv) / 2.0
+            atm_iv[exp_date] = atm_iv_value
+        
+        if not atm_iv:
+            return jsonify({
+                "error": "Could not determine ATM IV for any expiration dates",
+                "ticker": ticker,
+                "success": False,
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+        # Calculate days to expiry and build term structure - same as main analysis
+        today = datetime.today().date()
+        dtes = []
+        ivs = []
+        for exp_date, iv in atm_iv.items():
+            exp_date_obj = datetime.strptime(exp_date, "%Y-%m-%d").date()
+            days_to_expiry = (exp_date_obj - today).days
+            dtes.append(days_to_expiry)
+            ivs.append(iv)
+        
+        term_spline = build_term_structure(dtes, ivs)
+        
+        # Calculate metrics using EXACT same logic as main analysis
+        ts_slope_0_45 = (term_spline(45) - term_spline(dtes[0])) / (45-dtes[0])  # Same as main analysis
+        
+        price_history = stock_data.history(period='3mo')  # Same as main analysis
+        iv30_rv30 = term_spline(30) / yang_zhang(price_history)  # Same as main analysis
+        
+        avg_volume = price_history['Volume'].rolling(30).mean().dropna().iloc[-1]  # Same as main analysis
+        
+        # Return updated metrics
+        return jsonify({
+            "ticker": ticker,
+            "metrics": {
+                "avgVolume": float(avg_volume),
+                "iv30Rv30": float(iv30_rv30),
+                "tsSlope": float(ts_slope_0_45)
+            },
+            "timestamp": datetime.now().timestamp(),
+            "success": True
+        })
+        
+    except Exception as e:
+        logger.error(f"Error refreshing metrics for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "ticker": ticker,
+            "success": False,
             "timestamp": datetime.now().timestamp()
         }), 500
 

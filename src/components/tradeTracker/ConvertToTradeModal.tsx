@@ -76,6 +76,7 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
   const [longExpiration, setLongExpiration] = useState('');
   const [ivRvRatio, setIvRvRatio] = useState(0);
   const [tsSlope, setTsSlope] = useState(0);
+  const [optionType, setOptionType] = useState<'call' | 'put'>('call');
   
   // Calculate total debit for calendar spread
   const totalDebit = longMonthDebit - shortMonthCredit;
@@ -102,6 +103,20 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
       // Pre-populate underlying price
       if (tradeIdea.metadata.currentPrice) {
         setUnderlyingPrice(tradeIdea.metadata.currentPrice);
+      }
+      
+      // Pre-populate option type for calendar spreads
+      if (tradeIdea.strategy === 'calendar_spread') {
+        if (tradeIdea.metadata.optionType) {
+          setOptionType(tradeIdea.metadata.optionType as 'call' | 'put');
+        } else if (tradeIdea.metadata.deeperAnalysis?.optimalCalendarSpread) {
+          const analysis = tradeIdea.metadata.deeperAnalysis.optimalCalendarSpread;
+          if (analysis.putSpread && !analysis.callSpread) {
+            setOptionType('put');
+          } else {
+            setOptionType('call'); // Default to call
+          }
+        }
       }
     }
   }, [tradeIdea]);
@@ -206,6 +221,9 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
       // For calendar spreads, store specific data in metadata
       const updatedMetadata = tradeIdea.strategy === 'calendar_spread' ? {
         ...tradeIdea.metadata,
+        // Store IV/RV and TS Slope at the top level for ActiveTradeCard to access
+        ivRvRatioAtEntry: ivRvRatio,
+        tsSlopeAtEntry: tsSlope,
         calendarSpreadData: {
           strikePrice,
           shortMonthCredit,
@@ -219,6 +237,29 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
         }
       } : tradeIdea.metadata;
       
+      // For calendar spreads, create proper option legs if they don't exist
+      let finalLegs = legs;
+      if (tradeIdea.strategy === 'calendar_spread' && (!legs || legs.length === 0)) {
+        finalLegs = [
+          {
+            optionType: optionType as OptionType,
+            strike: strikePrice,
+            expiration: shortExpiration,
+            premium: shortMonthCredit,
+            quantity: quantity,
+            isLong: false // Short the near-term option
+          },
+          {
+            optionType: optionType as OptionType,
+            strike: strikePrice,
+            expiration: longExpiration,
+            premium: longMonthDebit,
+            quantity: quantity,
+            isLong: true // Long the far-term option
+          }
+        ];
+      }
+
       activeTrade = {
         ...tradeIdea,
         entryDate,
@@ -231,7 +272,7 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
         tags: [...tradeIdea.tags, 'active'],
         updatedAt: Date.now(),
         underlyingPrice,
-        legs,
+        legs: finalLegs,
         metadata: updatedMetadata
       };
     }
@@ -352,6 +393,17 @@ const ConvertToTradeModal: React.FC<ConvertToTradeModalProps> = ({ isOpen, onClo
                       placeholder="0.00"
                     />
                     {errors.strikePrice && <FormErrorMessage>{errors.strikePrice}</FormErrorMessage>}
+                  </FormControl>
+                  
+                  <FormControl>
+                    <FormLabel>Option Type</FormLabel>
+                    <Select
+                      value={optionType}
+                      onChange={(e) => setOptionType(e.target.value as 'call' | 'put')}
+                    >
+                      <option value="call">Call</option>
+                      <option value="put">Put</option>
+                    </Select>
                   </FormControl>
                   
                   <FormControl isRequired isInvalid={!!errors.quantity}>
