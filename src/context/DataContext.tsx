@@ -15,6 +15,12 @@ import {
   TradeStatistics
 } from '../types/tradeTracker';
 import {
+  ChartAnalysisState,
+  ChartAnalysisResult,
+  HistoricalAnalysis,
+  AnalysisContext
+} from '../types/chartAnalysis';
+import {
   calculateAccountSummary,
   analyzeTokenPerformance,
   identifyTrendingTokens,
@@ -67,7 +73,24 @@ export enum ActionType {
   EXPORT_TRADES_START = 'EXPORT_TRADES_START',
   EXPORT_TRADES_SUCCESS = 'EXPORT_TRADES_SUCCESS',
   EXPORT_TRADES_ERROR = 'EXPORT_TRADES_ERROR',
-  CLEAR_TRADE_TRACKER_DATA = 'CLEAR_TRADE_TRACKER_DATA'
+  CLEAR_TRADE_TRACKER_DATA = 'CLEAR_TRADE_TRACKER_DATA',
+  
+  // Chart Analysis actions
+  ANALYZE_CHART_START = 'ANALYZE_CHART_START',
+  ANALYZE_CHART_SUCCESS = 'ANALYZE_CHART_SUCCESS',
+  ANALYZE_CHART_ERROR = 'ANALYZE_CHART_ERROR',
+  LOAD_ANALYSIS_HISTORY_START = 'LOAD_ANALYSIS_HISTORY_START',
+  LOAD_ANALYSIS_HISTORY_SUCCESS = 'LOAD_ANALYSIS_HISTORY_SUCCESS',
+  LOAD_ANALYSIS_HISTORY_ERROR = 'LOAD_ANALYSIS_HISTORY_ERROR',
+  SET_SELECTED_TICKER = 'SET_SELECTED_TICKER',
+  SET_CHART_SCREENSHOT = 'SET_CHART_SCREENSHOT',
+  SET_ANALYSIS_CONTEXT = 'SET_ANALYSIS_CONTEXT',
+  CAPTURE_CHART_START = 'CAPTURE_CHART_START',
+  CAPTURE_CHART_SUCCESS = 'CAPTURE_CHART_SUCCESS',
+  CAPTURE_CHART_ERROR = 'CAPTURE_CHART_ERROR',
+  CLEAR_CHART_ANALYSIS_DATA = 'CLEAR_CHART_ANALYSIS_DATA',
+  UPDATE_CHART_ANALYSIS_SETTINGS = 'UPDATE_CHART_ANALYSIS_SETTINGS',
+  UPDATE_TRADING_RECOMMENDATIONS = 'UPDATE_TRADING_RECOMMENDATIONS'
 }
 
 // Define action interfaces
@@ -266,6 +289,80 @@ interface ClearTradeTrackerDataAction {
   type: ActionType.CLEAR_TRADE_TRACKER_DATA;
 }
 
+// Chart Analysis action interfaces
+interface AnalyzeChartStartAction {
+  type: ActionType.ANALYZE_CHART_START;
+  payload: string; // ticker
+}
+
+interface AnalyzeChartSuccessAction {
+  type: ActionType.ANALYZE_CHART_SUCCESS;
+  payload: ChartAnalysisResult;
+}
+
+interface AnalyzeChartErrorAction {
+  type: ActionType.ANALYZE_CHART_ERROR;
+  payload: string; // error message
+}
+
+interface LoadAnalysisHistoryStartAction {
+  type: ActionType.LOAD_ANALYSIS_HISTORY_START;
+  payload: string; // ticker
+}
+
+interface LoadAnalysisHistorySuccessAction {
+  type: ActionType.LOAD_ANALYSIS_HISTORY_SUCCESS;
+  payload: HistoricalAnalysis[];
+}
+
+interface LoadAnalysisHistoryErrorAction {
+  type: ActionType.LOAD_ANALYSIS_HISTORY_ERROR;
+  payload: string; // error message
+}
+
+interface SetSelectedTickerAction {
+  type: ActionType.SET_SELECTED_TICKER;
+  payload: string; // ticker
+}
+
+interface SetChartScreenshotAction {
+  type: ActionType.SET_CHART_SCREENSHOT;
+  payload: string | null; // base64 image data
+}
+
+interface SetAnalysisContextAction {
+  type: ActionType.SET_ANALYSIS_CONTEXT;
+  payload: AnalysisContext | null;
+}
+
+interface CaptureChartStartAction {
+  type: ActionType.CAPTURE_CHART_START;
+}
+
+interface CaptureChartSuccessAction {
+  type: ActionType.CAPTURE_CHART_SUCCESS;
+  payload: string; // base64 image data
+}
+
+interface CaptureChartErrorAction {
+  type: ActionType.CAPTURE_CHART_ERROR;
+  payload: string; // error message
+}
+
+interface ClearChartAnalysisDataAction {
+  type: ActionType.CLEAR_CHART_ANALYSIS_DATA;
+}
+
+interface UpdateChartAnalysisSettingsAction {
+  type: ActionType.UPDATE_CHART_ANALYSIS_SETTINGS;
+  payload: Partial<Pick<ChartAnalysisState, 'autoAnalysis' | 'analysisInterval'>>;
+}
+
+interface UpdateTradingRecommendationsAction {
+  type: ActionType.UPDATE_TRADING_RECOMMENDATIONS;
+  payload: Map<string, import('../types/chartAnalysis').TradingRecommendationOverlay>;
+}
+
 // Union of all action types
 type DataAction =
   | ImportDataStartAction
@@ -308,7 +405,23 @@ type DataAction =
   | ExportTradesStartAction
   | ExportTradesSuccessAction
   | ExportTradesErrorAction
-  | ClearTradeTrackerDataAction;
+  | ClearTradeTrackerDataAction
+  // Chart Analysis actions
+  | AnalyzeChartStartAction
+  | AnalyzeChartSuccessAction
+  | AnalyzeChartErrorAction
+  | LoadAnalysisHistoryStartAction
+  | LoadAnalysisHistorySuccessAction
+  | LoadAnalysisHistoryErrorAction
+  | SetSelectedTickerAction
+  | SetChartScreenshotAction
+  | SetAnalysisContextAction
+  | CaptureChartStartAction
+  | CaptureChartSuccessAction
+  | CaptureChartErrorAction
+  | ClearChartAnalysisDataAction
+  | UpdateChartAnalysisSettingsAction
+  | UpdateTradingRecommendationsAction;
 
 // Initial state
 const initialState: DataState = {
@@ -405,6 +518,23 @@ const initialState: DataState = {
     selectedTradeId: null,
     isLoading: false,
     error: null
+  },
+  
+  // Chart Analysis data
+  chartAnalysisData: {
+    currentAnalysis: null,
+    analysisHistory: [],
+    selectedTicker: '',
+    chartScreenshot: null,
+    analysisContext: null,
+    activeTradingRecommendations: new Map(),
+    isAnalyzing: false,
+    isLoadingHistory: false,
+    isCapturingChart: false,
+    error: null,
+    autoAnalysis: false,
+    analysisInterval: 30,
+    showTradingOverlays: true
   },
   
   isLoading: false,
@@ -801,6 +931,153 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
         }
       };
     
+    // Chart Analysis actions
+    case ActionType.ANALYZE_CHART_START:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isAnalyzing: true,
+          error: null
+        }
+      };
+    
+    case ActionType.ANALYZE_CHART_SUCCESS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          currentAnalysis: action.payload,
+          isAnalyzing: false,
+          error: null
+        }
+      };
+    
+    case ActionType.ANALYZE_CHART_ERROR:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isAnalyzing: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.LOAD_ANALYSIS_HISTORY_START:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isLoadingHistory: true,
+          error: null
+        }
+      };
+    
+    case ActionType.LOAD_ANALYSIS_HISTORY_SUCCESS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          analysisHistory: action.payload,
+          isLoadingHistory: false,
+          error: null
+        }
+      };
+    
+    case ActionType.LOAD_ANALYSIS_HISTORY_ERROR:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isLoadingHistory: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.SET_SELECTED_TICKER:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          selectedTicker: action.payload
+        }
+      };
+    
+    case ActionType.SET_CHART_SCREENSHOT:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          chartScreenshot: action.payload
+        }
+      };
+    
+    case ActionType.SET_ANALYSIS_CONTEXT:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          analysisContext: action.payload
+        }
+      };
+    
+    case ActionType.CAPTURE_CHART_START:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isCapturingChart: true,
+          error: null
+        }
+      };
+    
+    case ActionType.CAPTURE_CHART_SUCCESS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          chartScreenshot: action.payload,
+          isCapturingChart: false,
+          error: null
+        }
+      };
+    
+    case ActionType.CAPTURE_CHART_ERROR:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          isCapturingChart: false,
+          error: action.payload
+        }
+      };
+    
+    case ActionType.CLEAR_CHART_ANALYSIS_DATA:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...initialState.chartAnalysisData
+        }
+      };
+    
+    case ActionType.UPDATE_CHART_ANALYSIS_SETTINGS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          ...action.payload
+        }
+      };
+    
+    case ActionType.UPDATE_TRADING_RECOMMENDATIONS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          activeTradingRecommendations: action.payload
+        }
+      };
+    
     default:
       return state;
   }
@@ -1000,4 +1277,73 @@ export const calculateTradeStatistics = (statistics: TradeStatistics): Calculate
 
 export const clearTradeTrackerData = (): ClearTradeTrackerDataAction => ({
   type: ActionType.CLEAR_TRADE_TRACKER_DATA
+});
+
+// Chart Analysis action creators
+export const analyzeChartStart = (ticker: string): AnalyzeChartStartAction => ({
+  type: ActionType.ANALYZE_CHART_START,
+  payload: ticker
+});
+
+export const analyzeChartSuccess = (result: ChartAnalysisResult): AnalyzeChartSuccessAction => ({
+  type: ActionType.ANALYZE_CHART_SUCCESS,
+  payload: result
+});
+
+export const analyzeChartError = (error: string): AnalyzeChartErrorAction => ({
+  type: ActionType.ANALYZE_CHART_ERROR,
+  payload: error
+});
+
+export const loadAnalysisHistoryStart = (ticker: string): LoadAnalysisHistoryStartAction => ({
+  type: ActionType.LOAD_ANALYSIS_HISTORY_START,
+  payload: ticker
+});
+
+export const loadAnalysisHistorySuccess = (history: HistoricalAnalysis[]): LoadAnalysisHistorySuccessAction => ({
+  type: ActionType.LOAD_ANALYSIS_HISTORY_SUCCESS,
+  payload: history
+});
+
+export const loadAnalysisHistoryError = (error: string): LoadAnalysisHistoryErrorAction => ({
+  type: ActionType.LOAD_ANALYSIS_HISTORY_ERROR,
+  payload: error
+});
+
+export const setSelectedTicker = (ticker: string): SetSelectedTickerAction => ({
+  type: ActionType.SET_SELECTED_TICKER,
+  payload: ticker
+});
+
+export const setChartScreenshot = (screenshot: string | null): SetChartScreenshotAction => ({
+  type: ActionType.SET_CHART_SCREENSHOT,
+  payload: screenshot
+});
+
+export const setAnalysisContext = (context: AnalysisContext | null): SetAnalysisContextAction => ({
+  type: ActionType.SET_ANALYSIS_CONTEXT,
+  payload: context
+});
+
+export const captureChartStart = (): CaptureChartStartAction => ({
+  type: ActionType.CAPTURE_CHART_START
+});
+
+export const captureChartSuccess = (screenshot: string): CaptureChartSuccessAction => ({
+  type: ActionType.CAPTURE_CHART_SUCCESS,
+  payload: screenshot
+});
+
+export const captureChartError = (error: string): CaptureChartErrorAction => ({
+  type: ActionType.CAPTURE_CHART_ERROR,
+  payload: error
+});
+
+export const clearChartAnalysisData = (): ClearChartAnalysisDataAction => ({
+  type: ActionType.CLEAR_CHART_ANALYSIS_DATA
+});
+
+export const updateChartAnalysisSettings = (settings: Partial<Pick<ChartAnalysisState, 'autoAnalysis' | 'analysisInterval'>>): UpdateChartAnalysisSettingsAction => ({
+  type: ActionType.UPDATE_CHART_ANALYSIS_SETTINGS,
+  payload: settings
 });

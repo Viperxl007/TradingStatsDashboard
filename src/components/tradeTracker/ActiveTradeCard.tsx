@@ -54,7 +54,7 @@ import CloseTradeModal from './CloseTradeModal';
 import ExpirationOutcomeModal from './ExpirationOutcomeModal';
 import { useData } from '../../context/DataContext';
 import { ActionType } from '../../context/DataContext';
-import { daysBetween, formatDisplayDate } from '../../utils/dateUtils';
+import { daysBetween, formatDisplayDate, hasOptionExpired } from '../../utils/dateUtils';
 
 // Strategy display names
 const strategyNames: Record<StrategyType, string> = {
@@ -249,11 +249,9 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
 
     setIsFetchingPrices(true);
     try {
-      // Check for expired legs that need outcome logging
-      const currentDate = new Date();
+      // Check for expired legs that need outcome logging using market-hours-aware logic
       const expiredLegsNeedingOutcome = trade.legs.filter((leg: OptionLeg) => {
-        const expirationDate = new Date(leg.expiration);
-        const isExpired = expirationDate < currentDate;
+        const isExpired = hasOptionExpired(leg.expiration);
         const hasOutcome = leg.expirationOutcome !== undefined;
         return isExpired && !hasOutcome;
       });
@@ -438,10 +436,9 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
       // Clear the expired leg state
       setExpiredLegNeedingOutcome(null);
 
-      // Check if there are more expired legs needing outcomes
+      // Check if there are more expired legs needing outcomes using market-hours-aware logic
       const remainingExpiredLegs = updatedLegs.filter((leg: OptionLeg) => {
-        const expirationDate = new Date(leg.expiration);
-        const isExpired = expirationDate < new Date();
+        const isExpired = hasOptionExpired(leg.expiration);
         const hasOutcome = leg.expirationOutcome !== undefined;
         return isExpired && !hasOutcome;
       });
@@ -478,10 +475,8 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
     trade.legs.forEach((leg: OptionLeg, index: number) => {
       const legKey = `leg_${index}`;
       
-      // Check if leg has expired and has an outcome logged
-      const currentDate = new Date();
-      const expirationDate = new Date(leg.expiration);
-      const isExpired = expirationDate < currentDate;
+      // Check if leg has expired and has an outcome logged using market-hours-aware logic
+      const isExpired = hasOptionExpired(leg.expiration);
       const hasExpirationOutcome = leg.expirationOutcome !== undefined;
       
       let currentPrice: number;
@@ -636,9 +631,7 @@ const ActiveTradeCard: React.FC<ActiveTradeCardProps> = ({ trade }) => {
                 const legKey = `leg_${index}`;
                 
                 // Check if leg has expired and has an outcome logged
-                const currentDate = new Date();
-                const expirationDate = new Date(leg.expiration);
-                const isExpired = expirationDate < currentDate;
+                const isExpired = hasOptionExpired(leg.expiration);
                 const hasExpirationOutcome = leg.expirationOutcome !== undefined;
                 
                 let currentPrice: number;

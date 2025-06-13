@@ -121,6 +121,47 @@ export const getCurrentDateString = (): string => {
 };
 
 /**
+ * Check if an option has expired considering market hours
+ * Options expire at market close (4:00 PM EST) on expiration day
+ * @param expirationDateString - Expiration date string in YYYY-MM-DD format
+ * @returns True if option has expired (past market close on expiration day)
+ */
+export const hasOptionExpired = (expirationDateString: string): boolean => {
+  if (!expirationDateString) return false;
+  
+  // Get current time in Eastern Time (market timezone)
+  const now = new Date();
+  const easternTime = new Date(now.toLocaleString("en-US", {timeZone: "America/New_York"}));
+  
+  // Parse expiration date in local context (should be YYYY-MM-DD format)
+  const [year, month, day] = expirationDateString.split('-').map(Number);
+  const expirationDate = new Date(year, month - 1, day); // month is 0-indexed
+  
+  // Get today's date in Eastern Time
+  const todayEastern = new Date(easternTime.getFullYear(), easternTime.getMonth(), easternTime.getDate());
+  const expirationDateOnly = new Date(expirationDate.getFullYear(), expirationDate.getMonth(), expirationDate.getDate());
+  
+  // If expiration date is in the future, option hasn't expired
+  if (expirationDateOnly > todayEastern) {
+    return false;
+  }
+  
+  // If expiration date is in the past, option has expired
+  if (expirationDateOnly < todayEastern) {
+    return true;
+  }
+  
+  // If expiration date is today, check if it's past market close (4:00 PM EST)
+  if (expirationDateOnly.getTime() === todayEastern.getTime()) {
+    const currentHour = easternTime.getHours();
+    return currentHour >= 16; // 4:00 PM EST or later
+  }
+  
+  // Default fallback
+  return false;
+};
+
+/**
  * Convert Date object to YYYY-MM-DD string
  * @param date - Date object
  * @returns Date string in YYYY-MM-DD format

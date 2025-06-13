@@ -19,6 +19,77 @@ MARKET_DATA_SOURCE = os.environ.get('MARKET_DATA_SOURCE', 'yfinance')
 # Must be set via environment variable or local_config.py
 ALPHAVANTAGE_API_KEY = os.environ.get('ALPHAVANTAGE_API_KEY')
 
+# Claude API key for AI chart analysis
+# Must be set via environment variable or local_config.py
+CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY')
+
+# Available Claude models for chart analysis
+CLAUDE_MODELS = [
+    # Claude 4 Models (Latest)
+    {
+        "id": "claude-sonnet-4-20250514",
+        "name": "Claude Sonnet 4",
+        "description": "Latest Sonnet model with improved reasoning and intelligence",
+        "max_tokens": 8192,
+        "cost_per_1k_tokens": 0.003
+    },
+    {
+        "id": "claude-opus-4-20250514",
+        "name": "Claude Opus 4",
+        "description": "Most capable model with superior reasoning for complex analysis",
+        "max_tokens": 8192,
+        "cost_per_1k_tokens": 0.015
+    },
+    # Claude 3.7 Models
+    {
+        "id": "claude-3-7-sonnet-20250219",
+        "name": "Claude 3.7 Sonnet",
+        "description": "Advanced Sonnet model with extended capabilities",
+        "max_tokens": 8192,
+        "cost_per_1k_tokens": 0.003
+    },
+    # Claude 3.5 Models
+    {
+        "id": "claude-3-5-sonnet-20241022",
+        "name": "Claude 3.5 Sonnet",
+        "description": "Proven capable model, good for complex analysis",
+        "max_tokens": 8192,
+        "cost_per_1k_tokens": 0.003
+    },
+    {
+        "id": "claude-3-5-haiku-20241022",
+        "name": "Claude 3.5 Haiku",
+        "description": "Fastest model, good for quick analysis",
+        "max_tokens": 8192,
+        "cost_per_1k_tokens": 0.0008
+    },
+    # Claude 3 Models (Legacy)
+    {
+        "id": "claude-3-opus-20240229",
+        "name": "Claude 3 Opus",
+        "description": "Legacy powerful model, best for detailed analysis",
+        "max_tokens": 4096,
+        "cost_per_1k_tokens": 0.015
+    },
+    {
+        "id": "claude-3-sonnet-20240229",
+        "name": "Claude 3 Sonnet",
+        "description": "Legacy balanced model, good for general analysis",
+        "max_tokens": 4096,
+        "cost_per_1k_tokens": 0.003
+    },
+    {
+        "id": "claude-3-haiku-20240307",
+        "name": "Claude 3 Haiku",
+        "description": "Legacy fast model, good for basic analysis",
+        "max_tokens": 4096,
+        "cost_per_1k_tokens": 0.00025
+    }
+]
+
+# Default Claude model for chart analysis (using latest Claude 4 Sonnet)
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+
 # Rate limiting configuration for Yahoo Finance API calls
 YF_RATE_LIMIT = {
     # Number of requests allowed per time period
@@ -71,6 +142,12 @@ if MARKET_DATA_SOURCE == 'alphavantage' and not ALPHAVANTAGE_API_KEY:
     print("Please set ALPHAVANTAGE_API_KEY environment variable or configure it in local_config.py")
     print("Falling back to yfinance as market data source.")
     MARKET_DATA_SOURCE = 'yfinance'
+
+# Validate Claude API key for chart analysis
+if not CLAUDE_API_KEY:
+    print("WARNING: CLAUDE_API_KEY is not set. AI chart analysis features will be disabled.")
+    print("Please set CLAUDE_API_KEY environment variable or configure it in local_config.py")
+    print("To enable chart analysis, obtain an API key from https://console.anthropic.com/")
 
 # Sequential processing configuration
 SEQUENTIAL_PROCESSING = {

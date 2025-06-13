@@ -3,6 +3,9 @@ import {
   TradeFilterOptions,
   TradeStatistics
 } from './tradeTracker';
+import {
+  ChartAnalysisState
+} from './chartAnalysis';
 
 /**
  * Trade data model representing an individual trade
@@ -292,6 +295,9 @@ export interface DataState {
   
   // Trade Tracker Data
   tradeTrackerData: TradeTrackerState; // Trade Tracker state
+  
+  // Chart Analysis Data
+  chartAnalysisData: ChartAnalysisState; // Chart Analysis state
   
   // UI State
   isLoading: boolean;            // Loading state for async operations
