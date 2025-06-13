@@ -27,7 +27,7 @@ import {
 } from '@chakra-ui/react';
 import { ChevronLeftIcon, ChevronRightIcon, CalendarIcon } from '@chakra-ui/icons';
 import { AnyTradeEntry, OptionTradeEntry, OptionLeg } from '../../types/tradeTracker';
-import { parseLocalDate, formatDisplayDate, formatShortDate, isDateInPast } from '../../utils/dateUtils';
+import { parseLocalDate, formatDisplayDate, formatShortDate, isDateInPast, hasOptionExpired } from '../../utils/dateUtils';
 
 interface CalendarEvent {
   date: string;
@@ -243,10 +243,8 @@ const ActiveTradesCalendarView: React.FC<ActiveTradesCalendarViewProps> = ({ tra
       optionTrade.legs.forEach((leg: OptionLeg, index: number) => {
         const legKey = `leg_${index}`; // EXACT same key format as ActiveTradeCard
         
-        // Check if leg has expired and has an outcome logged
-        const currentDate = new Date();
-        const expirationDate = new Date(leg.expiration);
-        const isExpired = expirationDate < currentDate;
+        // Check if leg has expired and has an outcome logged using market-hours-aware logic
+        const isExpired = hasOptionExpired(leg.expiration);
         const hasExpirationOutcome = leg.expirationOutcome !== undefined;
         
         let currentPrice: number;

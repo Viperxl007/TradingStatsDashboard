@@ -56,9 +56,16 @@ const TradeTracker: React.FC = () => {
   const bgColor = useColorModeValue('white', 'gray.800');
   const borderColor = useColorModeValue('gray.200', 'gray.700');
 
-  // Load trades when component mounts or when the component is shown
+  // Load trades when component first mounts
   useEffect(() => {
     loadTrades();
+  }, []); // Empty dependency array - only run on mount
+
+  // Load trades when switching to trade tracker tab
+  useEffect(() => {
+    if (state.activeTab === 'tradetracker') {
+      loadTrades();
+    }
   }, [state.activeTab]);
 
   // Function to load trades from the database

@@ -787,6 +787,576 @@ def fetch_option_prices(ticker):
         }), 500
 
 # Error handlers
+# Chart Analysis Endpoints
+@api_bp.route('/chart-analysis/analyze', methods=['POST'])
+def analyze_chart():
+    """
+    Analyze a chart image using AI.
+    
+    Expects multipart/form-data with:
+    - image: Chart image file
+    - ticker: Stock ticker symbol
+    - context: Optional JSON context data
+    
+    Returns:
+        JSON: AI analysis results
+    """
+    import json  # Add json import at the top
+    try:
+        logger.info("Enhanced chart analysis endpoint called")
+        from app.enhanced_chart_analyzer import enhanced_chart_analyzer
+        from app.chart_context import chart_context_manager
+        from app.level_detector import level_detector
+        from app.snapshot_processor import snapshot_processor
+        from app.data_fetcher import get_current_price
+        import base64
+        
+        # Validate request
+        if 'image' not in request.files:
+            return jsonify({
+                "error": "No image file provided",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        if 'ticker' not in request.form:
+            return jsonify({
+                "error": "No ticker symbol provided",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        image_file = request.files['image']
+        ticker = request.form['ticker'].upper().strip()
+        
+        # Get timeframe (optional, defaults to '1D')
+        timeframe = request.form.get('timeframe', '1D')
+        
+        # Get selected model (optional, defaults to configured default)
+        selected_model = request.form.get('model', None)
+        
+        if image_file.filename == '':
+            return jsonify({
+                "error": "No image file selected",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        # Read image data
+        image_data = image_file.read()
+        
+        # Process and validate image
+        processing_result = snapshot_processor.process_image(image_data, optimize_for_ai=True)
+        if not processing_result['success']:
+            return jsonify({
+                "error": f"Image processing failed: {processing_result.get('error', 'Unknown error')}",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        # Get context data
+        context_data = {}
+        if 'context' in request.form:
+            try:
+                context_data = json.loads(request.form['context'])
+            except json.JSONDecodeError:
+                logger.warning(f"Invalid context JSON for {ticker}")
+        
+        # Add current market data to context
+        try:
+            current_price = get_current_price(ticker)
+            if current_price:
+                context_data['current_price'] = current_price
+        except Exception as e:
+            logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        
+        # Get additional context from storage
+        stored_context = chart_context_manager.get_context(ticker)
+        context_data.update(stored_context)
+        
+        # Perform enhanced AI analysis
+        analysis_result = enhanced_chart_analyzer.analyze_chart_comprehensive(
+            processing_result['processed_data'],
+            ticker,
+            context_data,
+            timeframe=timeframe,
+            selected_model=selected_model
+        )
+        
+        if 'error' in analysis_result:
+            return jsonify(analysis_result), 500
+        
+        # Add chart image as base64 for frontend display
+        chart_image_base64 = base64.b64encode(processing_result['processed_data']).decode('utf-8')
+        analysis_result['chartImageBase64'] = chart_image_base64
+        
+        # Store analysis results
+        try:
+            analysis_id = chart_context_manager.store_analysis(
+                ticker,
+                analysis_result,
+                processing_result['image_hash'],
+                context_data
+            )
+            analysis_result['analysis_id'] = analysis_id
+        except Exception as e:
+            logger.warning(f"Could not store analysis for {ticker}: {str(e)}")
+        
+        # Add processing metadata
+        analysis_result['processing_info'] = {
+            'image_hash': processing_result['image_hash'],
+            'original_size': processing_result['original_size'],
+            'processed_size': processing_result['processed_size'],
+            'optimizations_applied': processing_result['optimizations_applied']
+        }
+        
+        logger.info(f"Successfully completed enhanced analysis for {ticker}")
+        
+        # The enhanced analyzer already returns properly formatted data
+        return jsonify(analysis_result)
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Error in chart analysis endpoint: {str(e)}")
+        logger.error(f"Full traceback: {error_details}")
+        return jsonify({
+            "error": str(e),
+            "details": error_details,
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/history/<ticker>', methods=['GET'])
+def get_analysis_history(ticker):
+    """
+    Get historical chart analyses for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Query parameters:
+        limit (int): Maximum number of analyses to return (default: 10)
+        days_back (int): Number of days to look back (default: 30)
+        
+    Returns:
+        JSON: List of historical analyses
+    """
+    try:
+        from app.chart_context import chart_context_manager
+        
+        ticker = ticker.upper().strip()
+        limit = int(request.args.get('limit', 10))
+        days_back = int(request.args.get('days_back', 30))
+        
+        # Validate parameters
+        if limit > 100:
+            limit = 100
+        if days_back > 365:
+            days_back = 365
+        
+        # Get historical analyses
+        history = chart_context_manager.get_analysis_history(ticker, limit, days_back)
+        
+        return jsonify({
+            "ticker": ticker,
+            "count": len(history),
+            "limit": limit,
+            "days_back": days_back,
+            "analyses": history,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except ValueError as e:
+        return jsonify({
+            "error": f"Invalid parameter: {str(e)}",
+            "timestamp": datetime.now().timestamp()
+        }), 400
+    except Exception as e:
+        logger.error(f"Error getting analysis history for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/details/<int:analysis_id>', methods=['GET'])
+def get_analysis_details(analysis_id):
+    """
+    Get detailed analysis data for a specific analysis ID.
+    
+    Args:
+        analysis_id (int): Analysis ID
+        
+    Returns:
+        JSON: Complete analysis data including chart image and all details
+    """
+    try:
+        from app.chart_context import chart_context_manager
+        
+        # Get the full analysis from database
+        with chart_context_manager.db_lock:
+            import sqlite3
+            with sqlite3.connect(chart_context_manager.db_path) as conn:
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT ticker, analysis_timestamp, analysis_data, confidence_score,
+                           image_hash, context_data, created_at
+                    FROM chart_analyses
+                    WHERE id = ?
+                ''', (analysis_id,))
+                
+                row = cursor.fetchone()
+                if not row:
+                    return jsonify({
+                        "error": f"Analysis {analysis_id} not found",
+                        "timestamp": datetime.now().timestamp()
+                    }), 404
+                
+                ticker, timestamp, analysis_data, confidence, image_hash, context_data, created_at = row
+                
+                try:
+                    parsed_analysis = json.loads(analysis_data)
+                    parsed_context = json.loads(context_data) if context_data else {}
+                    
+                    return jsonify({
+                        "id": analysis_id,
+                        "ticker": ticker,
+                        "timestamp": timestamp,
+                        "analysis": parsed_analysis,
+                        "confidence_score": confidence,
+                        "image_hash": image_hash,
+                        "context_data": parsed_context,
+                        "created_at": created_at
+                    })
+                    
+                except json.JSONDecodeError as e:
+                    return jsonify({
+                        "error": f"Failed to parse analysis data: {str(e)}",
+                        "timestamp": datetime.now().timestamp()
+                    }), 500
+                    
+    except Exception as e:
+        logger.error(f"Error getting analysis details for {analysis_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/context/<ticker>', methods=['POST'])
+def store_analysis_context(ticker):
+    """
+    Store analysis context for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Request body:
+        JSON object with context data
+        
+    Returns:
+        JSON: Success status
+    """
+    try:
+        from app.chart_context import chart_context_manager
+        
+        ticker = ticker.upper().strip()
+        
+        if not request.is_json:
+            return jsonify({
+                "error": "Request must be JSON",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        context_data = request.get_json()
+        context_type = context_data.get('type', 'general')
+        valid_hours = context_data.get('valid_hours', 24)
+        
+        # Remove metadata from context data
+        clean_context = {k: v for k, v in context_data.items()
+                        if k not in ['type', 'valid_hours']}
+        
+        # Store context
+        success = chart_context_manager.store_context(
+            ticker, context_type, clean_context, valid_hours
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "ticker": ticker,
+                "context_type": context_type,
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": "Failed to store context",
+                "timestamp": datetime.now().timestamp()
+            }), 500
+        
+    except Exception as e:
+        logger.error(f"Error storing context for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/levels/<ticker>', methods=['GET'])
+def get_key_levels(ticker):
+    """
+    Get key support/resistance levels for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Query parameters:
+        level_type (str): Filter by level type (support, resistance, entry, exit)
+        near_price (float): Get levels near this price
+        distance_pct (float): Distance percentage for near_price filter (default: 0.05)
+        include_technical (bool): Include technical analysis levels (default: true)
+        
+    Returns:
+        JSON: Key levels data
+    """
+    try:
+        from app.level_detector import level_detector
+        from app.chart_context import chart_context_manager
+        from app.data_fetcher import get_current_price
+        
+        ticker = ticker.upper().strip()
+        level_type = request.args.get('level_type')
+        near_price = request.args.get('near_price', type=float)
+        distance_pct = request.args.get('distance_pct', 0.05, type=float)
+        include_technical = request.args.get('include_technical', 'true').lower() == 'true'
+        
+        result = {
+            "ticker": ticker,
+            "timestamp": datetime.now().timestamp()
+        }
+        
+        # Get current price if not provided
+        if near_price is None:
+            try:
+                near_price = get_current_price(ticker)
+                result['current_price'] = near_price
+            except Exception as e:
+                logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        
+        # Get stored levels from AI analyses
+        if near_price:
+            price_range = (
+                near_price * (1 - distance_pct),
+                near_price * (1 + distance_pct)
+            )
+            stored_levels = chart_context_manager.get_key_levels(
+                ticker, level_type, price_range
+            )
+        else:
+            stored_levels = chart_context_manager.get_key_levels(ticker, level_type)
+        
+        result['ai_levels'] = stored_levels
+        
+        # Get technical levels if requested
+        if include_technical:
+            try:
+                technical_levels = level_detector.detect_technical_levels(ticker)
+                
+                # Filter technical levels if near_price is specified
+                if near_price and distance_pct:
+                    filtered_technical = {}
+                    for lt, levels in technical_levels.items():
+                        if level_type is None or lt == level_type:
+                            filtered_levels = [
+                                level for level in levels
+                                if abs(level - near_price) / near_price <= distance_pct
+                            ]
+                            filtered_technical[lt] = filtered_levels
+                    technical_levels = filtered_technical
+                
+                result['technical_levels'] = technical_levels
+            except Exception as e:
+                logger.warning(f"Could not get technical levels for {ticker}: {str(e)}")
+                result['technical_levels'] = {}
+        
+        # Get nearby levels if current price is available
+        if near_price:
+            try:
+                nearby_levels = level_detector.get_levels_near_price(
+                    ticker, near_price, distance_pct
+                )
+                result['nearby_levels'] = nearby_levels
+            except Exception as e:
+                logger.warning(f"Could not get nearby levels for {ticker}: {str(e)}")
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        logger.error(f"Error getting key levels for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/delete/<int:analysis_id>', methods=['DELETE'])
+def delete_analysis(analysis_id):
+    """
+    Delete a specific chart analysis.
+    
+    Args:
+        analysis_id (int): Analysis ID to delete
+        
+    Returns:
+        JSON: Success confirmation
+    """
+    try:
+        from app.chart_context import chart_context_manager
+        
+        success = chart_context_manager.delete_analysis(analysis_id)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Analysis {analysis_id} deleted successfully",
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": f"Analysis {analysis_id} not found",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error deleting analysis {analysis_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/chart-analysis/delete-bulk', methods=['DELETE'])
+def delete_analyses_bulk():
+    """
+    Delete multiple chart analyses.
+    
+    Request body:
+        {
+            "analysis_ids": [1, 2, 3, ...]
+        }
+        
+    Returns:
+        JSON: Success confirmation with details
+    """
+    try:
+        from app.chart_context import chart_context_manager
+        
+        data = request.get_json()
+        if not data or 'analysis_ids' not in data:
+            return jsonify({
+                "error": "Missing analysis_ids in request body",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        analysis_ids = data['analysis_ids']
+        if not isinstance(analysis_ids, list) or not analysis_ids:
+            return jsonify({
+                "error": "analysis_ids must be a non-empty list",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        deleted_count = chart_context_manager.delete_analyses_bulk(analysis_ids)
+        
+        return jsonify({
+            "success": True,
+            "deleted_count": deleted_count,
+            "requested_count": len(analysis_ids),
+            "message": f"Successfully deleted {deleted_count} of {len(analysis_ids)} analyses",
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error bulk deleting analyses: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+@api_bp.route('/chart-analysis/update-markup/<int:analysis_id>', methods=['POST'])
+def update_analysis_markup(analysis_id):
+    """
+    Update an existing analysis with marked-up chart image.
+    
+    Args:
+        analysis_id (int): ID of the analysis to update
+        
+    Request JSON:
+        {
+            "markedUpChartImageBase64": "base64_encoded_image_data"
+        }
+    
+    Returns:
+        JSON response with success status
+    """
+    try:
+        logger.info(f"Updating analysis {analysis_id} with marked-up chart")
+        
+        # Import required modules
+        from app.chart_context import chart_context_manager
+        import traceback
+        
+        # Get request data
+        data = request.get_json()
+        if not data or 'markedUpChartImageBase64' not in data:
+            return jsonify({
+                'success': False,
+                'error': 'Missing markedUpChartImageBase64 in request data'
+            }), 400
+        
+        marked_up_chart = data['markedUpChartImageBase64']
+        
+        # Update the analysis with the marked-up chart
+        success = chart_context_manager.update_analysis_markup(analysis_id, marked_up_chart)
+        
+        if success:
+            logger.info(f"Successfully updated analysis {analysis_id} with marked-up chart")
+            return jsonify({
+                'success': True,
+                'message': 'Analysis updated with marked-up chart'
+            })
+        else:
+            logger.warning(f"Failed to update analysis {analysis_id} - analysis not found")
+            return jsonify({
+                'success': False,
+                'error': 'Analysis not found'
+            }), 404
+            
+    except Exception as e:
+        error_details = traceback.format_exc()
+        logger.error(f"Error updating analysis markup: {str(e)}")
+        logger.error(f"Full traceback: {error_details}")
+        return jsonify({
+            'success': False,
+            'error': f'Internal server error: {str(e)}'
+        }), 500
+
+@api_bp.route('/chart-analysis/models', methods=['GET'])
+def get_claude_models():
+    """
+    Get available Claude models for chart analysis.
+
+    
+    Returns:
+        JSON: List of available Claude models with their details
+    """
+    try:
+        from config import CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL
+        
+        return jsonify({
+            "success": True,
+            "models": CLAUDE_MODELS,
+            "default_model": DEFAULT_CLAUDE_MODEL,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting Claude models: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
 @api_bp.errorhandler(404)
 def not_found(error):
     return jsonify({

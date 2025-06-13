@@ -99,5 +99,13 @@ def create_app(test_config=None):
     # Register blueprints
     from app.routes import api_bp
     app.register_blueprint(api_bp)
+    
+    # Register market data routes
+    try:
+        from app.market_data_routes import market_data_bp
+        app.register_blueprint(market_data_bp)
+        logger.info("Registered market data routes")
+    except Exception as e:
+        logger.error(f"Failed to register market data routes: {str(e)}")
 
     return app

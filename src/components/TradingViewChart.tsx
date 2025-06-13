@@ -51,11 +51,6 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           // Use the TradingView widget embed URL with specific parameters
           iframe.src = `https://s.tradingview.com/widgetembed/?frameElementId=${iframe.id}&symbol=${symbol}&interval=D&hidesidetoolbar=0&symboledit=1&saveimage=1&toolbarbg=${colorMode === 'dark' ? '2D3748' : 'f0f3fa'}&studies=MAExp%40tv-basicstudies%2CMACD%40tv-basicstudies%2CRSI%40tv-basicstudies&theme=${colorMode === 'dark' ? 'dark' : 'light'}&style=1&timezone=Etc%2FUTC&withdateranges=1&showpopupbutton=1&allow_symbol_change=1&details=1&hotlist=1&calendar=1&news=1&widgetbar_width=300`;
           
-          // Add load event to iframe
-          iframe.onload = () => {
-            setIsLoading(false);
-            console.log('TradingView iframe loaded successfully');
-          };
           
           // Add error event to iframe
           iframe.onerror = (e) => {
@@ -67,22 +62,39 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
           // Append iframe to container
           containerRef.current.appendChild(iframe);
           
-          // Set a timeout to check if the iframe loaded
-          setTimeout(() => {
-            if (isLoading) {
-              console.log('Checking if iframe is still loading...');
-              try {
-                // If still loading after timeout, check if iframe content is accessible
-                if (iframe.contentDocument === null) {
-                  throw new Error('Cannot access iframe content - likely blocked by CORS');
-                }
-              } catch (err) {
-                // If we can't access iframe content, it might be blocked by CORS
-                setError('TradingView chart might be blocked by browser security. Try disabling any crypto wallet extensions or use a different browser.');
+          // Track if widget has loaded to prevent timeout
+          let widgetLoaded = false;
+          let loadTimeout: NodeJS.Timeout;
+          
+          // Update iframe onload to start checking for widget readiness
+          iframe.onload = () => {
+            console.log('TradingView iframe loaded successfully');
+            
+            // For TradingView widgets, the iframe loads quickly but the widget takes time
+            // We'll assume it's working after iframe load and only show timeout if there are actual issues
+            setTimeout(() => {
+              if (!widgetLoaded) {
+                widgetLoaded = true;
                 setIsLoading(false);
+                console.log('TradingView widget assumed ready');
               }
+            }, 2000); // Give it 2 seconds after iframe load
+          };
+          
+          // Set a longer timeout only for actual failures
+          loadTimeout = setTimeout(() => {
+            if (!widgetLoaded) {
+              console.log('TradingView chart load timeout reached');
+              setError('TradingView chart is taking longer than expected to load. This is normal for localhost development.');
+              setIsLoading(false);
             }
-          }, 5000); // 5 seconds timeout
+          }, 30000); // 30 seconds - only for real failures
+          
+          // Clean up timeout when component unmounts
+          return () => {
+            clearTimeout(loadTimeout);
+            widgetLoaded = true; // Prevent further checks
+          };
         } catch (err) {
           setError(`Error initializing TradingView chart: ${err instanceof Error ? err.message : 'Unknown error'}`);
           setIsLoading(false);
@@ -93,18 +105,10 @@ const TradingViewChart: React.FC<TradingViewChartProps> = ({
     // Create the chart
     createSandboxedChart();
     
-    // Set a final timeout for overall loading
-    const timeout = setTimeout(() => {
-      if (isLoading) {
-        setError('TradingView chart is taking too long to load. You can try refreshing the page or check your internet connection.');
-        setIsLoading(false);
-      }
-    }, 15000); // 15 seconds timeout
-    
+    // Cleanup function handled by createSandboxedChart
     return () => {
-      clearTimeout(timeout);
     };
-  }, [symbol, colorMode, isLoading, retryCount]);
+  }, [symbol, colorMode, retryCount]);
 
   const handleRetry = () => {
     setRetryCount(prev => prev + 1);

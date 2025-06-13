@@ -50,18 +50,26 @@ def get_current_price(stock):
     Get the current price for a stock.
     
     Args:
-        stock (Ticker): yfinance Ticker object
+        stock (Ticker or str): yfinance Ticker object or ticker symbol string
         
     Returns:
         float: Current stock price
     """
     try:
-        todays_data = stock.history(period='1d')
+        # Handle both Ticker objects and string ticker symbols
+        if isinstance(stock, str):
+            ticker_obj = yf.Ticker(stock)
+            ticker_symbol = stock
+        else:
+            ticker_obj = stock
+            ticker_symbol = getattr(stock, 'ticker', str(stock))
+            
+        todays_data = ticker_obj.history(period='1d')
         if todays_data.empty:
             return None
         return todays_data['Close'].iloc[0]
     except Exception as e:
-        logger.error(f"Error fetching current price for {stock.ticker}: {str(e)}")
+        logger.error(f"Error fetching current price for {ticker_symbol}: {str(e)}")
         return None
 
 def get_price_history(stock, period='3mo'):

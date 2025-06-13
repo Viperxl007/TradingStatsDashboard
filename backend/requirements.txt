@@ -9,6 +9,10 @@ finance-calendars==0.0.7
 pandas>=1.3.0
 yoptions>=0.0.4  # For accurate options greeks calculations
 
+# AI Chart Analysis dependencies
+Pillow>=9.0.0  # Image processing
+anthropic>=0.3.0  # Claude API client (optional - will use requests if not available)
+
 # Optional dependencies - will use fallbacks if not available
 python-dotenv>=0.19.2; python_version < '3.12'
 gunicorn>=20.1.0; python_version < '3.12'

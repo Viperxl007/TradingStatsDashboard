@@ -141,9 +141,47 @@ const TradeIdeaCard: React.FC<TradeIdeaCardProps> = ({ tradeIdea, isCompactView 
   // Function to check if earnings have passed
   const hasEarningsPassed = () => {
     if (!earningsDate) return false;
+    
+    // Get current time in Eastern Time
     const now = new Date();
-    const earnings = new Date(earningsDate);
-    return earnings < now;
+    const easternTime = new Date(now.toLocaleString("en-US", {timeZone: "America/New_York"}));
+    
+    // Parse earnings date in local context (should be YYYY-MM-DD format)
+    const [year, month, day] = earningsDate.split('-').map(Number);
+    const earnings = new Date(year, month - 1, day); // month is 0-indexed
+    
+    // Get today's date in Eastern Time
+    const todayEastern = new Date(easternTime.getFullYear(), easternTime.getMonth(), easternTime.getDate());
+    const earningsDateOnly = new Date(earnings.getFullYear(), earnings.getMonth(), earnings.getDate());
+    
+    // If earnings date is in the future, earnings haven't passed
+    if (earningsDateOnly > todayEastern) {
+      return false;
+    }
+    
+    // If earnings date is in the past, earnings have passed
+    if (earningsDateOnly < todayEastern) {
+      return true;
+    }
+    
+    // If earnings date is today, check the time based on earnings timing
+    if (earningsDateOnly.getTime() === todayEastern.getTime()) {
+      if (earningsTime === 'BMO') {
+        // BMO earnings happen before market open (9:30 AM EST)
+        // If it's past 9:30 AM EST on earnings day, earnings have passed
+        const currentHour = easternTime.getHours();
+        const currentMinute = easternTime.getMinutes();
+        return currentHour > 9 || (currentHour === 9 && currentMinute >= 30);
+      } else if (earningsTime === 'AMC') {
+        // AMC earnings happen after market close (4:00 PM EST)
+        // If it's past 4:00 PM EST on earnings day, earnings have passed
+        const currentHour = easternTime.getHours();
+        return currentHour >= 16;
+      }
+    }
+    
+    // Default fallback - if no earnings time specified, consider passed if date has passed
+    return earningsDateOnly < todayEastern;
   };
   
   // Function to fetch deeper analysis
