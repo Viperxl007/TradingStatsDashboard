@@ -248,6 +248,8 @@ export interface OptionsAnalysisResult {
   optimalCalendarSpread?: OptimalCalendarSpread; // Optimal calendar spread (if available)
   optimalNakedOptions?: OptimalNakedOptions;    // Optimal naked options (if available)
   optimalIronCondors?: OptimalIronCondors;      // Optimal iron condors (if available)
+  calendarLiquidityScore?: number; // Liquidity score for the specific calendar spread (0-10)
+  simulationResults?: SimulationResults; // Monte Carlo simulation results for earnings volatility calendar spread
 }
 
 /**
@@ -390,4 +392,24 @@ export interface OptimalIronCondors {
   daysToExpiration: number;      // Days to expiration
   topIronCondors: IronCondor[];  // Top iron condor opportunities
   nextBestPlay: IronCondor | null; // Alternative play with better liquidity
+}
+
+/**
+ * Monte Carlo simulation results for earnings volatility calendar spread strategy
+ */
+export interface SimulationResults {
+  probabilityOfProfit: number;        // 0-100%
+  expectedReturn: number;             // Expected return percentage
+  percentiles: {
+    p25: number;                      // 25th percentile outcome
+    p50: number;                      // 50th percentile (median) outcome
+    p75: number;                      // 75th percentile outcome
+  };
+  maxLossScenario: number;            // Maximum loss scenario
+  confidenceInterval: {
+    low: number;                      // Lower bound of confidence interval
+    high: number;                     // Upper bound of confidence interval
+  };
+  simulationCount: number;            // Number of simulations run
+  rawResults?: number[];              // Raw simulation results for charting (return percentages)
 }
