@@ -718,6 +718,140 @@ def refresh_metrics(ticker):
             "timestamp": datetime.now().timestamp()
         }), 500
 
+@api_bp.route('/liquidity/calendar/<ticker>', methods=['POST'])
+def calculate_calendar_liquidity(ticker):
+    """
+    Calculate liquidity score for a specific calendar spread.
+    
+    Evaluates ONLY the ATM strike that is common between:
+    - The closest expiration to the earnings date
+    - The expiration that is 30 days after the short month strike
+    
+    Uses calls if ATM strike is above current price, puts if below current price.
+    """
+    try:
+        data = request.get_json()
+        current_price = data.get('current_price')
+        earnings_date = data.get('earnings_date')
+        
+        if not current_price or not earnings_date:
+            return jsonify({
+                'error': 'Missing required parameters: current_price and earnings_date'
+            }), 400
+        
+        # Import required functions
+        from datetime import datetime, timedelta
+        import yfinance as yf
+        from app.options_analyzer import (
+            filter_dates, find_closest_expiration, get_strikes_near_price,
+            get_liquidity_score, calculate_calendar_spread_liquidity
+        )
+        
+        # Get stock data
+        stock = yf.Ticker(ticker)
+        
+        # Get available expiration dates
+        try:
+            expirations = stock.options
+            if not expirations:
+                return jsonify({'liquidity_score': 0, 'error': 'No options data available'}), 200
+        except Exception as e:
+            logger.error(f"Error getting options data for {ticker}: {str(e)}")
+            return jsonify({'liquidity_score': 0, 'error': 'Failed to get options data'}), 200
+        
+        # Parse earnings date
+        try:
+            earnings_dt = datetime.strptime(earnings_date, '%Y-%m-%d')
+        except ValueError:
+            return jsonify({'error': 'Invalid earnings_date format. Use YYYY-MM-DD'}), 400
+        
+        # Filter expiration dates (remove past dates and very far dates)
+        filtered_expirations = filter_dates(expirations)
+        
+        if len(filtered_expirations) < 2:
+            return jsonify({'liquidity_score': 0, 'error': 'Insufficient expiration dates'}), 200
+        
+        # Find the closest expiration to earnings date
+        # Convert earnings_dt to date for comparison
+        earnings_date_only = earnings_dt.date()
+        
+        # Find closest expiration manually since find_closest_expiration might have type issues
+        closest_exp = None
+        min_diff = float('inf')
+        for exp in filtered_expirations:
+            exp_dt = datetime.strptime(exp, '%Y-%m-%d').date()
+            diff = abs((exp_dt - earnings_date_only).days)
+            if diff < min_diff:
+                min_diff = diff
+                closest_exp = exp
+        
+        if not closest_exp:
+            return jsonify({'liquidity_score': 0, 'error': 'No suitable expiration near earnings'}), 200
+        
+        # Find expiration that is ~30 days after the closest expiration
+        closest_dt = datetime.strptime(closest_exp, '%Y-%m-%d').date()
+        target_back_dt = closest_dt + timedelta(days=30)
+        
+        # Find the expiration closest to 30 days after
+        back_exp = None
+        min_diff = float('inf')
+        for exp in filtered_expirations:
+            exp_dt = datetime.strptime(exp, '%Y-%m-%d').date()
+            if exp_dt <= closest_dt:  # Skip if not after the front month
+                continue
+            diff = abs((exp_dt - target_back_dt).days)
+            if diff < min_diff:
+                min_diff = diff
+                back_exp = exp
+        
+        if not back_exp:
+            return jsonify({'liquidity_score': 0, 'error': 'No suitable back month expiration'}), 200
+        
+        # Get ATM strike (nearest to current price)
+        strikes_near_price = get_strikes_near_price(stock, closest_exp, current_price, range_percent=5)
+        if not strikes_near_price:
+            return jsonify({'liquidity_score': 0, 'error': 'No strikes available'}), 200
+        
+        # Find the strike closest to current price (ATM)
+        atm_strike = min(strikes_near_price, key=lambda x: abs(x - current_price))
+        
+        # Determine option type based on strike vs current price
+        option_type = 'call' if atm_strike >= current_price else 'put'
+        
+        # Get liquidity scores for both legs of the calendar spread
+        try:
+            front_liquidity = get_liquidity_score(stock, closest_exp, atm_strike, option_type)
+            back_liquidity = get_liquidity_score(stock, back_exp, atm_strike, option_type)
+            
+            # Calculate a simple spread cost estimate (back month premium - front month premium)
+            # For liquidity purposes, we'll use a nominal spread cost of 1.0 if we can't calculate it
+            spread_cost = 1.0
+            
+            # Calculate combined liquidity score
+            combined_liquidity = calculate_calendar_spread_liquidity(
+                front_liquidity, back_liquidity, spread_cost
+            )
+            
+            return jsonify({
+                'liquidity_score': combined_liquidity['score'],
+                'front_expiration': closest_exp,
+                'back_expiration': back_exp,
+                'strike': atm_strike,
+                'option_type': option_type,
+                'front_liquidity': front_liquidity,
+                'back_liquidity': back_liquidity,
+                'spread_impact': combined_liquidity.get('spread_impact', 0),
+                'has_zero_bids': combined_liquidity.get('has_zero_bids', False)
+            }), 200
+            
+        except Exception as e:
+            logger.error(f"Error calculating liquidity for {ticker}: {str(e)}")
+            return jsonify({'liquidity_score': 0, 'error': f'Liquidity calculation failed: {str(e)}'}), 200
+        
+    except Exception as e:
+        logger.error(f"Error in calendar liquidity endpoint for {ticker}: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
 @api_bp.route('/fetch-option-prices/<ticker>', methods=['POST'])
 def fetch_option_prices(ticker):
     """

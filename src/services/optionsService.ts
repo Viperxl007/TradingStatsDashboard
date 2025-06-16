@@ -245,3 +245,48 @@ export const getEarningsHistory = async (ticker: string, years: number = 7): Pro
     throw error;
   }
 };
+
+/**
+ * Calculate liquidity score for a specific calendar spread
+ *
+ * This function evaluates ONLY the ATM strike that is common between:
+ * - The closest expiration to the earnings date
+ * - The expiration that is 30 days after the short month strike
+ *
+ * Uses calls if ATM strike is above current price, puts if below current price
+ *
+ * @param ticker Stock ticker symbol
+ * @param currentPrice Current stock price
+ * @param earningsDate Earnings date
+ * @returns Promise with liquidity score (0-10)
+ */
+export const calculateCalendarLiquidityScore = async (
+  ticker: string,
+  currentPrice: number,
+  earningsDate: string
+): Promise<number> => {
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/liquidity/calendar/${ticker}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        current_price: currentPrice,
+        earnings_date: earningsDate
+      })
+    });
+    
+    if (!response.ok) {
+      console.warn(`Failed to get calendar liquidity score for ${ticker}: ${response.status}`);
+      return 0; // Return 0 if we can't get the score
+    }
+    
+    const data = await response.json();
+    return data.liquidity_score || 0;
+  } catch (error) {
+    console.warn(`Error calculating calendar liquidity score for ${ticker}:`, error);
+    return 0; // Return 0 if there's an error
+  }
+};
