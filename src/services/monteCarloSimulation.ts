@@ -29,6 +29,7 @@ export interface MonteCarloResults {
     high: number;                     // Upper bound of confidence interval
   };
   simulationCount: number;            // Number of simulations run
+  rawResults?: number[];              // Raw simulation results for charting (return percentages)
 }
 
 /**
@@ -442,7 +443,8 @@ export function runMonteCarloSimulation(params: MonteCarloSimulationParams): Mon
     },
     maxLossScenario: Math.round(maxLossScenario * 100) / 100,
     confidenceInterval,
-    simulationCount: numSimulations
+    simulationCount: numSimulations,
+    rawResults: results.map(r => Math.round((r / spreadDebit) * 100 * 100) / 100) // Convert to return percentages
   };
   
   // Terminal logging for completion

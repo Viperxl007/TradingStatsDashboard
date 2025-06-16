@@ -411,4 +411,5 @@ export interface SimulationResults {
     high: number;                     // Upper bound of confidence interval
   };
   simulationCount: number;            // Number of simulations run
+  rawResults?: number[];              // Raw simulation results for charting (return percentages)
 }

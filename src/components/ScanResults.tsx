@@ -24,13 +24,16 @@ import {
   InputLeftElement,
   Select,
   HStack,
+  VStack,
   useColorMode,
   useToast,
   RadioGroup,
   Radio,
-  Stack
+  Stack,
+  IconButton,
+  Tooltip
 } from '@chakra-ui/react';
-import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle } from 'react-icons/fi';
+import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle, FiBarChart } from 'react-icons/fi';
 import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
 import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
@@ -40,6 +43,7 @@ import CalendarSpreadDisplay from './CalendarSpreadDisplay';
 import PinTradeButton from './tradeTracker/PinTradeButton';
 import LiquidityThermometer from './LiquidityThermometer';
 import SimulationProbabilityDisplay from './SimulationProbabilityDisplay';
+import MonteCarloChartModal from './MonteCarloChartModal';
 import { calculateSimulationProbability } from '../services/monteCarloSimulation';
 
 /**
@@ -70,6 +74,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   const [simulationsInProgress, setSimulationsInProgress] = useState<Set<string>>(new Set());
   const [completedSimulations, setCompletedSimulations] = useState<Set<string>>(new Set());
   const [simulationResultsCache, setSimulationResultsCache] = useState<Map<string, any>>(new Map());
+  const [chartModalOpen, setChartModalOpen] = useState(false);
+  const [selectedChartTicker, setSelectedChartTicker] = useState<string>('');
+  const [selectedChartResults, setSelectedChartResults] = useState<any>(null);
   const toast = useToast();
   
   const { optionsData } = state;
@@ -463,6 +470,17 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         isClosable: true,
       });
     }
+  };
+
+  // Function to handle opening the chart modal
+  const handleShowChart = (ticker: string, simulationResults: any) => {
+    if (!simulationResults) {
+      console.warn('No simulation results available for chart');
+      return;
+    }
+    setSelectedChartTicker(ticker);
+    setSelectedChartResults(simulationResults);
+    setChartModalOpen(true);
   };
 
   // Function to calculate liquidity scores for all calendar results
@@ -1175,10 +1193,27 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                           <Text fontSize="xs" color="gray.500">Calculating...</Text>
                         </Flex>
                       ) : result.simulationResults ? (
-                        <SimulationProbabilityDisplay
-                          simulationResults={result.simulationResults}
-                          size="sm"
-                        />
+                        <VStack spacing={2} align="stretch">
+                          <SimulationProbabilityDisplay
+                            simulationResults={result.simulationResults}
+                            size="sm"
+                          />
+                          <Tooltip label="Show Monte Carlo risk profile chart" placement="top">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              colorScheme="blue"
+                              leftIcon={<Icon as={FiBarChart} />}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleShowChart(result.ticker, result.simulationResults);
+                              }}
+                              width="full"
+                            >
+                              Show Chart
+                            </Button>
+                          </Tooltip>
+                        </VStack>
                       ) : (
                         <Text fontSize="sm" color="gray.500">N/A</Text>
                       )}
@@ -1261,6 +1296,17 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             Click "Scan Today's Earnings" to analyze stocks with earnings announcements today.
           </Text>
         </Flex>
+      )}
+
+      {/* Monte Carlo Chart Modal */}
+      {chartModalOpen && selectedChartResults && (
+        <MonteCarloChartModal
+          isOpen={chartModalOpen}
+          onClose={() => setChartModalOpen(false)}
+          ticker={selectedChartTicker}
+          simulationResults={selectedChartResults}
+          rawSimulationData={selectedChartResults?.rawResults}
+        />
       )}
     </Box>
   );
