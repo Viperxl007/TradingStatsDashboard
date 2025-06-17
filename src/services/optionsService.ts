@@ -290,3 +290,48 @@ export const calculateCalendarLiquidityScore = async (
     return 0; // Return 0 if there's an error
   }
 };
+
+/**
+ * Get real calendar spread cost from backend
+ *
+ * @param ticker Stock ticker symbol
+ * @param currentPrice Current stock price
+ * @param earningsDate Earnings date
+ * @returns Promise with actual spread cost from market data
+ */
+export const getCalendarSpreadCost = async (
+  ticker: string,
+  currentPrice: number,
+  earningsDate: string
+): Promise<number> => {
+  try {
+    const response = await fetchWithRetry(`${API_BASE_URL}/spread-cost/calendar/${ticker}`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        current_price: currentPrice,
+        earnings_date: earningsDate
+      })
+    });
+    
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    
+    const data = await response.json();
+    return data.spread_cost || 2.50; // Default fallback if no cost returned
+  } catch (error) {
+    console.error('Error getting calendar spread cost:', error);
+    // Fallback to simple price-based estimate if API fails
+    if (currentPrice < 10) return 0.30;
+    else if (currentPrice < 25) return 0.75;
+    else if (currentPrice < 50) return 1.25;
+    else if (currentPrice < 100) return 2.00;
+    else if (currentPrice < 200) return 2.50;
+    else if (currentPrice < 300) return 3.50;
+    else return 4.50;
+  }
+};
