@@ -923,6 +923,7 @@ def get_calendar_spread_cost(ticker):
         
         # Import yfinance directly to avoid module loading issues
         import yfinance as yf
+        import pandas as pd
         from datetime import datetime, timedelta
         
         # Get stock data directly
@@ -1017,20 +1018,74 @@ def get_calendar_spread_cost(ticker):
             if front_options.empty or back_options.empty:
                 return jsonify({'error': f'No options at strike {strike} for {ticker}'}), 404
             
-            # Calculate mid prices
+            # Calculate mid prices with enhanced validation
             front_bid = front_options.iloc[0]['bid']
             front_ask = front_options.iloc[0]['ask']
-            front_mid = (front_bid + front_ask) / 2.0 if front_bid and front_ask else 0.0
-            
             back_bid = back_options.iloc[0]['bid']
             back_ask = back_options.iloc[0]['ask']
-            back_mid = (back_bid + back_ask) / 2.0 if back_bid and back_ask else 0.0
+            
+            # Validate bid/ask data quality
+            def is_valid_price(price):
+                return price is not None and price > 0 and not pd.isna(price)
+            
+            # Check for valid bid/ask prices
+            front_bid_valid = is_valid_price(front_bid)
+            front_ask_valid = is_valid_price(front_ask)
+            back_bid_valid = is_valid_price(back_bid)
+            back_ask_valid = is_valid_price(back_ask)
+            
+            # Log pricing data quality for debugging
+            logger.info(f"{ticker} pricing quality - Front: bid={front_bid}({front_bid_valid}), ask={front_ask}({front_ask_valid}), Back: bid={back_bid}({back_bid_valid}), ask={back_ask}({back_ask_valid})")
+            
+            # Calculate mid prices with fallbacks for bad data
+            if front_bid_valid and front_ask_valid:
+                # Check for reasonable spread (ask should be >= bid)
+                if front_ask >= front_bid:
+                    front_mid = (front_bid + front_ask) / 2.0
+                else:
+                    logger.warning(f"{ticker} front month has inverted bid/ask: bid={front_bid}, ask={front_ask}")
+                    return jsonify({'error': f'Invalid front month bid/ask spread for {ticker}: bid=${front_bid}, ask=${front_ask}'}), 400
+            elif front_ask_valid:
+                # Use ask price if only ask is valid
+                front_mid = front_ask
+                logger.warning(f"{ticker} using front ask price only: ${front_ask}")
+            elif front_bid_valid:
+                # Use bid price if only bid is valid
+                front_mid = front_bid
+                logger.warning(f"{ticker} using front bid price only: ${front_bid}")
+            else:
+                return jsonify({'error': f'No valid front month prices for {ticker} at strike ${strike}'}), 400
+            
+            if back_bid_valid and back_ask_valid:
+                # Check for reasonable spread (ask should be >= bid)
+                if back_ask >= back_bid:
+                    back_mid = (back_bid + back_ask) / 2.0
+                else:
+                    logger.warning(f"{ticker} back month has inverted bid/ask: bid={back_bid}, ask={back_ask}")
+                    return jsonify({'error': f'Invalid back month bid/ask spread for {ticker}: bid=${back_bid}, ask=${back_ask}'}), 400
+            elif back_ask_valid:
+                # Use ask price if only ask is valid
+                back_mid = back_ask
+                logger.warning(f"{ticker} using back ask price only: ${back_ask}")
+            elif back_bid_valid:
+                # Use bid price if only bid is valid
+                back_mid = back_bid
+                logger.warning(f"{ticker} using back bid price only: ${back_bid}")
+            else:
+                return jsonify({'error': f'No valid back month prices for {ticker} at strike ${strike}'}), 400
             
             # Calendar spread cost = back month price - front month price
             spread_cost = back_mid - front_mid
             
+            # Enhanced validation for spread cost
             if spread_cost <= 0:
-                return jsonify({'error': f'Invalid spread cost calculated for {ticker}: ${spread_cost:.2f}'}), 400
+                logger.warning(f"{ticker} calculated negative/zero spread cost: ${spread_cost:.2f} (back=${back_mid:.2f}, front=${front_mid:.2f})")
+                return jsonify({'error': f'Invalid spread cost calculated for {ticker}: ${spread_cost:.2f} (back month: ${back_mid:.2f}, front month: ${front_mid:.2f})'}), 400
+            
+            # Check for unreasonably high spread cost (likely bad data)
+            if spread_cost > current_price * 0.5:  # Spread cost shouldn't exceed 50% of stock price
+                logger.warning(f"{ticker} calculated unreasonably high spread cost: ${spread_cost:.2f} (stock price: ${current_price})")
+                return jsonify({'error': f'Unreasonably high spread cost for {ticker}: ${spread_cost:.2f} (stock price: ${current_price})'}), 400
             
         except Exception as e:
             return jsonify({'error': f'Could not calculate spread cost for {ticker}: {str(e)}'}), 500

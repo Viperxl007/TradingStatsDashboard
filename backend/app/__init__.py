@@ -100,6 +100,14 @@ def create_app(test_config=None):
     from app.routes import api_bp
     app.register_blueprint(api_bp)
     
+    # Register unified calendar endpoint
+    try:
+        from app.unified_calendar_endpoint import unified_calendar_bp
+        app.register_blueprint(unified_calendar_bp)
+        logger.info("Registered unified calendar endpoint")
+    except Exception as e:
+        logger.error(f"Failed to register unified calendar endpoint: {str(e)}")
+    
     # Register market data routes
     try:
         from app.market_data_routes import market_data_bp

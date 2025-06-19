@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -35,7 +35,7 @@ import {
 } from '@chakra-ui/react';
 import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle, FiBarChart } from 'react-icons/fi';
 import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
-import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore } from '../services/optionsService';
+import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore, clearSpreadCostCache } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
@@ -78,8 +78,20 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   const [selectedChartTicker, setSelectedChartTicker] = useState<string>('');
   const [selectedChartResults, setSelectedChartResults] = useState<any>(null);
   const toast = useToast();
+  const eventSourceRef = useRef<EventSource | null>(null);
   
   const { optionsData } = state;
+
+  // Cleanup EventSource on component unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        console.log('🧹 Cleaning up EventSource connection on component unmount');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, []);
 
   // State for tracking scan progress
   const [scanProgress, setScanProgress] = useState<{
@@ -98,6 +110,8 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       setCompletedSimulations(new Set());
       setSimulationsInProgress(new Set());
       setSimulationResultsCache(new Map());
+      // Clear spread cost cache to prevent stale data
+      clearSpreadCostCache();
       
       // Use EventSource for server-sent events
       const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
@@ -210,13 +224,27 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     try {
       dispatch(scanEarningsStart(customDate));
       setScanProgress(null);
+      
+      // Close any existing EventSource connection to prevent conflicts
+      if (eventSourceRef.current) {
+        console.log('🔄 Closing existing EventSource connection before starting new scan');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      
       // Reset simulation caches for new scan
       setCompletedSimulations(new Set());
       setSimulationsInProgress(new Set());
       setSimulationResultsCache(new Map());
+      // Clear spread cost cache to prevent stale data
+      clearSpreadCostCache();
+      
+      // Track processed results to prevent duplicates
+      let processedResultsMap = new Map<string, OptionsAnalysisResult>();
       
       // Use EventSource for server-sent events
       const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
+      eventSourceRef.current = eventSource;
       
       eventSource.onmessage = async (event) => {
         try {
@@ -231,26 +259,39 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             if (data.results && data.results.length > 0) {
               console.log(`📊 STREAMING MODE: Processing ${data.results.length} results for custom date with simulations...`);
               
-              // Process simulations for new results only
-              const processedResults = await processStreamingResults(data.results);
-              dispatch(scanEarningsSuccess(processedResults));
+              // Filter out already processed results
+              const newResults = data.results.filter((result: OptionsAnalysisResult) => {
+                if (processedResultsMap.has(result.ticker)) {
+                  console.log(`⏭️ STREAMING MODE: Already processed ${result.ticker}, skipping`);
+                  return false;
+                }
+                processedResultsMap.set(result.ticker, result);
+                return true;
+              });
+              
+              if (newResults.length > 0) {
+                console.log(`🚀 STREAMING MODE: Processing ${newResults.length} NEW results...`);
+                // Process simulations for new results only
+                const processedResults = await processStreamingResults(newResults);
+                
+                // Get all processed results so far
+                const allResults = Array.from(processedResultsMap.values());
+                
+                // Update the map with processed results (with simulations)
+                processedResults.forEach(result => {
+                  processedResultsMap.set(result.ticker, result);
+                });
+                
+                // Dispatch all accumulated results
+                dispatch(scanEarningsSuccess(Array.from(processedResultsMap.values())));
+              }
             }
           } else if (data.status === 'complete') {
             // Close the event source first
             eventSource.close();
+            eventSourceRef.current = null;
             
             console.log(`🏁 STREAMING MODE: Scan complete! Final results displayed.`);
-            
-            // IMPORTANT: Always dispatch final results to clear loading state, even if empty
-            if (data.results && data.results.length > 0) {
-              // Process final results if any
-              const processedResults = await processStreamingResults(data.results);
-              dispatch(scanEarningsSuccess(processedResults));
-            } else {
-              // No results - dispatch empty array to clear loading state
-              console.log(`📊 STREAMING MODE: No results found, clearing loading state`);
-              dispatch(scanEarningsSuccess([]));
-            }
             
             // Clear progress after a moment
             setTimeout(() => {
@@ -277,6 +318,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
         eventSource.close();
+        eventSourceRef.current = null;
         
         const errorMessage = 'Connection to server lost. Please try again.';
         dispatch(scanEarningsError(errorMessage));
@@ -479,6 +521,8 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         } catch (error) {
           console.warn(`❌ STREAMING MODE: Failed to calculate liquidity score for ${ticker}:`, error);
         }
+      } else if (result.calendarLiquidityScore !== undefined) {
+        console.log(`⏭️ STREAMING MODE: Liquidity score already exists for ${ticker}: ${result.calendarLiquidityScore}`);
       }
       
       // 2. Calculate simulations if needed and not already processed
@@ -487,13 +531,36 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           result.metrics &&
           result.expectedMove &&
           !result.simulationResults) {
+        
+        // Check if we have cached simulation results first
+        const cachedSimulation = simulationResultsCache.get(ticker);
+        if (cachedSimulation) {
+          console.log(`📋 STREAMING MODE: Using cached simulation for ${ticker}`);
+          processedResults[i] = {
+            ...processedResults[i],
+            simulationResults: cachedSimulation
+          };
+          setCompletedSimulations(prev => new Set(prev).add(ticker));
+          continue;
+        }
+        
         try {
           // Mark as in progress
           setSimulationsInProgress(prev => new Set(prev).add(ticker));
           
           console.log(`🎲 STREAMING MODE: Calculating simulation for ${ticker}...`);
           
-          const simulationResults = await calculateSimulationProbability(result);
+          // Use the updated result object that includes the liquidity score
+          const updatedResult = processedResults[i];
+          
+          // Add timeout to simulation calculation to prevent hanging
+          const simulationPromise = calculateSimulationProbability(updatedResult);
+          const timeoutPromise = new Promise<null>((_, reject) => {
+            setTimeout(() => reject(new Error('Simulation timeout')), 15000); // 15 second timeout
+          });
+          
+          const simulationResults = await Promise.race([simulationPromise, timeoutPromise]);
+          
           if (simulationResults) {
             processedResults[i] = {
               ...processedResults[i],
@@ -505,6 +572,8 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             setCompletedSimulations(prev => new Set(prev).add(ticker));
             
             console.log(`✅ STREAMING MODE: Simulation completed for ${ticker}: ${simulationResults.probabilityOfProfit}%`);
+          } else {
+            console.warn(`⚠️ STREAMING MODE: Simulation returned null for ${ticker}`);
           }
           
           // Remove from progress tracking
@@ -516,6 +585,12 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
         } catch (error) {
           console.error(`❌ STREAMING MODE: Failed to calculate simulation for ${ticker}:`, error);
           
+          // For timeout errors, mark as completed with null results to prevent retrying
+          if (error instanceof Error && error.message.includes('timeout')) {
+            console.warn(`⏰ STREAMING MODE: Simulation timed out for ${ticker}, marking as completed to prevent retry`);
+            setCompletedSimulations(prev => new Set(prev).add(ticker));
+          }
+          
           // Remove from progress tracking even on error
           setSimulationsInProgress(prev => {
             const newSet = new Set(prev);
@@ -523,6 +598,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             return newSet;
           });
         }
+      } else if (result.simulationResults) {
+        console.log(`⏭️ STREAMING MODE: Simulation already exists for ${ticker}: ${result.simulationResults.probabilityOfProfit}%`);
+        // Make sure it's marked as completed
+        setCompletedSimulations(prev => new Set(prev).add(ticker));
       }
     }
     

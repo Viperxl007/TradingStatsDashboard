@@ -171,8 +171,9 @@ function simulateStockMovement(
 }
 
 /**
- * Calculate execution costs using real spread cost data with dynamic penalties/rewards
- * Now leverages actual market spread costs for more accurate assessment
+ * Calculate execution costs using real spread cost data with aggressive liquidity penalties
+ * Now leverages actual market spread costs and implements exponential liquidity penalties
+ * to prevent unrealistic probabilities for illiquid options
  */
 function calculateExecutionCosts(
   liquidityScore: number = 5,
@@ -199,42 +200,77 @@ function calculateExecutionCosts(
     probabilityPenalty += 2; // Small bonus for wider spreads
   }
   
-  // Liquidity scoring with realistic impact
-  if (liquidityScore <= 2) {
-    executionCostPct *= 2.5; // 25% total for poor liquidity
-    probabilityPenalty -= 12; // Significant penalty
-  } else if (liquidityScore <= 4) {
-    executionCostPct *= 1.4; // 14% total for below average
-    probabilityPenalty -= 4; // Moderate penalty
+  // NUCLEAR LIQUIDITY PENALTY SYSTEM
+  // Exponential Death Curve for Poor Liquidity - LIQUIDITY IS KING OVER EVERYTHING
+  // Leave decent/good liquidity alone, NUKE the dogshit liquidity to oblivion
+  
+  if (liquidityScore <= 4.0) {
+    // CRITICAL LIQUIDITY THRESHOLD - NUCLEAR PENALTIES BELOW 4.0
+    
+    if (liquidityScore <= 1.5) {
+      // Completely impossible (0-1.5) - KILL THE TRADE
+      executionCostPct *= 8.0; // 80% execution cost
+      probabilityPenalty = -95; // NUCLEAR penalty - almost impossible
+    } else if (liquidityScore <= 2.5) {
+      // Extremely difficult (1.5-2.5) - SEVERE punishment
+      const normalizedScore = (liquidityScore - 1.5) / 1.0; // 0-1 range
+      const nuclearPenalty = -95 + (35 * normalizedScore); // -95% to -60%
+      executionCostPct *= (8.0 - 3.0 * normalizedScore); // 80% to 50% execution cost
+      probabilityPenalty = nuclearPenalty;
+    } else if (liquidityScore <= 3.5) {
+      // Very difficult (2.5-3.5) - HEAVY punishment
+      const normalizedScore = (liquidityScore - 2.5) / 1.0; // 0-1 range
+      const heavyPenalty = -60 + (30 * normalizedScore); // -60% to -30%
+      executionCostPct *= (5.0 - 2.0 * normalizedScore); // 50% to 30% execution cost
+      probabilityPenalty = heavyPenalty;
+    } else {
+      // Difficult (3.5-4.0) - MODERATE punishment
+      const normalizedScore = (liquidityScore - 3.5) / 0.5; // 0-1 range
+      const moderatePenalty = -30 + (15 * normalizedScore); // -30% to -15%
+      executionCostPct *= (3.0 - 1.0 * normalizedScore); // 30% to 20% execution cost
+      probabilityPenalty = moderatePenalty;
+    }
+    
   } else if (liquidityScore >= 8) {
+    // Excellent liquidity (8+) - rewards
     executionCostPct *= 0.7; // 7% total for excellent liquidity
     probabilityPenalty += 4; // Good bonus for excellent liquidity
   } else if (liquidityScore >= 6) {
+    // Good liquidity (6-8) - small rewards
     executionCostPct *= 0.85; // 8.5% total for good liquidity
     probabilityPenalty += 2; // Small bonus
+  } else {
+    // Adequate liquidity (4-6) - neutral to small penalties
+    const normalizedScore = (liquidityScore - 4.0) / 2.0; // 0-1 range
+    const smallPenalty = -4 + (4 * normalizedScore); // -4% to 0%
+    executionCostPct *= (1.4 - 0.4 * normalizedScore); // 14% to 10% execution cost
+    probabilityPenalty = smallPenalty;
   }
   
-  // Volume-based adjustments
+  // Volume-based adjustments (secondary to liquidity)
   if (avgVolume >= 15000000) { // Very high volume (like MU)
-    executionCostPct *= 0.75; // 25% reduction
-    probabilityPenalty += 3; // Volume bonus
+    executionCostPct *= 0.85; // 15% reduction (less aggressive than before)
+    probabilityPenalty += 2; // Reduced volume bonus (liquidity is more important)
   } else if (avgVolume >= 5000000) { // High volume
-    executionCostPct *= 0.85; // 15% reduction
-    probabilityPenalty += 2; // Moderate bonus
+    executionCostPct *= 0.90; // 10% reduction
+    probabilityPenalty += 1; // Small bonus
   } else if (avgVolume >= 1500000) { // Adequate volume
     executionCostPct *= 0.95; // 5% reduction
-    probabilityPenalty += 1; // Small bonus
+    // No penalty/bonus for adequate volume
   } else if (avgVolume < 500000) { // Low volume
-    executionCostPct *= 1.25; // 25% increase
-    probabilityPenalty -= 5; // Volume penalty
+    executionCostPct *= 1.15; // 15% increase
+    probabilityPenalty -= 3; // Volume penalty (but less than liquidity penalty)
   }
   
-  // Cap execution cost percentage (don't let it get ridiculous)
-  executionCostPct = Math.min(executionCostPct, 0.35); // Max 35% of spread cost
+  // Cap execution cost percentage (allow NUCLEAR costs for terrible liquidity)
+  executionCostPct = Math.min(executionCostPct, 0.90); // Max 90% of spread cost for nuclear cases
+  
+  // Apply NUCLEAR penalty caps - allow devastating penalties for poor liquidity
+  const finalPenalty = Math.max(-98, Math.min(6, probabilityPenalty)); // Allow up to -98% penalty (NUCLEAR)
   
   return {
     executionCost: spreadCost * executionCostPct,
-    probabilityPenalty: Math.max(-15, Math.min(8, probabilityPenalty)) // Cap penalties/bonuses
+    probabilityPenalty: finalPenalty
   };
 }
 
@@ -456,6 +492,28 @@ export async function runMonteCarloSimulation(params: MonteCarloSimulationParams
     executionCost: executionCost.toFixed(2),
     probabilityPenalty: probabilityPenalty,
     executionCostPct: ((executionCost / spreadDebit) * 100).toFixed(1) + '%'
+  });
+  
+  // Detailed NUCLEAR liquidity penalty breakdown
+  console.log(`🚨 ${ticker} NUCLEAR LIQUIDITY ANALYSIS:`, {
+    liquidityScore: liquidityScore,
+    liquidityCategory: liquidityScore <= 1.5 ? '💀 IMPOSSIBLE (KILLED)' :
+                     liquidityScore <= 2.5 ? '☢️ EXTREMELY_DIFFICULT (NUCLEAR)' :
+                     liquidityScore <= 3.5 ? '🔥 VERY_DIFFICULT (HEAVY)' :
+                     liquidityScore <= 4.0 ? '⚠️ DIFFICULT (MODERATE)' :
+                     liquidityScore <= 6.0 ? '✅ ADEQUATE' :
+                     liquidityScore <= 8.0 ? '🟢 GOOD' : '🌟 EXCELLENT',
+    probabilityPenalty: probabilityPenalty + '%',
+    executionCostMultiplier: ((executionCost / spreadDebit) / 0.10).toFixed(2) + 'x',
+    penaltySeverity: Math.abs(probabilityPenalty) >= 90 ? '💀 NUCLEAR (TRADE KILLED)' :
+                    Math.abs(probabilityPenalty) >= 60 ? '☢️ SEVERE (HEAVY DAMAGE)' :
+                    Math.abs(probabilityPenalty) >= 30 ? '🔥 HIGH (SIGNIFICANT)' :
+                    Math.abs(probabilityPenalty) >= 15 ? '⚠️ MODERATE' :
+                    Math.abs(probabilityPenalty) >= 5 ? '🟡 LOW' : '🟢 MINIMAL',
+    tradeViability: Math.abs(probabilityPenalty) >= 90 ? 'AVOID AT ALL COSTS' :
+                   Math.abs(probabilityPenalty) >= 60 ? 'EXTREMELY RISKY' :
+                   Math.abs(probabilityPenalty) >= 30 ? 'HIGH RISK' :
+                   Math.abs(probabilityPenalty) >= 15 ? 'MODERATE RISK' : 'ACCEPTABLE'
   });
   
   for (let i = 0; i < numSimulations; i++) {
