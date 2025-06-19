@@ -744,7 +744,7 @@ def calculate_calendar_liquidity(ticker):
         import yfinance as yf
         from app.options_analyzer import (
             filter_dates, find_closest_expiration, get_strikes_near_price,
-            get_liquidity_score, calculate_calendar_spread_liquidity
+            get_improved_liquidity_score, calculate_calendar_spread_liquidity
         )
         
         # Get stock data
@@ -818,30 +818,62 @@ def calculate_calendar_liquidity(ticker):
         # Determine option type based on strike vs current price
         option_type = 'call' if atm_strike >= current_price else 'put'
         
-        # Get liquidity scores for both legs of the calendar spread
+        # Get liquidity scores for both legs of the calendar spread using improved calculation
         try:
-            front_liquidity = get_liquidity_score(stock, closest_exp, atm_strike, option_type)
-            back_liquidity = get_liquidity_score(stock, back_exp, atm_strike, option_type)
+            # Get option data for improved liquidity calculation
+            front_chain = stock.option_chain(closest_exp)
+            back_chain = stock.option_chain(back_exp)
             
-            # Calculate a simple spread cost estimate (back month premium - front month premium)
-            # For liquidity purposes, we'll use a nominal spread cost of 1.0 if we can't calculate it
-            spread_cost = 1.0
+            # Get the specific options for the ATM strike
+            if option_type == 'call':
+                front_options = front_chain.calls[front_chain.calls['strike'] == atm_strike]
+                back_options = back_chain.calls[back_chain.calls['strike'] == atm_strike]
+            else:
+                front_options = front_chain.puts[front_chain.puts['strike'] == atm_strike]
+                back_options = back_chain.puts[back_chain.puts['strike'] == atm_strike]
             
-            # Calculate combined liquidity score
-            combined_liquidity = calculate_calendar_spread_liquidity(
-                front_liquidity, back_liquidity, spread_cost
-            )
+            if front_options.empty or back_options.empty:
+                return jsonify({'liquidity_score': 0, 'error': 'No option data for ATM strike'}), 200
+            
+            # Convert to dict for improved liquidity calculation
+            front_option = front_options.iloc[0].to_dict()
+            back_option = back_options.iloc[0].to_dict()
+            
+            # Use improved liquidity calculation
+            front_liquidity = get_improved_liquidity_score(front_option, current_price)
+            back_liquidity = get_improved_liquidity_score(back_option, current_price)
+            
+            # Calculate actual spread cost (back month premium - front month premium)
+            try:
+                front_mid = (front_option['bid'] + front_option['ask']) / 2.0
+                back_mid = (back_option['bid'] + back_option['ask']) / 2.0
+                spread_cost = back_mid - front_mid
+                
+                # Ensure spread cost is positive and reasonable
+                if spread_cost <= 0:
+                    spread_cost = 1.0  # Fallback for invalid spreads
+            except:
+                spread_cost = 1.0  # Fallback if calculation fails
+            
+            # For screener display, use a simpler weighted average that better reflects true liquidity
+            # Front month is more important (60%) since it's harder to exit
+            simple_combined_score = front_liquidity['score'] * 0.6 + back_liquidity['score'] * 0.4
+            
+            # Only apply penalty if there are actual zero bids (which would be a real liquidity issue)
+            has_zero_bids = front_liquidity.get('has_zero_bid', False) or back_liquidity.get('has_zero_bid', False)
+            if has_zero_bids:
+                simple_combined_score *= 0.7  # 30% penalty for zero bids
             
             return jsonify({
-                'liquidity_score': combined_liquidity['score'],
+                'liquidity_score': simple_combined_score,
                 'front_expiration': closest_exp,
                 'back_expiration': back_exp,
                 'strike': atm_strike,
                 'option_type': option_type,
                 'front_liquidity': front_liquidity,
                 'back_liquidity': back_liquidity,
-                'spread_impact': combined_liquidity.get('spread_impact', 0),
-                'has_zero_bids': combined_liquidity.get('has_zero_bids', False)
+                'spread_impact': (front_liquidity['spread_dollars'] + back_liquidity['spread_dollars']) / spread_cost,
+                'has_zero_bids': has_zero_bids
             }), 200
             
         except Exception as e:
@@ -850,6 +882,227 @@ def calculate_calendar_liquidity(ticker):
         
     except Exception as e:
         logger.error(f"Error in calendar liquidity endpoint for {ticker}: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@api_bp.route('/spread-cost/calendar/<ticker>', methods=['POST'])
+def get_calendar_spread_cost(ticker):
+    """
+    Get real calendar spread cost for a specific ticker.
+    
+    This endpoint calculates the actual market-based cost of a calendar spread
+    using real option prices instead of hardcoded estimates.
+    
+    Expected POST body:
+    {
+        "current_price": 119.84,
+        "earnings_date": "2025-06-25"
+    }
+    
+    Returns:
+    {
+        "spread_cost": 2.35,
+        "front_expiration": "2025-06-27",
+        "back_expiration": "2025-07-25",
+        "strike": 120.0,
+        "option_type": "call"
+    }
+    """
+    try:
+        # Validate request
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
+        
+        data = request.get_json()
+        current_price = data.get('current_price')
+        earnings_date = data.get('earnings_date')
+        
+        if not current_price or not earnings_date:
+            return jsonify({'error': 'current_price and earnings_date are required'}), 400
+        
+        logger.info(f"Getting calendar spread cost for {ticker} at ${current_price} with earnings {earnings_date}")
+        
+        # Import yfinance directly to avoid module loading issues
+        import yfinance as yf
+        import pandas as pd
+        from datetime import datetime, timedelta
+        
+        # Get stock data directly
+        stock = yf.Ticker(ticker)
+        
+        # Get expiration dates
+        try:
+            exp_dates = stock.options
+            if not exp_dates:
+                return jsonify({'error': f'No expiration dates found for {ticker}'}), 404
+        except Exception as e:
+            return jsonify({'error': f'Could not get options data for {ticker}: {str(e)}'}), 404
+        
+        # Convert to datetime objects and filter for future dates
+        today = datetime.today().date()
+        date_objs = [datetime.strptime(date, "%Y-%m-%d").date() for date in exp_dates]
+        future_dates = [d for d in sorted(date_objs) if d > today]
+        
+        if not future_dates:
+            return jsonify({'error': f'No future expiration dates found for {ticker}'}), 404
+        
+        # Find front month (closest to earnings date)
+        earnings_dt = datetime.strptime(earnings_date, '%Y-%m-%d').date()
+        front_exp = None
+        min_diff = float('inf')
+        
+        for exp_date in future_dates:
+            if exp_date >= earnings_dt:  # Must be on or after earnings
+                diff = (exp_date - earnings_dt).days
+                if diff < min_diff:
+                    min_diff = diff
+                    front_exp = exp_date.strftime('%Y-%m-%d')
+        
+        if not front_exp:
+            return jsonify({'error': f'Could not find suitable front month expiration for {ticker}'}), 404
+        
+        # Find back month (30 days after front month)
+        front_date = datetime.strptime(front_exp, '%Y-%m-%d').date()
+        target_back_date = front_date + timedelta(days=30)
+        
+        # Find closest back month expiration
+        back_exp = None
+        min_diff = float('inf')
+        for exp_date in future_dates:
+            if exp_date > front_date:
+                diff = abs((exp_date - target_back_date).days)
+                if diff < min_diff:
+                    min_diff = diff
+                    back_exp = exp_date.strftime('%Y-%m-%d')
+        
+        if not back_exp:
+            return jsonify({'error': f'Could not find back month expiration for {ticker}'}), 404
+        
+        # Get ATM strike directly
+        try:
+            front_chain = stock.option_chain(front_exp)
+            calls = front_chain.calls
+            
+            if calls.empty:
+                return jsonify({'error': f'No call options found for {ticker} on {front_exp}'}), 404
+            
+            # Get all available strikes and find closest to current price
+            strikes = sorted(calls['strike'].unique())
+            if not strikes:
+                return jsonify({'error': f'No strikes found for {ticker}'}), 404
+            
+            strike = min(strikes, key=lambda x: abs(x - current_price))
+            
+        except Exception as e:
+            return jsonify({'error': f'Could not get strikes for {ticker}: {str(e)}'}), 404
+        
+        # Determine option type (calls if strike >= current price, puts if below)
+        option_type = 'call' if strike >= current_price else 'put'
+        
+        # Calculate spread cost directly
+        try:
+            # Get front month option
+            front_chain = stock.option_chain(front_exp)
+            front_options = front_chain.calls if option_type.lower() == 'call' else front_chain.puts
+            
+            # Get back month option
+            back_chain = stock.option_chain(back_exp)
+            back_options = back_chain.calls if option_type.lower() == 'call' else back_chain.puts
+            
+            if front_options.empty or back_options.empty:
+                return jsonify({'error': f'Empty options chain for {ticker}'}), 404
+            
+            # Find the options with the given strike
+            front_options = front_options[front_options['strike'] == strike]
+            back_options = back_options[back_options['strike'] == strike]
+            
+            if front_options.empty or back_options.empty:
+                return jsonify({'error': f'No options at strike {strike} for {ticker}'}), 404
+            
+            # Calculate mid prices with enhanced validation
+            front_bid = front_options.iloc[0]['bid']
+            front_ask = front_options.iloc[0]['ask']
+            back_bid = back_options.iloc[0]['bid']
+            back_ask = back_options.iloc[0]['ask']
+            
+            # Validate bid/ask data quality
+            def is_valid_price(price):
+                return price is not None and price > 0 and not pd.isna(price)
+            
+            # Check for valid bid/ask prices
+            front_bid_valid = is_valid_price(front_bid)
+            front_ask_valid = is_valid_price(front_ask)
+            back_bid_valid = is_valid_price(back_bid)
+            back_ask_valid = is_valid_price(back_ask)
+            
+            # Log pricing data quality for debugging
+            logger.info(f"{ticker} pricing quality - Front: bid={front_bid}({front_bid_valid}), ask={front_ask}({front_ask_valid}), Back: bid={back_bid}({back_bid_valid}), ask={back_ask}({back_ask_valid})")
+            
+            # Calculate mid prices with fallbacks for bad data
+            if front_bid_valid and front_ask_valid:
+                # Check for reasonable spread (ask should be >= bid)
+                if front_ask >= front_bid:
+                    front_mid = (front_bid + front_ask) / 2.0
+                else:
+                    logger.warning(f"{ticker} front month has inverted bid/ask: bid={front_bid}, ask={front_ask}")
+                    return jsonify({'error': f'Invalid front month bid/ask spread for {ticker}: bid=${front_bid}, ask=${front_ask}'}), 400
+            elif front_ask_valid:
+                # Use ask price if only ask is valid
+                front_mid = front_ask
+                logger.warning(f"{ticker} using front ask price only: ${front_ask}")
+            elif front_bid_valid:
+                # Use bid price if only bid is valid
+                front_mid = front_bid
+                logger.warning(f"{ticker} using front bid price only: ${front_bid}")
+            else:
+                return jsonify({'error': f'No valid front month prices for {ticker} at strike ${strike}'}), 400
+            
+            if back_bid_valid and back_ask_valid:
+                # Check for reasonable spread (ask should be >= bid)
+                if back_ask >= back_bid:
+                    back_mid = (back_bid + back_ask) / 2.0
+                else:
+                    logger.warning(f"{ticker} back month has inverted bid/ask: bid={back_bid}, ask={back_ask}")
+                    return jsonify({'error': f'Invalid back month bid/ask spread for {ticker}: bid=${back_bid}, ask=${back_ask}'}), 400
+            elif back_ask_valid:
+                # Use ask price if only ask is valid
+                back_mid = back_ask
+                logger.warning(f"{ticker} using back ask price only: ${back_ask}")
+            elif back_bid_valid:
+                # Use bid price if only bid is valid
+                back_mid = back_bid
+                logger.warning(f"{ticker} using back bid price only: ${back_bid}")
+            else:
+                return jsonify({'error': f'No valid back month prices for {ticker} at strike ${strike}'}), 400
+            
+            # Calendar spread cost = back month price - front month price
+            spread_cost = back_mid - front_mid
+            
+            # Enhanced validation for spread cost
+            if spread_cost <= 0:
+                logger.warning(f"{ticker} calculated negative/zero spread cost: ${spread_cost:.2f} (back=${back_mid:.2f}, front=${front_mid:.2f})")
+                return jsonify({'error': f'Invalid spread cost calculated for {ticker}: ${spread_cost:.2f} (back month: ${back_mid:.2f}, front month: ${front_mid:.2f})'}), 400
+            
+            # Check for unreasonably high spread cost (likely bad data)
+            if spread_cost > current_price * 0.5:  # Spread cost shouldn't exceed 50% of stock price
+                logger.warning(f"{ticker} calculated unreasonably high spread cost: ${spread_cost:.2f} (stock price: ${current_price})")
+                return jsonify({'error': f'Unreasonably high spread cost for {ticker}: ${spread_cost:.2f} (stock price: ${current_price})'}), 400
+            
+        except Exception as e:
+            return jsonify({'error': f'Could not calculate spread cost for {ticker}: {str(e)}'}), 500
+        
+        logger.info(f"Calculated spread cost for {ticker}: ${spread_cost:.2f} ({option_type} at ${strike})")
+        
+        return jsonify({
+            'spread_cost': round(spread_cost, 2),
+            'front_expiration': front_exp,
+            'back_expiration': back_exp,
+            'strike': strike,
+            'option_type': option_type,
+            'ticker': ticker
+        })
+        
+    except Exception as e:
+        logger.error(f"Error calculating spread cost for {ticker}: {str(e)}")
         return jsonify({'error': str(e)}), 500
 
 @api_bp.route('/fetch-option-prices/<ticker>', methods=['POST'])

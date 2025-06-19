@@ -13,6 +13,8 @@ export interface MonteCarloSimulationParams {
   expectedMovePercent: number;
   metrics: OptionsMetrics;
   liquidityScore?: number;
+  earningsDate?: string;
+  spreadCost?: number; // Optional override for spread cost
 }
 
 export interface MonteCarloResults {
@@ -33,21 +35,21 @@ export interface MonteCarloResults {
 }
 
 /**
- * Industry standard IV crush parameters based on historical data (more realistic)
+ * Realistic IV crush parameters based on actual earnings calendar spread performance
  */
 const IV_CRUSH_PARAMETERS = {
   // Front month IV crush (0-7 days post-earnings)
   FRONT_MONTH: {
-    MIN_CRUSH: 0.25,  // 25% minimum crush (more realistic)
-    MAX_CRUSH: 0.55,  // 55% maximum crush (capped lower)
-    MEAN_CRUSH: 0.40, // 40% average crush (more conservative)
-    STD_DEV: 0.08     // Standard deviation
+    MIN_CRUSH: 0.35,  // 35% minimum crush
+    MAX_CRUSH: 0.65,  // 65% maximum crush
+    MEAN_CRUSH: 0.48, // 48% average crush (realistic for earnings)
+    STD_DEV: 0.10     // Higher variance for realism
   },
   // Back month IV crush (+30 days)
   BACK_MONTH: {
     MIN_CRUSH: 0.15,  // 15% minimum crush
-    MAX_CRUSH: 0.35,  // 35% maximum crush
-    MEAN_CRUSH: 0.25, // 25% average crush (more conservative)
+    MAX_CRUSH: 0.30,  // 30% maximum crush
+    MEAN_CRUSH: 0.22, // 22% average crush
     STD_DEV: 0.06     // Standard deviation
   }
 };
@@ -85,59 +87,65 @@ function truncatedNormal(mean: number, stdDev: number, min: number, max: number,
 }
 
 /**
- * Calculate IV crush amounts based on term structure slope and market conditions
+ * Dynamic IV Crush Calculation Based on Term Structure Slope
+ * Uses the actual slope to predict IV crush differential - Revolutionary approach!
  */
-function calculateIVCrush(
+function calculateDynamicIVCrush(
   metrics: OptionsMetrics,
   expectedMovePercent: number,
   randomFn: () => number = Math.random
 ): { frontCrush: number; backCrush: number } {
   
-  // Base IV crush amounts
-  let frontCrush = truncatedNormal(
-    IV_CRUSH_PARAMETERS.FRONT_MONTH.MEAN_CRUSH,
-    IV_CRUSH_PARAMETERS.FRONT_MONTH.STD_DEV,
-    IV_CRUSH_PARAMETERS.FRONT_MONTH.MIN_CRUSH,
-    IV_CRUSH_PARAMETERS.FRONT_MONTH.MAX_CRUSH,
-    randomFn
-  );
+  // Base IV crush from historical earnings data (market average)
+  const BASE_FRONT_CRUSH = 0.48;
+  const BASE_BACK_CRUSH = 0.22;
+  const BASE_DIFFERENTIAL = BASE_FRONT_CRUSH - BASE_BACK_CRUSH; // 0.26
   
-  let backCrush = truncatedNormal(
-    IV_CRUSH_PARAMETERS.BACK_MONTH.MEAN_CRUSH,
-    IV_CRUSH_PARAMETERS.BACK_MONTH.STD_DEV,
-    IV_CRUSH_PARAMETERS.BACK_MONTH.MIN_CRUSH,
-    IV_CRUSH_PARAMETERS.BACK_MONTH.MAX_CRUSH,
-    randomFn
-  );
+  // Calculate theoretical differential based on TS Slope
+  // TS Slope represents IV change per day, scale to 30-day difference
+  const DAYS_BETWEEN_EXPIRATIONS = 30;
+  const theoreticalDifferential = Math.abs(metrics.tsSlope) * DAYS_BETWEEN_EXPIRATIONS;
   
-  // Adjust based on IV30/RV30 ratio
+  // Scale factor: how much stronger/weaker is this setup vs baseline?
+  const differentialMultiplier = Math.max(0.5, Math.min(2.5, theoreticalDifferential / BASE_DIFFERENTIAL));
+  
+  // Apply the multiplier to enhance or reduce the differential
+  let frontCrush = BASE_FRONT_CRUSH;
+  let backCrush = BASE_BACK_CRUSH;
+  
+  if (metrics.tsSlope < 0) { // Backwardation (good for calendars)
+    // Increase differential: more front crush, same back crush
+    frontCrush = BASE_FRONT_CRUSH * (1 + (differentialMultiplier - 1) * 0.7);
+    backCrush = BASE_BACK_CRUSH * (1 + (differentialMultiplier - 1) * 0.3);
+  } else { // Contango (bad for calendars)
+    // Decrease differential: less front crush, more back crush
+    frontCrush = BASE_FRONT_CRUSH * 0.8; // Reduce front crush
+    backCrush = BASE_BACK_CRUSH * 1.2;   // Increase back crush (worse for us)
+  }
+  
+  // Add realistic variance
+  const frontVariance = normalRandom(0, 0.08, randomFn);
+  const backVariance = normalRandom(0, 0.06, randomFn);
+  
+  frontCrush = Math.max(0.25, Math.min(0.70, frontCrush + frontVariance));
+  backCrush = Math.max(0.15, Math.min(0.35, backCrush + backVariance));
+  
+  // Apply other factors (IV/RV ratio, expected move) as before
   if (metrics.iv30Rv30 >= 1.25) {
-    // Higher IV/RV ratio increases IV crush probability by 15%
-    frontCrush *= 1.15;
-    backCrush *= 1.10; // Smaller impact on back month
-  }
-  
-  // Adjust based on term structure slope
-  if (metrics.tsSlope <= -0.00406) {
-    // Steeper negative slope increases front/back differential
-    const slopeAdjustment = Math.abs(metrics.tsSlope) * 10; // Scale factor
-    frontCrush *= (1 + slopeAdjustment * 0.1);
-    backCrush *= (1 + slopeAdjustment * 0.05);
-  }
-  
-  // Adjust based on expected move level
-  if (expectedMovePercent > 8.0) {
-    // Higher expected moves typically see more IV crush
     frontCrush *= 1.10;
     backCrush *= 1.05;
   }
   
-  // Ensure we don't exceed maximum crush levels
-  frontCrush = Math.min(frontCrush, IV_CRUSH_PARAMETERS.FRONT_MONTH.MAX_CRUSH);
-  backCrush = Math.min(backCrush, IV_CRUSH_PARAMETERS.BACK_MONTH.MAX_CRUSH);
+  if (expectedMovePercent > 8.0) {
+    frontCrush *= 1.08;
+    backCrush *= 1.04;
+  }
   
   return { frontCrush, backCrush };
 }
+
+// Keep the old function name for compatibility
+const calculateIVCrush = calculateDynamicIVCrush;
 
 /**
  * Simulate stock price movement incorporating expected move
@@ -163,7 +171,9 @@ function simulateStockMovement(
 }
 
 /**
- * Calculate execution costs based on liquidity score with severe penalties for poor liquidity
+ * Calculate execution costs using real spread cost data with aggressive liquidity penalties
+ * Now leverages actual market spread costs and implements exponential liquidity penalties
+ * to prevent unrealistic probabilities for illiquid options
  */
 function calculateExecutionCosts(
   liquidityScore: number = 5,
@@ -171,48 +181,102 @@ function calculateExecutionCosts(
   spreadCost: number
 ): { executionCost: number; probabilityPenalty: number } {
   
-  // Base execution cost as percentage of spread cost
-  let executionCostPct = 0.15; // 15% base
-  let probabilityPenalty = 0; // Penalty to subtract from probability of profit
+  // Base execution cost as percentage of actual spread cost
+  let executionCostPct = 0.10; // 10% base (realistic for calendar spreads)
+  let probabilityPenalty = 0;
   
-  // Adjust based on liquidity score (0-10 scale) with severe penalties
-  if (liquidityScore <= 1) {
-    executionCostPct *= 4.0; // 300% increase for terrible liquidity
-    probabilityPenalty = -45; // Massive 45% penalty to probability
-  } else if (liquidityScore <= 2) {
-    executionCostPct *= 3.0; // 200% increase for very poor liquidity
-    probabilityPenalty = -35; // Very significant 35% penalty to probability
-  } else if (liquidityScore <= 3) {
-    executionCostPct *= 2.5; // 150% increase for poor liquidity
-    probabilityPenalty = -25; // Significant 25% penalty to probability
-  } else if (liquidityScore <= 4) {
-    executionCostPct *= 1.8; // 80% increase for below-average liquidity
-    probabilityPenalty = -15; // 15% penalty to probability
-  } else if (liquidityScore <= 5) {
-    executionCostPct *= 1.4; // 40% increase for mediocre liquidity
-    probabilityPenalty = -8; // 8% penalty to probability
-  } else if (liquidityScore >= 7) {
-    executionCostPct *= 0.7; // 30% reduction for high liquidity
-    probabilityPenalty = 5; // Small 5% bonus to probability
+  // Spread cost efficiency assessment (reward tight spreads, penalize wide spreads)
+  if (spreadCost <= 0.50) {
+    // Very tight spreads (like NG $0.18) - harder to profit but lower absolute cost
+    executionCostPct *= 1.5; // Higher percentage cost on small spreads
+    probabilityPenalty -= 3; // Small penalty for tight spreads
+  } else if (spreadCost <= 1.00) {
+    // Moderate spreads (like LEVI $0.75) - balanced
+    executionCostPct *= 1.2; // Slightly higher cost
+    probabilityPenalty -= 1; // Minimal penalty
+  } else if (spreadCost >= 3.00) {
+    // Wide spreads (like MU $2.33) - more room for profit
+    executionCostPct *= 0.8; // Lower percentage cost on larger spreads
+    probabilityPenalty += 2; // Small bonus for wider spreads
   }
   
-  // Adjust based on volume
-  if (avgVolume >= 1500000) { // 1.5M volume threshold
-    executionCostPct *= 0.8; // 20% reduction for high volume
-    probabilityPenalty += 2; // Small bonus for high volume
-  } else if (avgVolume < 500000) { // Low volume penalty
-    executionCostPct *= 1.2; // 20% increase for low volume
-    probabilityPenalty -= 5; // 5% penalty for low volume
+  // NUCLEAR LIQUIDITY PENALTY SYSTEM
+  // Exponential Death Curve for Poor Liquidity - LIQUIDITY IS KING OVER EVERYTHING
+  // Leave decent/good liquidity alone, NUKE the dogshit liquidity to oblivion
+  
+  if (liquidityScore <= 4.0) {
+    // CRITICAL LIQUIDITY THRESHOLD - NUCLEAR PENALTIES BELOW 4.0
+    
+    if (liquidityScore <= 1.5) {
+      // Completely impossible (0-1.5) - KILL THE TRADE
+      executionCostPct *= 8.0; // 80% execution cost
+      probabilityPenalty = -95; // NUCLEAR penalty - almost impossible
+    } else if (liquidityScore <= 2.5) {
+      // Extremely difficult (1.5-2.5) - SEVERE punishment
+      const normalizedScore = (liquidityScore - 1.5) / 1.0; // 0-1 range
+      const nuclearPenalty = -95 + (35 * normalizedScore); // -95% to -60%
+      executionCostPct *= (8.0 - 3.0 * normalizedScore); // 80% to 50% execution cost
+      probabilityPenalty = nuclearPenalty;
+    } else if (liquidityScore <= 3.5) {
+      // Very difficult (2.5-3.5) - HEAVY punishment
+      const normalizedScore = (liquidityScore - 2.5) / 1.0; // 0-1 range
+      const heavyPenalty = -60 + (30 * normalizedScore); // -60% to -30%
+      executionCostPct *= (5.0 - 2.0 * normalizedScore); // 50% to 30% execution cost
+      probabilityPenalty = heavyPenalty;
+    } else {
+      // Difficult (3.5-4.0) - MODERATE punishment
+      const normalizedScore = (liquidityScore - 3.5) / 0.5; // 0-1 range
+      const moderatePenalty = -30 + (15 * normalizedScore); // -30% to -15%
+      executionCostPct *= (3.0 - 1.0 * normalizedScore); // 30% to 20% execution cost
+      probabilityPenalty = moderatePenalty;
+    }
+    
+  } else if (liquidityScore >= 8) {
+    // Excellent liquidity (8+) - rewards
+    executionCostPct *= 0.7; // 7% total for excellent liquidity
+    probabilityPenalty += 4; // Good bonus for excellent liquidity
+  } else if (liquidityScore >= 6) {
+    // Good liquidity (6-8) - small rewards
+    executionCostPct *= 0.85; // 8.5% total for good liquidity
+    probabilityPenalty += 2; // Small bonus
+  } else {
+    // Adequate liquidity (4-6) - neutral to small penalties
+    const normalizedScore = (liquidityScore - 4.0) / 2.0; // 0-1 range
+    const smallPenalty = -4 + (4 * normalizedScore); // -4% to 0%
+    executionCostPct *= (1.4 - 0.4 * normalizedScore); // 14% to 10% execution cost
+    probabilityPenalty = smallPenalty;
   }
+  
+  // Volume-based adjustments (secondary to liquidity)
+  if (avgVolume >= 15000000) { // Very high volume (like MU)
+    executionCostPct *= 0.85; // 15% reduction (less aggressive than before)
+    probabilityPenalty += 2; // Reduced volume bonus (liquidity is more important)
+  } else if (avgVolume >= 5000000) { // High volume
+    executionCostPct *= 0.90; // 10% reduction
+    probabilityPenalty += 1; // Small bonus
+  } else if (avgVolume >= 1500000) { // Adequate volume
+    executionCostPct *= 0.95; // 5% reduction
+    // No penalty/bonus for adequate volume
+  } else if (avgVolume < 500000) { // Low volume
+    executionCostPct *= 1.15; // 15% increase
+    probabilityPenalty -= 3; // Volume penalty (but less than liquidity penalty)
+  }
+  
+  // Cap execution cost percentage (allow NUCLEAR costs for terrible liquidity)
+  executionCostPct = Math.min(executionCostPct, 0.90); // Max 90% of spread cost for nuclear cases
+  
+  // Apply NUCLEAR penalty caps - allow devastating penalties for poor liquidity
+  const finalPenalty = Math.max(-98, Math.min(6, probabilityPenalty)); // Allow up to -98% penalty (NUCLEAR)
   
   return {
     executionCost: spreadCost * executionCostPct,
-    probabilityPenalty
+    probabilityPenalty: finalPenalty
   };
 }
 
 /**
  * Calculate calendar spread P&L based on IV crush and stock movement
+ * Fixed to properly calculate spread value changes without double-counting debit
  */
 function calculateCalendarPnL(
   frontCrush: number,
@@ -222,8 +286,9 @@ function calculateCalendarPnL(
   executionCosts: number
 ): number {
   
-  // DEBIT SPREAD LOGIC: We start with -spreadDebit (what we paid)
-  // We profit when the spread VALUE at exit > debit paid
+  // CORRECTED DEBIT SPREAD LOGIC:
+  // Calculate the spread's value change from IV crush and movement
+  // Then compare to original debit to determine profit/loss
   
   // Calculate spread value change from IV crush (primary driver)
   // Front month loses value from IV crush (we're short) - GOOD for us
@@ -234,26 +299,26 @@ function calculateCalendarPnL(
   // Net value change: front month crush helps us, back month crush hurts us
   let spreadValueChange = frontValueChange - backValueChange;
   
-  // Adjust for stock movement impact (secondary factor)
+  // Adjust for stock movement impact (critical for calendar spreads)
   let movementImpact = 0;
   
   if (actualMoveRatio < EXPECTED_MOVE_IMPACT.OPTIMAL_RANGE) {
-    // Optimal range: minimal impact, slight positive
-    movementImpact = spreadDebit * 0.05;
+    // Optimal range: stock stays near strike, calendar profits from time decay
+    movementImpact = spreadDebit * 0.08; // Small positive from time decay
   } else if (actualMoveRatio < EXPECTED_MOVE_IMPACT.MODERATE_RANGE) {
-    // Moderate impact: some gamma drag
+    // Moderate movement: some gamma drag but manageable
     const dragFactor = (actualMoveRatio - EXPECTED_MOVE_IMPACT.OPTIMAL_RANGE) /
                       (EXPECTED_MOVE_IMPACT.MODERATE_RANGE - EXPECTED_MOVE_IMPACT.OPTIMAL_RANGE);
-    movementImpact = -spreadDebit * 0.15 * dragFactor;
+    movementImpact = -spreadDebit * 0.15 * dragFactor; // Realistic gamma drag
   } else {
-    // High impact: significant gamma losses
+    // Large movement: significant gamma losses (calendar spreads hate big moves)
     const excessMove = actualMoveRatio - EXPECTED_MOVE_IMPACT.MODERATE_RANGE;
-    movementImpact = -spreadDebit * (0.15 + Math.min(excessMove * 0.2, 0.4));
+    movementImpact = -spreadDebit * (0.20 + Math.min(excessMove * 0.25, 0.50)); // Harsh but realistic
   }
   
-  // Total P&L = spread value change + movement impact - execution costs - original debit
-  // Start with -spreadDebit (what we paid), add value changes, subtract costs
-  const totalPnL = -spreadDebit + spreadValueChange + movementImpact - executionCosts;
+  // CORRECTED P&L CALCULATION:
+  // Total value change minus execution costs (don't subtract original debit here)
+  const totalPnL = spreadValueChange + movementImpact - executionCosts;
   
   // Maximum loss is 100% of debit + execution costs
   const maxLoss = -(spreadDebit + executionCosts);
@@ -262,70 +327,103 @@ function calculateCalendarPnL(
 }
 
 /**
- * Get realistic calendar spread debit based on stock price
+ * Get fallback calendar spread debit based on stock price
+ * Used only when real spread cost cannot be fetched from backend
  */
-function getRealisticSpreadDebit(currentPrice: number): number {
-  if (currentPrice < 10) return 0.50;
-  else if (currentPrice < 50) return 1.50;
-  else if (currentPrice < 100) return 2.50;
-  else return 4.50;
+function getFallbackSpreadDebit(currentPrice: number): number {
+  // Fallback calendar spread debits based on price ranges
+  if (currentPrice < 10) return 0.30;
+  else if (currentPrice < 25) return 0.75;
+  else if (currentPrice < 50) return 1.25;
+  else if (currentPrice < 100) return 2.00;
+  else if (currentPrice < 200) return 2.50;  // MU ($119) falls here
+  else if (currentPrice < 300) return 3.50;
+  else return 4.50;  // Only for very expensive stocks (>$300)
 }
 
 /**
- * Calculate base probability based on strategy metrics with proper weighting
+ * Calculate base probability with realistic metrics-based assessment for calendar spreads
  */
 function calculateBaseProbability(metrics: OptionsMetrics): number {
-  // Count passing metrics
+  // Count passing metrics with realistic thresholds
   const passingMetrics = [
     metrics.avgVolume >= 1500000,
-    metrics.iv30Rv30 >= 1.25,
+    metrics.iv30Rv30 >= 1.15,
     metrics.tsSlope <= -0.00406
   ].filter(Boolean).length;
   
-  // Base probability by count (more conservative than current)
+  // Conservative base probabilities reflecting calendar spread realities
   let baseProbability;
-  if (passingMetrics === 3) baseProbability = 0.65;      // All pass
-  else if (passingMetrics === 2) baseProbability = 0.52;  // Two pass
-  else if (passingMetrics === 1) baseProbability = 0.35;  // One pass
-  else baseProbability = 0.25;                            // None pass
+  if (passingMetrics === 3) baseProbability = 0.62;      // All pass - excellent setup
+  else if (passingMetrics === 2) baseProbability = 0.48;  // Two pass - good setup
+  else if (passingMetrics === 1) baseProbability = 0.35;  // One pass - marginal setup
+  else baseProbability = 0.22;                            // None pass - poor setup
   
-  // METRIC-SPECIFIC ADJUSTMENTS (weighted by importance from video):
+  // Calculate metric-specific adjustments with realistic caps
+  let totalAdjustment = 0;
   
-  // 1. TERM STRUCTURE SLOPE (highest weight - most important)
-  if (metrics.tsSlope <= -0.00406) {
-    baseProbability += 0.08; // 8% bonus for passing
+  // 1. TERM STRUCTURE SLOPE (most critical - graduated bonuses/penalties)
+  if (metrics.tsSlope <= -0.015) {
+    totalAdjustment += 0.15; // Massive bonus for excellent backwardation
+  } else if (metrics.tsSlope <= -0.010) {
+    totalAdjustment += 0.12; // Large bonus for very good backwardation
+  } else if (metrics.tsSlope <= -0.006) {
+    totalAdjustment += 0.08; // Good bonus for solid backwardation
+  } else if (metrics.tsSlope <= -0.00406) {
+    totalAdjustment += 0.04; // Small bonus for barely passing
+  } else if (metrics.tsSlope <= -0.002) {
+    totalAdjustment -= 0.08; // Significant penalty for weak backwardation
+  } else if (metrics.tsSlope <= 0) {
+    totalAdjustment -= 0.12; // Large penalty for barely negative
   } else {
-    baseProbability -= 0.12; // 12% penalty for failing (larger penalty)
+    totalAdjustment -= 0.20; // Massive penalty for contango
   }
   
-  // 2. IV/RV RATIO (medium weight)
-  if (metrics.iv30Rv30 >= 1.25) {
-    baseProbability += 0.05; // 5% bonus for passing
+  // 2. IV/RV RATIO (indicates IV richness)
+  if (metrics.iv30Rv30 >= 1.40) {
+    totalAdjustment += 0.06; // Very rich IV
+  } else if (metrics.iv30Rv30 >= 1.25) {
+    totalAdjustment += 0.04; // Rich IV
+  } else if (metrics.iv30Rv30 >= 1.10) {
+    totalAdjustment += 0.02; // Slightly rich IV
+  } else if (metrics.iv30Rv30 >= 0.90) {
+    totalAdjustment -= 0.02; // Slightly cheap IV
   } else {
-    baseProbability -= 0.08; // 8% penalty for failing
+    totalAdjustment -= 0.06; // Cheap IV (bad for calendars)
   }
   
-  // 3. VOLUME (lowest weight - execution factor)
-  if (metrics.avgVolume >= 1500000) {
-    baseProbability += 0.03; // 3% bonus for passing
-  } else {
-    baseProbability -= 0.05; // 5% penalty for failing
+  // 3. VOLUME (liquidity and execution quality)
+  if (metrics.avgVolume >= 15000000) { // Very high volume
+    totalAdjustment += 0.04;
+  } else if (metrics.avgVolume >= 5000000) { // High volume
+    totalAdjustment += 0.03;
+  } else if (metrics.avgVolume >= 1500000) { // Adequate volume
+    totalAdjustment += 0.01;
+  } else if (metrics.avgVolume < 500000) { // Low volume
+    totalAdjustment -= 0.05;
   }
   
-  // Ensure reasonable bounds
-  return Math.max(0.15, Math.min(0.85, baseProbability));
+  // Apply capped adjustments (increased caps to accommodate TS Slope importance)
+  const cappedAdjustment = Math.max(-0.25, Math.min(0.18, totalAdjustment));
+  baseProbability += cappedAdjustment;
+  
+  // Realistic bounds for calendar spreads (slightly expanded for excellent TS Slope)
+  return Math.max(0.10, Math.min(0.80, baseProbability));
 }
 
 /**
  * Run Monte Carlo simulation for earnings volatility calendar spread
+ * Now uses real spread costs from backend when available
  */
-export function runMonteCarloSimulation(params: MonteCarloSimulationParams): MonteCarloResults {
+export async function runMonteCarloSimulation(params: MonteCarloSimulationParams): Promise<MonteCarloResults> {
   const {
     ticker,
     currentPrice,
     expectedMovePercent,
     metrics,
-    liquidityScore = 5
+    liquidityScore = 5,
+    earningsDate,
+    spreadCost: providedSpreadCost
   } = params;
   
   // Terminal logging for easier debugging
@@ -360,8 +458,27 @@ export function runMonteCarloSimulation(params: MonteCarloSimulationParams): Mon
     return randomSeed / 233280;
   };
   
-  // Get realistic calendar spread debit (what we pay upfront)
-  const spreadDebit = getRealisticSpreadDebit(currentPrice);
+  // Get real calendar spread debit from backend or use provided/fallback value
+  let spreadDebit: number = providedSpreadCost || 0;
+  
+  if (!spreadDebit && earningsDate) {
+    try {
+      // Import the API function
+      const { getCalendarSpreadCost } = await import('../services/optionsService');
+      spreadDebit = await getCalendarSpreadCost(ticker, currentPrice, earningsDate);
+      console.log(`📊 ${ticker}: Using real spread cost from backend: $${spreadDebit.toFixed(2)}`);
+    } catch (error) {
+      console.warn(`⚠️ ${ticker}: Failed to get real spread cost, using fallback:`, error);
+      spreadDebit = getFallbackSpreadDebit(currentPrice);
+    }
+  }
+  
+  if (!spreadDebit) {
+    spreadDebit = getFallbackSpreadDebit(currentPrice);
+    console.log(`📊 ${ticker}: Using fallback spread cost: $${spreadDebit.toFixed(2)}`);
+  } else if (providedSpreadCost) {
+    console.log(`📊 ${ticker}: Using provided spread cost: $${spreadDebit.toFixed(2)}`);
+  }
   
   // Calculate execution costs and probability penalty once
   const { executionCost, probabilityPenalty } = calculateExecutionCosts(
@@ -375,6 +492,28 @@ export function runMonteCarloSimulation(params: MonteCarloSimulationParams): Mon
     executionCost: executionCost.toFixed(2),
     probabilityPenalty: probabilityPenalty,
     executionCostPct: ((executionCost / spreadDebit) * 100).toFixed(1) + '%'
+  });
+  
+  // Detailed NUCLEAR liquidity penalty breakdown
+  console.log(`🚨 ${ticker} NUCLEAR LIQUIDITY ANALYSIS:`, {
+    liquidityScore: liquidityScore,
+    liquidityCategory: liquidityScore <= 1.5 ? '💀 IMPOSSIBLE (KILLED)' :
+                     liquidityScore <= 2.5 ? '☢️ EXTREMELY_DIFFICULT (NUCLEAR)' :
+                     liquidityScore <= 3.5 ? '🔥 VERY_DIFFICULT (HEAVY)' :
+                     liquidityScore <= 4.0 ? '⚠️ DIFFICULT (MODERATE)' :
+                     liquidityScore <= 6.0 ? '✅ ADEQUATE' :
+                     liquidityScore <= 8.0 ? '🟢 GOOD' : '🌟 EXCELLENT',
+    probabilityPenalty: probabilityPenalty + '%',
+    executionCostMultiplier: ((executionCost / spreadDebit) / 0.10).toFixed(2) + 'x',
+    penaltySeverity: Math.abs(probabilityPenalty) >= 90 ? '💀 NUCLEAR (TRADE KILLED)' :
+                    Math.abs(probabilityPenalty) >= 60 ? '☢️ SEVERE (HEAVY DAMAGE)' :
+                    Math.abs(probabilityPenalty) >= 30 ? '🔥 HIGH (SIGNIFICANT)' :
+                    Math.abs(probabilityPenalty) >= 15 ? '⚠️ MODERATE' :
+                    Math.abs(probabilityPenalty) >= 5 ? '🟡 LOW' : '🟢 MINIMAL',
+    tradeViability: Math.abs(probabilityPenalty) >= 90 ? 'AVOID AT ALL COSTS' :
+                   Math.abs(probabilityPenalty) >= 60 ? 'EXTREMELY RISKY' :
+                   Math.abs(probabilityPenalty) >= 30 ? 'HIGH RISK' :
+                   Math.abs(probabilityPenalty) >= 15 ? 'MODERATE RISK' : 'ACCEPTABLE'
   });
   
   for (let i = 0; i < numSimulations; i++) {
@@ -472,8 +611,9 @@ export function runMonteCarloSimulation(params: MonteCarloSimulationParams): Mon
 
 /**
  * Calculate simulation probability for a given options analysis result
+ * Now async to support real spread cost fetching
  */
-export function calculateSimulationProbability(result: OptionsAnalysisResult): MonteCarloResults | null {
+export async function calculateSimulationProbability(result: OptionsAnalysisResult): Promise<MonteCarloResults | null> {
   if (!result.metrics || !result.expectedMove) {
     return null;
   }
@@ -489,8 +629,9 @@ export function calculateSimulationProbability(result: OptionsAnalysisResult): M
     currentPrice: result.currentPrice,
     expectedMovePercent,
     metrics: result.metrics,
-    liquidityScore: result.calendarLiquidityScore
+    liquidityScore: result.calendarLiquidityScore,
+    earningsDate: result.earningsDate // Pass earnings date for real spread cost calculation
   };
   
-  return runMonteCarloSimulation(params);
+  return await runMonteCarloSimulation(params);
 }

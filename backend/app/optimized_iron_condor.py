@@ -24,7 +24,8 @@ from app.options_analyzer import (
 logger = logging.getLogger(__name__)
 
 # Create a cache for liquidity scores to avoid redundant API calls
-@lru_cache(maxsize=1000)
+# Temporarily disable cache to ensure latest liquidity improvements are used
+# @lru_cache(maxsize=1000)  # Commented out to force fresh calculations
 def cached_get_liquidity_score(ticker: str, expiration: str, strike: float, option_type: str) -> Dict[str, Any]:
     """
     Cached version of get_liquidity_score to avoid redundant API calls.
@@ -144,7 +145,7 @@ def batch_fetch_liquidity_scores(ticker, expiration, options, option_type):
     
     return liquidity_scores
 
-def find_optimal_iron_condor(ticker):
+def find_optimal_iron_condor(ticker, earnings_date=None):
     """
     Find the optimal iron condor for a given ticker with optimized API usage.
     
@@ -401,7 +402,7 @@ def find_optimal_iron_condor(ticker):
                 
                 # Get IV30/RV30 ratio and term structure slope for volatility crush calculation
                 iv30_rv30 = get_iv30_rv30_ratio(ticker)
-                ts_slope = get_term_structure_slope(ticker)
+                ts_slope = get_term_structure_slope(ticker, earnings_date)
                 
                 # Calculate enhanced probability of profit
                 enhanced_prob_profit = calculate_simplified_enhanced_probability(

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   Box,
   Button,
@@ -35,7 +35,7 @@ import {
 } from '@chakra-ui/react';
 import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle, FiBarChart } from 'react-icons/fi';
 import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
-import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore } from '../services/optionsService';
+import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore, clearSpreadCostCache } from '../services/optionsService';
 import { OptionsAnalysisResult } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
@@ -78,8 +78,20 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   const [selectedChartTicker, setSelectedChartTicker] = useState<string>('');
   const [selectedChartResults, setSelectedChartResults] = useState<any>(null);
   const toast = useToast();
+  const eventSourceRef = useRef<EventSource | null>(null);
   
   const { optionsData } = state;
+
+  // Cleanup EventSource on component unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        console.log('🧹 Cleaning up EventSource connection on component unmount');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+    };
+  }, []);
 
   // State for tracking scan progress
   const [scanProgress, setScanProgress] = useState<{
@@ -98,11 +110,13 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       setCompletedSimulations(new Set());
       setSimulationsInProgress(new Set());
       setSimulationResultsCache(new Map());
+      // Clear spread cost cache to prevent stale data
+      clearSpreadCostCache();
       
       // Use EventSource for server-sent events
       const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
       
-      eventSource.onmessage = (event) => {
+      eventSource.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
           console.log("SSE data received:", data);
@@ -111,19 +125,47 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             // Update progress information
             setScanProgress(data.progress);
             
-            // Just collect the raw data without any simulation processing
+            // STREAMING MODE: Process results with simulations as they come in
             if (data.results && data.results.length > 0) {
-              console.log(`📊 BATCH MODE: Collecting ${data.results.length} results (no simulations yet)...`);
-              dispatch(scanEarningsSuccess(data.results));
+              console.log(`📊 STREAMING MODE: Processing ${data.results.length} results with simulations...`);
+              
+              // Process simulations for new results only
+              const processedResults = await processStreamingResults(data.results);
+              dispatch(scanEarningsSuccess(processedResults));
             }
           } else if (data.status === 'complete') {
             // Close the event source first
             eventSource.close();
             
-            console.log(`🔄 Regular scan complete! Processing ${data.results.length} results in BATCH MODE...`);
+            console.log(`🏁 STREAMING MODE: Scan complete! Final results displayed.`);
             
-            // Process all results with simulations in batch
-            processBatchResults(data.results, 'today', data.count);
+            // IMPORTANT: Always dispatch final results to clear loading state, even if empty
+            if (data.results && data.results.length > 0) {
+              // Process final results if any
+              const processedResults = await processStreamingResults(data.results);
+              dispatch(scanEarningsSuccess(processedResults));
+            } else {
+              // No results - dispatch empty array to clear loading state
+              console.log(`📊 STREAMING MODE: No results found, clearing loading state`);
+              dispatch(scanEarningsSuccess([]));
+            }
+            
+            // Clear progress after a moment
+            setTimeout(() => {
+              setScanProgress(null);
+            }, 2000);
+            
+            // Show completion toast
+            const resultCount = data.count || 0;
+            toast({
+              title: 'Scan Complete',
+              description: resultCount > 0
+                ? `Analyzed ${resultCount} stocks with earnings for today`
+                : `No stocks found that meet the criteria for today`,
+              status: resultCount > 0 ? 'success' : 'info',
+              duration: 5000,
+              isClosable: true,
+            });
           }
         } catch (error) {
           console.error("Error parsing SSE data:", error, "Raw data:", event.data);
@@ -182,15 +224,29 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     try {
       dispatch(scanEarningsStart(customDate));
       setScanProgress(null);
+      
+      // Close any existing EventSource connection to prevent conflicts
+      if (eventSourceRef.current) {
+        console.log('🔄 Closing existing EventSource connection before starting new scan');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      
       // Reset simulation caches for new scan
       setCompletedSimulations(new Set());
       setSimulationsInProgress(new Set());
       setSimulationResultsCache(new Map());
+      // Clear spread cost cache to prevent stale data
+      clearSpreadCostCache();
+      
+      // Track processed results to prevent duplicates
+      let processedResultsMap = new Map<string, OptionsAnalysisResult>();
       
       // Use EventSource for server-sent events
       const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
+      eventSourceRef.current = eventSource;
       
-      eventSource.onmessage = (event) => {
+      eventSource.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
           console.log("SSE data received:", data);
@@ -199,19 +255,60 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             // Update progress information
             setScanProgress(data.progress);
             
-            // Just collect the raw data without any simulation processing
+            // STREAMING MODE: Process results with simulations as they come in
             if (data.results && data.results.length > 0) {
-              console.log(`📊 BATCH MODE: Collecting ${data.results.length} results for custom date (no simulations yet)...`);
-              dispatch(scanEarningsSuccess(data.results));
+              console.log(`📊 STREAMING MODE: Processing ${data.results.length} results for custom date with simulations...`);
+              
+              // Filter out already processed results
+              const newResults = data.results.filter((result: OptionsAnalysisResult) => {
+                if (processedResultsMap.has(result.ticker)) {
+                  console.log(`⏭️ STREAMING MODE: Already processed ${result.ticker}, skipping`);
+                  return false;
+                }
+                processedResultsMap.set(result.ticker, result);
+                return true;
+              });
+              
+              if (newResults.length > 0) {
+                console.log(`🚀 STREAMING MODE: Processing ${newResults.length} NEW results...`);
+                // Process simulations for new results only
+                const processedResults = await processStreamingResults(newResults);
+                
+                // Get all processed results so far
+                const allResults = Array.from(processedResultsMap.values());
+                
+                // Update the map with processed results (with simulations)
+                processedResults.forEach(result => {
+                  processedResultsMap.set(result.ticker, result);
+                });
+                
+                // Dispatch all accumulated results
+                dispatch(scanEarningsSuccess(Array.from(processedResultsMap.values())));
+              }
             }
           } else if (data.status === 'complete') {
             // Close the event source first
             eventSource.close();
+            eventSourceRef.current = null;
             
-            console.log(`🔄 Scan complete! Processing ${data.results.length} results in BATCH MODE...`);
+            console.log(`🏁 STREAMING MODE: Scan complete! Final results displayed.`);
             
-            // Process all results with simulations in batch
-            processBatchResults(data.results, customDate, data.count);
+            // Clear progress after a moment
+            setTimeout(() => {
+              setScanProgress(null);
+            }, 2000);
+            
+            // Show completion toast
+            const resultCount = data.count || 0;
+            toast({
+              title: 'Scan Complete',
+              description: resultCount > 0
+                ? `Analyzed ${resultCount} stocks with earnings on ${customDate}`
+                : `No stocks found that meet the criteria for ${customDate}`,
+              status: resultCount > 0 ? 'success' : 'info',
+              duration: 5000,
+              isClosable: true,
+            });
           }
         } catch (error) {
           console.error("Error parsing SSE data:", error, "Raw data:", event.data);
@@ -221,6 +318,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
         eventSource.close();
+        eventSourceRef.current = null;
         
         const errorMessage = 'Connection to server lost. Please try again.';
         dispatch(scanEarningsError(errorMessage));
@@ -321,7 +419,7 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             setSimulationsInProgress(prev => new Set(prev).add(newSelectedTicker));
             
             console.log(`🎲 Calculating detailed simulation for ${newSelectedTicker}...`);
-            const simulationResults = calculateSimulationProbability(result);
+            const simulationResults = await calculateSimulationProbability(result);
             if (simulationResults) {
               result.simulationResults = simulationResults;
               console.log(`✅ Detailed simulation completed for ${newSelectedTicker}: ${simulationResults.probabilityOfProfit}%`);
@@ -387,54 +485,85 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     }
   };
 
-  // BATCH PROCESSING: Calculate all simulations then display everything at once
-  const processBatchResults = async (results: OptionsAnalysisResult[], scanDate?: string, count?: number) => {
-    console.log(`🚀 BATCH MODE: Processing ${results.length} results...`);
+  // STREAMING PROCESSING: Calculate simulations and liquidity for new results as they come in
+  const processStreamingResults = async (newResults: OptionsAnalysisResult[]): Promise<OptionsAnalysisResult[]> => {
+    console.log(`🚀 STREAMING MODE: Processing ${newResults.length} new results...`);
     
-    // Filter results that need simulations
-    const resultsNeedingSimulations = results.filter(result =>
-      result.metrics && result.expectedMove && !result.simulationResults
-    );
+    const processedResults = [...newResults];
     
-    console.log(`🎲 BATCH MODE: ${resultsNeedingSimulations.length} results need simulations`);
-    
-    if (resultsNeedingSimulations.length === 0) {
-      // No simulations needed, just display the results
-      dispatch(scanEarningsSuccess(results));
-      
-      setTimeout(() => {
-        setScanProgress(null);
-      }, 2000);
-      
-      if (scanDate && count) {
-        toast({
-          title: 'Scan Complete',
-          description: `Analyzed ${count} stocks with earnings on ${scanDate}`,
-          status: 'success',
-          duration: 5000,
-          isClosable: true,
-        });
-      }
-      return;
-    }
-    
-    // Calculate all simulations
-    const processedResults = [...results];
-    
-    for (let i = 0; i < resultsNeedingSimulations.length; i++) {
-      const result = resultsNeedingSimulations[i];
+    // Process both simulations and liquidity calculations for results that need them
+    for (let i = 0; i < processedResults.length; i++) {
+      const result = processedResults[i];
       const ticker = result.ticker;
       
-      try {
-        console.log(`🎲 BATCH MODE: Calculating simulation ${i + 1}/${resultsNeedingSimulations.length} for ${ticker}...`);
+      // Skip if filtered out
+      if (result.recommendation === 'FILTERED OUT') {
+        continue;
+      }
+      
+      // 1. Calculate liquidity scores for calendar spreads if needed
+      if (strategyType === 'calendar' &&
+          result.strategyAvailability?.calendar_available &&
+          result.earningsDate &&
+          result.calendarLiquidityScore === undefined) {
+        try {
+          console.log(`📊 STREAMING MODE: Calculating liquidity score for ${ticker}...`);
+          const liquidityScore = await calculateCalendarLiquidityScore(
+            ticker,
+            result.currentPrice,
+            result.earningsDate
+          );
+          processedResults[i] = {
+            ...processedResults[i],
+            calendarLiquidityScore: liquidityScore
+          };
+          console.log(`✅ STREAMING MODE: Liquidity score calculated for ${ticker}: ${liquidityScore}`);
+        } catch (error) {
+          console.warn(`❌ STREAMING MODE: Failed to calculate liquidity score for ${ticker}:`, error);
+        }
+      } else if (result.calendarLiquidityScore !== undefined) {
+        console.log(`⏭️ STREAMING MODE: Liquidity score already exists for ${ticker}: ${result.calendarLiquidityScore}`);
+      }
+      
+      // 2. Calculate simulations if needed and not already processed
+      if (!completedSimulations.has(ticker) &&
+          !simulationsInProgress.has(ticker) &&
+          result.metrics &&
+          result.expectedMove &&
+          !result.simulationResults) {
         
-        const simulationResults = calculateSimulationProbability(result);
-        if (simulationResults) {
-          // Find the result in processedResults and update it
-          const resultIndex = processedResults.findIndex(r => r.ticker === ticker);
-          if (resultIndex !== -1) {
-            processedResults[resultIndex] = {
-              ...processedResults[resultIndex],
+        // Check if we have cached simulation results first
+        const cachedSimulation = simulationResultsCache.get(ticker);
+        if (cachedSimulation) {
+          console.log(`📋 STREAMING MODE: Using cached simulation for ${ticker}`);
+          processedResults[i] = {
+            ...processedResults[i],
+            simulationResults: cachedSimulation
+          };
+          setCompletedSimulations(prev => new Set(prev).add(ticker));
+          continue;
+        }
+        
+        try {
+          // Mark as in progress
+          setSimulationsInProgress(prev => new Set(prev).add(ticker));
+          
+          console.log(`🎲 STREAMING MODE: Calculating simulation for ${ticker}...`);
+          
+          // Use the updated result object that includes the liquidity score
+          const updatedResult = processedResults[i];
+          
+          // Add timeout to simulation calculation to prevent hanging
+          const simulationPromise = calculateSimulationProbability(updatedResult);
+          const timeoutPromise = new Promise<null>((_, reject) => {
+            setTimeout(() => reject(new Error('Simulation timeout')), 15000); // 15 second timeout
+          });
+          
+          const simulationResults = await Promise.race([simulationPromise, timeoutPromise]);
+          
+          if (simulationResults) {
+            processedResults[i] = {
+              ...processedResults[i],
               simulationResults
             };
             
@@ -442,34 +571,42 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
             setSimulationResultsCache(prev => new Map(prev).set(ticker, simulationResults));
             setCompletedSimulations(prev => new Set(prev).add(ticker));
             
-            console.log(`✅ BATCH MODE: Simulation completed for ${ticker}: ${simulationResults.probabilityOfProfit}%`);
+            console.log(`✅ STREAMING MODE: Simulation completed for ${ticker}: ${simulationResults.probabilityOfProfit}%`);
+          } else {
+            console.warn(`⚠️ STREAMING MODE: Simulation returned null for ${ticker}`);
           }
+          
+          // Remove from progress tracking
+          setSimulationsInProgress(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(ticker);
+            return newSet;
+          });
+        } catch (error) {
+          console.error(`❌ STREAMING MODE: Failed to calculate simulation for ${ticker}:`, error);
+          
+          // For timeout errors, mark as completed with null results to prevent retrying
+          if (error instanceof Error && error.message.includes('timeout')) {
+            console.warn(`⏰ STREAMING MODE: Simulation timed out for ${ticker}, marking as completed to prevent retry`);
+            setCompletedSimulations(prev => new Set(prev).add(ticker));
+          }
+          
+          // Remove from progress tracking even on error
+          setSimulationsInProgress(prev => {
+            const newSet = new Set(prev);
+            newSet.delete(ticker);
+            return newSet;
+          });
         }
-      } catch (error) {
-        console.error(`❌ BATCH MODE: Failed to calculate simulation for ${ticker}:`, error);
+      } else if (result.simulationResults) {
+        console.log(`⏭️ STREAMING MODE: Simulation already exists for ${ticker}: ${result.simulationResults.probabilityOfProfit}%`);
+        // Make sure it's marked as completed
+        setCompletedSimulations(prev => new Set(prev).add(ticker));
       }
     }
     
-    console.log(`🏁 BATCH MODE: All simulations complete! Displaying ${processedResults.length} results...`);
-    
-    // Display all results at once
-    dispatch(scanEarningsSuccess(processedResults));
-    
-    // Clear progress after a moment
-    setTimeout(() => {
-      setScanProgress(null);
-    }, 2000);
-    
-    // Show completion toast
-    if (scanDate && count) {
-      toast({
-        title: 'Scan Complete',
-        description: `Analyzed ${count} stocks with earnings on ${scanDate}`,
-        status: 'success',
-        duration: 5000,
-        isClosable: true,
-      });
-    }
+    console.log(`🏁 STREAMING MODE: Processed ${processedResults.length} results`);
+    return processedResults;
   };
 
   // Function to handle opening the chart modal
@@ -483,101 +620,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     setChartModalOpen(true);
   };
 
-  // Function to calculate liquidity scores for all calendar results
-  const calculateLiquidityScores = async (results: OptionsAnalysisResult[]) => {
-    if (strategyType !== 'calendar') return results;
-    
-    const updatedResults = await Promise.all(
-      results.map(async (result) => {
-        if (result.earningsDate && result.strategyAvailability?.calendar_available) {
-          try {
-            const liquidityScore = await calculateCalendarLiquidityScore(
-              result.ticker,
-              result.currentPrice,
-              result.earningsDate
-            );
-            return { ...result, calendarLiquidityScore: liquidityScore };
-          } catch (error) {
-            console.warn(`Failed to calculate liquidity score for ${result.ticker}:`, error);
-            return result;
-          }
-        }
-        return result;
-      })
-    );
-    
-    return updatedResults;
-  };
+  // NOTE: Removed calculateLiquidityScores function - liquidity scores are now calculated in streaming mode
 
-  // Function to calculate simulation results for all results
-  const calculateSimulationResults = async (results: OptionsAnalysisResult[]) => {
-    const resultsNeedingSimulation = results.filter(
-      result => result.metrics &&
-               result.expectedMove &&
-               !result.simulationResults &&
-               result.recommendation !== 'FILTERED OUT' &&
-               !simulationsInProgress.has(result.ticker) &&
-               !completedSimulations.has(result.ticker) // Don't recalculate completed simulations
-    );
-    
-    if (resultsNeedingSimulation.length === 0) {
-      return results;
-    }
-    
-    // Mark tickers as having simulations in progress
-    const newSimulationsInProgress = new Set(simulationsInProgress);
-    resultsNeedingSimulation.forEach(result => {
-      newSimulationsInProgress.add(result.ticker);
-    });
-    setSimulationsInProgress(newSimulationsInProgress);
-    
-    console.log(`🚀 Starting simulations for ${resultsNeedingSimulation.length} tickers:`,
-      resultsNeedingSimulation.map(r => r.ticker));
-    
-    const updatedResults = await Promise.all(
-      results.map(async (result) => {
-        // Only calculate simulation for results that need it
-        if (resultsNeedingSimulation.includes(result)) {
-          try {
-            console.log(`🎲 Calculating simulation for ${result.ticker}...`);
-            const simulationResults = calculateSimulationProbability(result);
-            if (simulationResults) {
-              console.log(`✅ Simulation completed for ${result.ticker}: ${simulationResults.probabilityOfProfit}%`);
-              console.log(`📋 Attaching simulation results to ${result.ticker}:`, simulationResults);
-              
-              // Mark as completed and cache the results
-              setCompletedSimulations(prev => new Set(prev).add(result.ticker));
-              setSimulationResultsCache(prev => new Map(prev).set(result.ticker, simulationResults));
-              
-              const updatedResult = { ...result, simulationResults };
-              console.log(`🔗 Updated result for ${result.ticker}:`, updatedResult);
-              console.log(`💾 Cached simulation results for ${result.ticker}`);
-              return updatedResult;
-            }
-          } catch (error) {
-            console.error(`❌ Failed to calculate simulation for ${result.ticker}:`, error);
-          }
-        }
-        return result;
-      })
-    );
-    
-    // Remove completed simulations from progress tracking
-    const updatedSimulationsInProgress = new Set(simulationsInProgress);
-    resultsNeedingSimulation.forEach(result => {
-      updatedSimulationsInProgress.delete(result.ticker);
-    });
-    setSimulationsInProgress(updatedSimulationsInProgress);
-    
-    console.log(`🏁 All simulations completed for batch`);
-    console.log(`📊 Final updated results:`, updatedResults.map(r => ({
-      ticker: r.ticker,
-      hasSimulation: !!r.simulationResults,
-      probability: r.simulationResults?.probabilityOfProfit
-    })));
-    
-    return updatedResults;
-  };
+  // NOTE: Removed calculateSimulationResults function - simulations are now handled in streaming mode
 
   // Add console logging to debug naked options
   React.useEffect(() => {
@@ -592,61 +637,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     }
   }, [strategyType, optionsData.scanResults]);
 
-  // Calculate liquidity scores when strategy changes to calendar or when new results arrive
-  React.useEffect(() => {
-    const updateLiquidityScores = async () => {
-      if (strategyType === 'calendar' && optionsData.scanResults.length > 0 && !optionsData.isLoading) {
-        // Check if any results are missing liquidity scores
-        const needsLiquidityScores = optionsData.scanResults.some(
-          result => result.strategyAvailability?.calendar_available &&
-                   result.earningsDate &&
-                   result.calendarLiquidityScore === undefined
-        );
-        
-        if (needsLiquidityScores) {
-          try {
-            const updatedResults = await calculateLiquidityScores(optionsData.scanResults);
-            dispatch(scanEarningsSuccess(updatedResults));
-          } catch (error) {
-            console.warn('Failed to calculate liquidity scores:', error);
-          }
-        }
-      }
-    };
+  // NOTE: Removed liquidity calculation useEffect - liquidity scores are now calculated in streaming mode
 
-    updateLiquidityScores();
-  }, [strategyType, optionsData.scanResults, optionsData.isLoading, dispatch]);
-
-  // Calculate simulation results when new data arrives
-  React.useEffect(() => {
-    const updateSimulationResults = async () => {
-      if (optionsData.scanResults.length > 0 && !optionsData.isLoading) {
-        // Check if any results are missing simulation results
-        const needsSimulationResults = optionsData.scanResults.some(
-          result => result.metrics &&
-                   result.expectedMove &&
-                   !result.simulationResults &&
-                   result.recommendation !== 'FILTERED OUT'
-        );
-        
-        if (needsSimulationResults) {
-          try {
-            const updatedResults = await calculateSimulationResults(optionsData.scanResults);
-            console.log(`🔄 Dispatching updated results with simulations:`, updatedResults.map(r => ({
-              ticker: r.ticker,
-              hasSimulation: !!r.simulationResults,
-              probability: r.simulationResults?.probabilityOfProfit
-            })));
-            dispatch(scanEarningsSuccess(updatedResults));
-          } catch (error) {
-            console.warn('Failed to calculate simulation results:', error);
-          }
-        }
-      }
-    };
-
-    updateSimulationResults();
-  }, [optionsData.scanResults, optionsData.isLoading, dispatch]);
+  // NOTE: Removed duplicate simulation calculation useEffect - simulations are now handled in streaming mode
 
   // Filter and sort results
   const filteredResults = optionsData.scanResults
