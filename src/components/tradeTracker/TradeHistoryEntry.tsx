@@ -27,6 +27,7 @@ import { AnyTradeEntry, OptionTradeEntry } from '../../types/tradeTracker';
 import { useData } from '../../context/DataContext';
 import { ActionType } from '../../context/DataContext';
 import { formatDisplayDate } from '../../utils/dateUtils';
+import { calculatePercentageReturn, formatPercentageReturn } from '../../utils/percentageUtils';
 import EditTradeModal from './EditTradeModal';
 
 interface TradeHistoryEntryProps {
@@ -224,9 +225,20 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
         
         <VStack align="end" spacing={1}>
           {trade.profitLoss !== undefined && (
-            <Text fontWeight="bold" color={getPnLColor(trade.profitLoss)}>
-              {formatCurrency(trade.profitLoss)}
-            </Text>
+            <HStack spacing={1}>
+              <Text fontWeight="bold" color={getPnLColor(trade.profitLoss)}>
+                {formatCurrency(trade.profitLoss)}
+              </Text>
+              {(() => {
+                const percentageReturn = calculatePercentageReturn(trade);
+                const formattedPercentage = formatPercentageReturn(percentageReturn);
+                return formattedPercentage && (
+                  <Text fontWeight="bold" color={getPnLColor(trade.profitLoss)} fontSize="sm">
+                    {formattedPercentage}
+                  </Text>
+                );
+              })()}
+            </HStack>
           )}
           
           <HStack>
@@ -289,9 +301,20 @@ const TradeHistoryEntry: React.FC<TradeHistoryEntryProps> = ({ trade }) => {
               {trade.profitLoss !== undefined && (
                 <Box minW="200px">
                   <Text fontSize="sm" color="gray.500">Profit/Loss</Text>
-                  <Text fontWeight="bold" color={getPnLColor(trade.profitLoss)}>
-                    {formatCurrency(trade.profitLoss)}
-                  </Text>
+                  <VStack align="start" spacing={0}>
+                    <Text fontWeight="bold" color={getPnLColor(trade.profitLoss)}>
+                      {formatCurrency(trade.profitLoss)}
+                    </Text>
+                    {(() => {
+                      const percentageReturn = calculatePercentageReturn(trade);
+                      const formattedPercentage = formatPercentageReturn(percentageReturn);
+                      return formattedPercentage && (
+                        <Text fontSize="sm" color={getPnLColor(trade.profitLoss)}>
+                          {formattedPercentage}
+                        </Text>
+                      );
+                    })()}
+                  </VStack>
                 </Box>
               )}
               
