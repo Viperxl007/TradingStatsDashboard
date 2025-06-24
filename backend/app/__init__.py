@@ -115,5 +115,13 @@ def create_app(test_config=None):
         logger.info("Registered market data routes")
     except Exception as e:
         logger.error(f"Failed to register market data routes: {str(e)}")
+    
+    # Register concentrated liquidity routes
+    try:
+        from routes.cl_routes import cl_bp
+        app.register_blueprint(cl_bp)
+        logger.info("Registered concentrated liquidity routes")
+    except Exception as e:
+        logger.error(f"Failed to register concentrated liquidity routes: {str(e)}")
 
     return app

@@ -34,6 +34,7 @@ import HistoryView from './HistoryView';
 import OptionsEarningsScreener from './OptionsEarningsScreener';
 import TradeTracker from './TradeTracker';
 import ChartAnalysis from './ChartAnalysis';
+import LiquidityTrackingDashboard from './liquidityTracking/LiquidityTrackingDashboard';
 import { useData, importDataStart, importDataSuccess, importDataError, setActiveTab, toggleDarkMode } from '../context/DataContext';
 import { importData } from '../services/dataImport';
 
@@ -83,13 +84,13 @@ const Dashboard: React.FC = () => {
 
   // Handle tab change
   const handleTabChange = (index: number) => {
-    const tabNames = ['summary', 'performance', 'tokens', 'trends', 'history', 'options', 'tradetracker', 'chartanalysis'];
+    const tabNames = ['summary', 'performance', 'tokens', 'trends', 'history', 'options', 'tradetracker', 'chartanalysis', 'liquiditytracking'];
     dispatch(setActiveTab(tabNames[index]));
   };
 
   // Get current tab index
   const getCurrentTabIndex = () => {
-    const tabNames = ['summary', 'performance', 'tokens', 'trends', 'history', 'options', 'tradetracker', 'chartanalysis'];
+    const tabNames = ['summary', 'performance', 'tokens', 'trends', 'history', 'options', 'tradetracker', 'chartanalysis', 'liquiditytracking'];
     return tabNames.indexOf(state.activeTab);
   };
 
@@ -198,6 +199,7 @@ const Dashboard: React.FC = () => {
               <Tab>Options Earnings</Tab>
               <Tab>Trade Tracker</Tab>
               <Tab>Chart Analysis</Tab>
+              <Tab>Liquidity Tracking</Tab>
             </TabList>
 
             <TabPanels>
@@ -224,6 +226,9 @@ const Dashboard: React.FC = () => {
               </TabPanel>
               <TabPanel>
                 <ChartAnalysis />
+              </TabPanel>
+              <TabPanel>
+                <LiquidityTrackingDashboard />
               </TabPanel>
             </TabPanels>
           </Tabs>

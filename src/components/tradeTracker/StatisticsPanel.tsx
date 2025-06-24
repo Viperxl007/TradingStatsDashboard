@@ -25,6 +25,7 @@ import {
 } from '@chakra-ui/react';
 import { useData } from '../../context/DataContext';
 import { StrategyType } from '../../types/tradeTracker';
+import { calculatePortfolioPercentageReturn, formatPercentageReturn } from '../../utils/percentageUtils';
 import StatisticsChart from './StatisticsChart';
 
 /**
@@ -158,19 +159,30 @@ const StatisticsPanel: React.FC = () => {
         </GridItem>
         
         <GridItem>
-          <Box 
-            p={4} 
-            borderRadius="lg" 
-            bg={cardBgColor} 
+          <Box
+            p={4}
+            borderRadius="lg"
+            bg={cardBgColor}
             borderWidth="1px"
             borderColor={borderColor}
             height="100%"
           >
             <Stat>
               <StatLabel>Net Profit/Loss</StatLabel>
-              <StatNumber color={getValueColor(statistics.netProfitLoss)}>
-                {formatCurrency(statistics.netProfitLoss)}
-              </StatNumber>
+              <VStack align="start" spacing={0}>
+                <Text fontSize="2xl" fontWeight="bold" color={getValueColor(statistics.netProfitLoss)}>
+                  {formatCurrency(statistics.netProfitLoss)}
+                </Text>
+                {(() => {
+                  const portfolioReturn = calculatePortfolioPercentageReturn(trades);
+                  const formattedReturn = formatPercentageReturn(portfolioReturn);
+                  return formattedReturn && (
+                    <Text fontSize="lg" fontWeight="medium" color={getValueColor(statistics.netProfitLoss)}>
+                      {formattedReturn}
+                    </Text>
+                  );
+                })()}
+              </VStack>
               <StatHelpText>
                 {statistics.closedTrades} closed trades
               </StatHelpText>

@@ -1,0 +1,33 @@
+# Phase 2 CL Position Tracking System Requirements
+# Additional dependencies for DexScreener API integration and background tasks
+
+# HTTP requests for DexScreener API
+requests>=2.31.0
+
+# Background task scheduling
+APScheduler>=3.10.4
+
+# Data validation and parsing
+python-dateutil>=2.8.2
+
+# Enhanced logging and monitoring
+structlog>=23.1.0
+
+# Optional: Enhanced HTTP client with retry capabilities
+httpx>=0.24.1
+
+# Optional: Redis for distributed caching (if needed for scaling)
+redis>=4.6.0
+
+# Optional: Email notifications
+smtplib2>=0.2.1
+
+# Development and testing dependencies
+pytest>=7.4.0
+pytest-asyncio>=0.21.1
+pytest-mock>=3.11.1
+responses>=0.23.3  # For mocking HTTP requests in tests
+
+# Note: These are additional requirements for Phase 2
+# The base Flask application requirements should already be installed
+# Core dependencies like Flask, SQLite3, etc. are assumed to be available
