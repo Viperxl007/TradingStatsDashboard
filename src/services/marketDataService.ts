@@ -59,17 +59,31 @@ export const fetchMarketData = async (
     
     if (!isCrypto || !isIntraday) {
       // Try AlphaVantage first (premium API) for stocks or crypto daily data
-      console.log(`Trying AlphaVantage for ${symbol}...`);
+      console.log(`🔍 [MarketData] Trying AlphaVantage for ${symbol}...`);
       const alphaData = await fetchFromAlphaVantage(symbol, timeframe, limit, period);
       if (alphaData && alphaData.length > 0) {
-        console.log(`✅ Successfully fetched ${alphaData.length} data points from AlphaVantage`);
+        console.log(`✅ [MarketData] Successfully fetched ${alphaData.length} data points from AlphaVantage`);
         return alphaData;
       }
     } else {
-      console.log(`⚠️ Skipping AlphaVantage for crypto intraday data (${symbol} ${timeframe}) - only supports daily`);
+      console.log(`⚠️ [MarketData] Skipping AlphaVantage for crypto intraday data (${symbol} ${timeframe}) - only supports daily`);
     }
   } catch (error) {
-    console.log('AlphaVantage failed, trying backend API...', error);
+    console.log('🔄 [MarketData] AlphaVantage failed, trying Hyperliquid for crypto...', error);
+  }
+  
+  // Try Hyperliquid for crypto tokens if AlphaVantage failed
+  if (isCryptoSymbol(symbol)) {
+    try {
+      console.log(`🔍 [MarketData] Trying Hyperliquid for crypto ${symbol}...`);
+      const hyperliquidData = await fetchFromHyperliquid(symbol, timeframe, limit, period);
+      if (hyperliquidData && hyperliquidData.length > 0) {
+        console.log(`✅ [MarketData] Successfully fetched ${hyperliquidData.length} data points from Hyperliquid`);
+        return hyperliquidData;
+      }
+    } catch (error) {
+      console.log('🔄 [MarketData] Hyperliquid failed, trying backend API...', error);
+    }
   }
   
   try {
@@ -598,4 +612,238 @@ const getAlphaVantageInterval = (timeframe: string): string | null => {
     case '1h': return '60min';
     default: return null;
   }
+};
+
+/**
+ * Fetch data from Hyperliquid Perps Dex Info API
+ */
+const fetchFromHyperliquid = async (
+  symbol: string,
+  timeframe: string,
+  limit: number,
+  period?: string
+): Promise<CandlestickData[]> => {
+  try {
+    // Convert symbol to Hyperliquid format
+    const hyperliquidSymbol = convertToHyperliquidSymbol(symbol);
+    console.log(`🔍 [Hyperliquid] Using symbol: ${hyperliquidSymbol} for ${symbol}`);
+    
+    // Convert timeframe to Hyperliquid interval
+    const interval = getHyperliquidInterval(timeframe);
+    console.log(`📊 [Hyperliquid] Using interval: ${interval} for timeframe: ${timeframe}`);
+    
+    // Calculate date range
+    const endTime = Date.now();
+    let startTime = endTime;
+    
+    if (period && typeof period === 'string') {
+      startTime = calculateStartTimeFromPeriod(period, endTime);
+    } else {
+      // Calculate based on limit and timeframe - use more generous multipliers for better chart analysis
+      const intervalMs = getIntervalMilliseconds(timeframe);
+      const enhancedLimit = Math.max(limit * 3, 500); // At least 500 data points or 3x requested
+      startTime = endTime - (enhancedLimit * intervalMs);
+    }
+    
+    const daysDiff = Math.round((endTime - startTime) / (24 * 60 * 60 * 1000));
+    console.log(`📅 [Hyperliquid] Date range: ${new Date(startTime).toISOString()} to ${new Date(endTime).toISOString()}`);
+    console.log(`📊 [Hyperliquid] Requesting ~${daysDiff} days of ${interval} data for enhanced chart analysis`);
+    
+    // Prepare request body
+    const requestBody = {
+      type: "candleSnapshot",
+      req: {
+        coin: hyperliquidSymbol,
+        interval: interval,
+        startTime: startTime,
+        endTime: endTime
+      }
+    };
+    
+    console.log(`🌐 [Hyperliquid] Request body:`, requestBody);
+    
+    const response = await fetch('https://api.hyperliquid.xyz/info', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(requestBody)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`Hyperliquid API error: ${response.status} ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    if (!Array.isArray(data) || data.length === 0) {
+      console.log('📊 [Hyperliquid] Response:', data);
+      throw new Error('No data returned from Hyperliquid API');
+    }
+    
+    console.log(`📊 [Hyperliquid] Received ${data.length} candles`);
+    
+    // Convert Hyperliquid format to TradingView Lightweight Charts format
+    const candlestickData: CandlestickData[] = data.map((candle: any) => ({
+      time: Math.floor(candle.t / 1000) as Time, // Convert from milliseconds to seconds
+      open: Number(parseFloat(candle.o).toFixed(2)),
+      high: Number(parseFloat(candle.h).toFixed(2)),
+      low: Number(parseFloat(candle.l).toFixed(2)),
+      close: Number(parseFloat(candle.c).toFixed(2))
+    }));
+    
+    // Sort by time and return last 'limit' data points
+    const sortedData = candlestickData
+      .sort((a, b) => (a.time as number) - (b.time as number))
+      .slice(-limit);
+    
+    console.log(`✅ [Hyperliquid] Processed ${sortedData.length} data points`);
+    return sortedData;
+    
+  } catch (error) {
+    console.warn('🔴 [Hyperliquid] Fetch failed:', error);
+    throw error;
+  }
+};
+
+/**
+ * Convert symbol to Hyperliquid format
+ */
+const convertToHyperliquidSymbol = (symbol: string): string => {
+  // Remove USD suffix and return base currency
+  // Hyperliquid uses just the base currency (e.g., "BTC" not "BTCUSD")
+  if (symbol.endsWith('USD')) {
+    return symbol.replace('USD', '');
+  }
+  
+  // Handle common symbol mappings
+  const symbolMap: { [key: string]: string } = {
+    'AVAXUSD': 'AVAX',
+    'BTCUSD': 'BTC',
+    'ETHUSD': 'ETH',
+    'SOLUSD': 'SOL',
+    'ADAUSD': 'ADA',
+    'DOTUSD': 'DOT',
+    'LINKUSD': 'LINK',
+    'MATICUSD': 'MATIC',
+    'ALGOUSD': 'ALGO',
+    'ATOMUSD': 'ATOM',
+    'UNIUSD': 'UNI',
+    'AAVEUSD': 'AAVE',
+    'COMPUSD': 'COMP',
+    'MKRUSD': 'MKR',
+    'SNXUSD': 'SNX',
+    'YFIUSD': 'YFI',
+    'SUSHIUSD': 'SUSHI',
+    'CRVUSD': 'CRV',
+    'BALUSD': 'BAL',
+    'RENUSD': 'REN',
+    'KNCUSD': 'KNC',
+    'ZRXUSD': 'ZRX',
+    'BANDUSD': 'BAND',
+    'STORJUSD': 'STORJ',
+    'MANAUSD': 'MANA',
+    'SANDUSD': 'SAND',
+    'AXSUSD': 'AXS',
+    'ENJUSD': 'ENJ',
+    'CHZUSD': 'CHZ',
+    'FLOWUSD': 'FLOW',
+    'ICPUSD': 'ICP',
+    'FILUSD': 'FIL',
+    'ARUSD': 'AR',
+    'GRTUSD': 'GRT',
+    'LRCUSD': 'LRC',
+    'SKLUSD': 'SKL',
+    'ANKRUSD': 'ANKR',
+    'CTSIUSD': 'CTSI',
+    'OCEANUSD': 'OCEAN',
+    'NMRUSD': 'NMR',
+    'FETUSD': 'FET',
+    'NUUSD': 'NU',
+    'KEEPUSD': 'KEEP',
+    'TRBEUSD': 'TRBE'
+  };
+  
+  return symbolMap[symbol] || symbol;
+};
+
+/**
+ * Convert timeframe to Hyperliquid interval
+ */
+const getHyperliquidInterval = (timeframe: string): string => {
+  // Hyperliquid supported intervals: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"
+  const intervalMap: { [key: string]: string } = {
+    '1m': '1m',
+    '5m': '5m',
+    '15m': '15m',
+    '1h': '1h',
+    '4h': '4h',
+    '1D': '1d',
+    '1W': '1w'
+  };
+  
+  return intervalMap[timeframe] || '1h'; // Default to 1h if not found
+};
+
+/**
+ * Get interval in milliseconds for timeframe calculations
+ */
+const getIntervalMilliseconds = (timeframe: string): number => {
+  const intervalMap: { [key: string]: number } = {
+    '1m': 60 * 1000,
+    '5m': 5 * 60 * 1000,
+    '15m': 15 * 60 * 1000,
+    '1h': 60 * 60 * 1000,
+    '4h': 4 * 60 * 60 * 1000,
+    '1D': 24 * 60 * 60 * 1000,
+    '1W': 7 * 24 * 60 * 60 * 1000
+  };
+  
+  return intervalMap[timeframe] || 60 * 60 * 1000; // Default to 1 hour
+};
+
+/**
+ * Calculate start time from period string
+ */
+const calculateStartTimeFromPeriod = (period: string, endTime: number): number => {
+  const periodMatch = period.match(/^(\d+)([dwmy])$/);
+  if (periodMatch) {
+    const [, num, unit] = periodMatch;
+    const value = parseInt(num);
+    
+    switch (unit) {
+      case 'd':
+        return endTime - (value * 24 * 60 * 60 * 1000);
+      case 'w':
+        return endTime - (value * 7 * 24 * 60 * 60 * 1000);
+      case 'm':
+        return endTime - (value * 30 * 24 * 60 * 60 * 1000); // Approximate month
+      case 'y':
+        return endTime - (value * 365 * 24 * 60 * 60 * 1000); // Approximate year
+      default:
+        return endTime - (30 * 24 * 60 * 60 * 1000); // Default to 30 days for better analysis
+    }
+  }
+  
+  // Handle common period formats and provide more generous defaults
+  const periodMap: { [key: string]: number } = {
+    '1d': 1 * 24 * 60 * 60 * 1000,
+    '5d': 5 * 24 * 60 * 60 * 1000,
+    '7d': 7 * 24 * 60 * 60 * 1000,
+    '14d': 14 * 24 * 60 * 60 * 1000,
+    '1mo': 30 * 24 * 60 * 60 * 1000,
+    '3mo': 90 * 24 * 60 * 60 * 1000,
+    '6mo': 180 * 24 * 60 * 60 * 1000,
+    '1y': 365 * 24 * 60 * 60 * 1000,
+    '2y': 730 * 24 * 60 * 60 * 1000,
+    '5y': 1825 * 24 * 60 * 60 * 1000,
+    'max': 1825 * 24 * 60 * 60 * 1000 // 5 years max for Hyperliquid
+  };
+  
+  if (period in periodMap) {
+    return endTime - periodMap[period];
+  }
+  
+  // Fallback to 30 days for better chart analysis
+  return endTime - (30 * 24 * 60 * 60 * 1000);
 };

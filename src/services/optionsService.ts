@@ -13,6 +13,14 @@ const API_BASE_URL = 'http://localhost:5000/api';
 const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000; // 1 second
 
+// Timeout configuration based on operation type
+const TIMEOUT_CONFIG = {
+  default: 10000,        // 10 seconds for regular requests
+  fullAnalysis: 60000,   // 60 seconds for full analysis (iron condor, calendar spreads)
+  scan: 30000,          // 30 seconds for scanning operations
+  calendar: 20000       // 20 seconds for calendar analysis
+};
+
 /**
  * Sleep function for retry delays
  * @param ms Milliseconds to sleep
@@ -24,11 +32,11 @@ const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
  * @param url URL to fetch
  * @param options Fetch options
  * @param retries Number of retries
+ * @param timeoutMs Custom timeout in milliseconds (defaults to TIMEOUT_CONFIG.default)
  * @returns Promise with fetch response
  */
-async function fetchWithRetry(url: string, options: RequestInit = {}, retries = MAX_RETRIES): Promise<Response> {
+async function fetchWithRetry(url: string, options: RequestInit = {}, retries = MAX_RETRIES, timeoutMs = TIMEOUT_CONFIG.default): Promise<Response> {
   // Add timeout to prevent hanging requests
-  const timeoutMs = 10000; // 10 second timeout
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   
@@ -47,7 +55,7 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
     if (response.status >= 500 && retries > 0) {
       console.warn(`Request to ${url} failed with status ${response.status}. Retrying... (${retries} retries left)`);
       await sleep(RETRY_DELAY);
-      return fetchWithRetry(url, options, retries - 1);
+      return fetchWithRetry(url, options, retries - 1, timeoutMs);
     }
     
     return response;
@@ -59,7 +67,7 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
       if (retries > 0) {
         console.warn(`Request to ${url} timed out after ${timeoutMs}ms. Retrying... (${retries} retries left)`);
         await sleep(RETRY_DELAY);
-        return fetchWithRetry(url, options, retries - 1);
+        return fetchWithRetry(url, options, retries - 1, timeoutMs);
       }
       throw new Error(`Request timed out after ${timeoutMs}ms and all retries exhausted`);
     }
@@ -68,7 +76,7 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
     if (retries > 0 && (error instanceof TypeError || (error instanceof Error && error.message.includes('network')))) {
       console.warn(`Network error when fetching ${url}. Retrying... (${retries} retries left)`);
       await sleep(RETRY_DELAY);
-      return fetchWithRetry(url, options, retries - 1);
+      return fetchWithRetry(url, options, retries - 1, timeoutMs);
     }
     throw error;
   }
@@ -95,15 +103,18 @@ export const analyzeOptions = async (
     // Add debug logging
     console.log(`Fetching from: ${url} with runFullAnalysis=${runFullAnalysis}`);
     
-    // Make the request without a timeout
+    // Make the request with appropriate timeout based on analysis type
     try {
+      const timeoutMs = runFullAnalysis ? TIMEOUT_CONFIG.fullAnalysis : TIMEOUT_CONFIG.default;
+      console.log(`Using ${timeoutMs}ms timeout for ${runFullAnalysis ? 'full' : 'basic'} analysis of ${ticker}`);
+      
       const response = await fetchWithRetry(url, {
         method: 'GET',
         headers: {
           'Accept': 'application/json',
           'Content-Type': 'application/json'
         }
-      });
+      }, MAX_RETRIES, timeoutMs);
       
       if (!response.ok) {
         try {
@@ -137,7 +148,7 @@ export const analyzeOptions = async (
 // It's kept for backward compatibility
 export const scanEarningsToday = async (): Promise<OptionsAnalysisResult[]> => {
   try {
-    const response = await fetchWithRetry(`${API_BASE_URL}/scan/earnings`);
+    const response = await fetchWithRetry(`${API_BASE_URL}/scan/earnings`, {}, MAX_RETRIES, TIMEOUT_CONFIG.scan);
     
     if (!response.ok) {
       const errorData = await response.json();
@@ -162,7 +173,7 @@ export const scanEarningsToday = async (): Promise<OptionsAnalysisResult[]> => {
 // It's kept for backward compatibility
 export const scanEarningsByDate = async (date: string): Promise<OptionsAnalysisResult[]> => {
   try {
-    const response = await fetchWithRetry(`${API_BASE_URL}/scan/earnings?date=${date}`);
+    const response = await fetchWithRetry(`${API_BASE_URL}/scan/earnings?date=${date}`, {}, MAX_RETRIES, TIMEOUT_CONFIG.scan);
     
     if (!response.ok) {
       const errorData = await response.json();
@@ -320,7 +331,7 @@ export const getUnifiedCalendarAnalysis = async (
         current_price: currentPrice,
         earnings_date: earningsDate
       })
-    });
+    }, MAX_RETRIES, TIMEOUT_CONFIG.calendar);
     
     if (!response.ok) {
       // Try to get error details from response

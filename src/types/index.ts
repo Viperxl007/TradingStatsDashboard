@@ -395,6 +395,15 @@ export interface OptimalIronCondors {
 }
 
 /**
+ * Enhanced historical data for more accurate Monte Carlo simulations
+ */
+export interface EnhancedHistoricalData {
+  avgHistoricalIvCrushPostEarnings?: number; // Average historical IV crush post earnings (negative value)
+  avgEarningsMoveHistorically?: number; // Average earnings move historically (percentage)
+  historicalImpliedMoveAccuracy?: number; // Historical implied move accuracy (percentage 0-100)
+}
+
+/**
  * Monte Carlo simulation results for earnings volatility calendar spread strategy
  */
 export interface SimulationResults {

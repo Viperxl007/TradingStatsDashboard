@@ -5,7 +5,7 @@
  * volatility calendar spread strategy that focuses on IV crush as the primary P&L driver.
  */
 
-import { OptionsAnalysisResult, OptionsMetrics } from '../types';
+import { OptionsAnalysisResult, OptionsMetrics, EnhancedHistoricalData } from '../types';
 
 export interface MonteCarloSimulationParams {
   ticker: string;
@@ -15,6 +15,7 @@ export interface MonteCarloSimulationParams {
   liquidityScore?: number;
   earningsDate?: string;
   spreadCost?: number; // Optional override for spread cost
+  enhancedHistoricalData?: EnhancedHistoricalData; // Enhanced historical data for more accurate simulations
 }
 
 export interface MonteCarloResults {
@@ -89,17 +90,34 @@ function truncatedNormal(mean: number, stdDev: number, min: number, max: number,
 /**
  * Dynamic IV Crush Calculation Based on Term Structure Slope
  * Uses the actual slope to predict IV crush differential - Revolutionary approach!
+ * Now enhanced with optional historical data for ticker-specific accuracy
  */
 function calculateDynamicIVCrush(
   metrics: OptionsMetrics,
   expectedMovePercent: number,
-  randomFn: () => number = Math.random
+  randomFn: () => number = Math.random,
+  enhancedHistoricalData?: EnhancedHistoricalData
 ): { frontCrush: number; backCrush: number } {
   
   // Base IV crush from historical earnings data (market average)
-  const BASE_FRONT_CRUSH = 0.48;
-  const BASE_BACK_CRUSH = 0.22;
-  const BASE_DIFFERENTIAL = BASE_FRONT_CRUSH - BASE_BACK_CRUSH; // 0.26
+  let BASE_FRONT_CRUSH = 0.48;
+  let BASE_BACK_CRUSH = 0.22;
+  
+  // Use enhanced historical data if available for more accurate base values
+  if (enhancedHistoricalData?.avgHistoricalIvCrushPostEarnings !== undefined) {
+    // Historical IV crush is typically provided as a negative value (e.g., -0.45 for 45% crush)
+    const historicalCrush = Math.abs(enhancedHistoricalData.avgHistoricalIvCrushPostEarnings);
+    
+    // Apply the historical crush to front month (primary driver)
+    BASE_FRONT_CRUSH = Math.max(0.25, Math.min(0.70, historicalCrush));
+    
+    // Back month crush is typically 40-50% of front month crush
+    BASE_BACK_CRUSH = Math.max(0.15, Math.min(0.35, BASE_FRONT_CRUSH * 0.45));
+    
+    console.log(`📊 Using enhanced historical IV crush data: Front=${(BASE_FRONT_CRUSH * 100).toFixed(1)}%, Back=${(BASE_BACK_CRUSH * 100).toFixed(1)}%`);
+  }
+  
+  const BASE_DIFFERENTIAL = BASE_FRONT_CRUSH - BASE_BACK_CRUSH;
   
   // Calculate theoretical differential based on TS Slope
   // TS Slope represents IV change per day, scale to 30-day difference
@@ -149,15 +167,42 @@ const calculateIVCrush = calculateDynamicIVCrush;
 
 /**
  * Simulate stock price movement incorporating expected move
+ * Now enhanced with optional historical data for ticker-specific accuracy
  */
 function simulateStockMovement(
   currentPrice: number,
   expectedMovePercent: number,
-  randomFn: () => number = Math.random
+  randomFn: () => number = Math.random,
+  enhancedHistoricalData?: EnhancedHistoricalData
 ): { newPrice: number; actualMoveRatio: number } {
   
-  // Model actual earnings moves as normal distribution around 0.8x expected move
-  const expectedMoveMultiplier = normalRandom(0.8, 0.3, randomFn);
+  let expectedMoveMultiplier: number;
+  
+  // Use enhanced historical data if available for more accurate move simulation
+  if (enhancedHistoricalData?.avgEarningsMoveHistorically !== undefined &&
+      enhancedHistoricalData?.historicalImpliedMoveAccuracy !== undefined) {
+    
+    const historicalMove = enhancedHistoricalData.avgEarningsMoveHistorically;
+    const impliedMoveAccuracy = enhancedHistoricalData.historicalImpliedMoveAccuracy / 100; // Convert percentage to decimal
+    
+    // Calculate the ratio of historical actual move to current expected move
+    const historicalToExpectedRatio = historicalMove / expectedMovePercent;
+    
+    // Adjust the multiplier based on historical accuracy
+    // If implied moves are historically accurate (high accuracy %), use closer to 1.0
+    // If implied moves are historically inaccurate (low accuracy %), use historical ratio more heavily
+    const accuracyWeight = Math.max(0.3, Math.min(0.9, impliedMoveAccuracy));
+    const baseMultiplier = (accuracyWeight * 1.0) + ((1 - accuracyWeight) * historicalToExpectedRatio);
+    
+    // Add some variance around the historically-informed base
+    expectedMoveMultiplier = normalRandom(baseMultiplier, 0.25, randomFn);
+    
+    console.log(`📊 Using enhanced historical move data: Historical=${historicalMove.toFixed(2)}%, Accuracy=${(impliedMoveAccuracy * 100).toFixed(1)}%, Multiplier=${baseMultiplier.toFixed(2)}`);
+  } else {
+    // Model actual earnings moves as normal distribution around 0.8x expected move (default behavior)
+    expectedMoveMultiplier = normalRandom(0.8, 0.3, randomFn);
+  }
+  
   const actualMovePercent = expectedMovePercent * expectedMoveMultiplier;
   
   // Random direction (50/50 up/down)
@@ -423,7 +468,8 @@ export async function runMonteCarloSimulation(params: MonteCarloSimulationParams
     metrics,
     liquidityScore = 5,
     earningsDate,
-    spreadCost: providedSpreadCost
+    spreadCost: providedSpreadCost,
+    enhancedHistoricalData
   } = params;
   
   // Terminal logging for easier debugging
@@ -516,12 +562,21 @@ export async function runMonteCarloSimulation(params: MonteCarloSimulationParams
                    Math.abs(probabilityPenalty) >= 15 ? 'MODERATE RISK' : 'ACCEPTABLE'
   });
   
+  // Log enhanced historical data usage if available
+  if (enhancedHistoricalData) {
+    console.log(`📊 ${ticker}: Enhanced simulation with historical data:`, {
+      avgHistoricalIvCrush: enhancedHistoricalData.avgHistoricalIvCrushPostEarnings,
+      avgEarningsMove: enhancedHistoricalData.avgEarningsMoveHistorically,
+      impliedMoveAccuracy: enhancedHistoricalData.historicalImpliedMoveAccuracy
+    });
+  }
+
   for (let i = 0; i < numSimulations; i++) {
-    // 1. Calculate IV crush for this simulation
-    const { frontCrush, backCrush } = calculateIVCrush(metrics, expectedMovePercent, seededRandom);
+    // 1. Calculate IV crush for this simulation (with enhanced data if available)
+    const { frontCrush, backCrush } = calculateIVCrush(metrics, expectedMovePercent, seededRandom, enhancedHistoricalData);
     
-    // 2. Simulate stock price movement
-    const { actualMoveRatio } = simulateStockMovement(currentPrice, expectedMovePercent, seededRandom);
+    // 2. Simulate stock price movement (with enhanced data if available)
+    const { actualMoveRatio } = simulateStockMovement(currentPrice, expectedMovePercent, seededRandom, enhancedHistoricalData);
     
     // 3. Calculate P&L for this simulation
     const pnl = calculateCalendarPnL(

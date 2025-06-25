@@ -171,7 +171,12 @@ const DirectSearch: React.FC = () => {
         <Flex justify="center" align="center" direction="column" my={10}>
           <Flex align="center" mb={4}>
             <Spinner size="xl" color="brand.500" mr={4} />
-            <Text fontSize="lg">Analyzing options data...</Text>
+            <Text fontSize="lg">
+              {analysisStartTime && Date.now() - analysisStartTime > 15000
+                ? "Running comprehensive analysis (calendar spreads, iron condors, naked options)..."
+                : "Analyzing options data..."
+              }
+            </Text>
           </Flex>
           
           {analysisStartTime && (
@@ -179,13 +184,24 @@ const DirectSearch: React.FC = () => {
               <Text fontSize="sm" color="gray.500">
                 Elapsed time: {Math.floor((Date.now() - analysisStartTime) / 1000)} seconds
               </Text>
-              {Date.now() - analysisStartTime > 15000 && (
+              {Date.now() - analysisStartTime > 10000 && Date.now() - analysisStartTime <= 30000 && (
                 <Alert status="info" mt={2} borderRadius="md">
                   <AlertIcon />
                   <Box>
                     <AlertTitle>Analysis in progress</AlertTitle>
                     <AlertDescription>
-                      Iron condor analysis may take some time to complete, especially for complex calculations. Please be patient.
+                      Full analysis includes calendar spreads, iron condors, and naked options. This typically takes 20-40 seconds for complex calculations.
+                    </AlertDescription>
+                  </Box>
+                </Alert>
+              )}
+              {Date.now() - analysisStartTime > 30000 && (
+                <Alert status="warning" mt={2} borderRadius="md">
+                  <AlertIcon />
+                  <Box>
+                    <AlertTitle>Extended analysis time</AlertTitle>
+                    <AlertDescription>
+                      The analysis is taking longer than usual. This may be due to complex iron condor calculations or high market volatility. Maximum wait time is 60 seconds.
                     </AlertDescription>
                   </Box>
                 </Alert>

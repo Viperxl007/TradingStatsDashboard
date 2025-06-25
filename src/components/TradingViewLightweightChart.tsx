@@ -96,6 +96,14 @@ const TradingViewLightweightChart: React.FC<TradingViewLightweightChartProps> = 
             borderColor: '#cccccc',
             timeVisible: true,
             secondsVisible: false,
+            rightOffset: 12,
+            barSpacing: 6,
+            minBarSpacing: 0.5,  // Allow much more zoom out
+            fixLeftEdge: false,   // Allow scrolling to see all historical data
+            fixRightEdge: false,  // Allow scrolling past current time
+            lockVisibleTimeRangeOnResize: true,
+            rightBarStaysOnScroll: true,
+            shiftVisibleRangeOnNewBar: true,
           },
         });
 
