@@ -33,10 +33,10 @@ import {
   IconButton,
   Tooltip
 } from '@chakra-ui/react';
-import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle, FiBarChart } from 'react-icons/fi';
-import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError } from '../context/DataContext';
+import { FiSearch, FiFilter, FiRefreshCw, FiCheckCircle, FiXCircle, FiAlertCircle, FiBarChart, FiSettings } from 'react-icons/fi';
+import { useData, scanEarningsStart, scanEarningsSuccess, scanEarningsError, ActionType } from '../context/DataContext';
 import { scanEarningsToday, scanEarningsByDate, analyzeOptions, calculateCalendarLiquidityScore, clearSpreadCostCache } from '../services/optionsService';
-import { OptionsAnalysisResult } from '../types';
+import { OptionsAnalysisResult, EnhancedHistoricalData } from '../types';
 import NakedOptionsDisplay from './NakedOptionsDisplay';
 import IronCondorDisplay from './IronCondorDisplay';
 import CalendarSpreadDisplay from './CalendarSpreadDisplay';
@@ -44,7 +44,8 @@ import PinTradeButton from './tradeTracker/PinTradeButton';
 import LiquidityThermometer from './LiquidityThermometer';
 import SimulationProbabilityDisplay from './SimulationProbabilityDisplay';
 import MonteCarloChartModal from './MonteCarloChartModal';
-import { calculateSimulationProbability } from '../services/monteCarloSimulation';
+import RefineSimulationModal from './RefineSimulationModal';
+import { calculateSimulationProbability, runMonteCarloSimulation } from '../services/monteCarloSimulation';
 
 /**
  * ScanResults Component
@@ -77,6 +78,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
   const [chartModalOpen, setChartModalOpen] = useState(false);
   const [selectedChartTicker, setSelectedChartTicker] = useState<string>('');
   const [selectedChartResults, setSelectedChartResults] = useState<any>(null);
+  const [refineModalOpen, setRefineModalOpen] = useState(false);
+  const [selectedRefineTicker, setSelectedRefineTicker] = useState<string>('');
+  const [refiningSimulation, setRefiningSimulation] = useState(false);
   const toast = useToast();
   const eventSourceRef = useRef<EventSource | null>(null);
   
@@ -618,6 +622,94 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     setSelectedChartTicker(ticker);
     setSelectedChartResults(simulationResults);
     setChartModalOpen(true);
+  };
+
+  // Function to handle opening the refine simulation modal
+  const handleRefineSimulation = (ticker: string) => {
+    setSelectedRefineTicker(ticker);
+    setRefineModalOpen(true);
+  };
+
+  // Function to handle refined simulation with enhanced historical data
+  const handleRunRefinedSimulation = async (enhancedData: EnhancedHistoricalData) => {
+    setRefiningSimulation(true);
+    setRefineModalOpen(false);
+
+    try {
+      // Find the result for the selected ticker
+      const result = optionsData.scanResults.find(r => r.ticker === selectedRefineTicker);
+      if (!result) {
+        throw new Error(`No result found for ticker ${selectedRefineTicker}`);
+      }
+
+      // Parse expected move percentage
+      const expectedMovePercent = parseFloat(result.expectedMove.replace('%', ''));
+      if (isNaN(expectedMovePercent)) {
+        throw new Error('Invalid expected move percentage');
+      }
+
+      // Create simulation parameters with enhanced data
+      const simulationParams = {
+        ticker: selectedRefineTicker,
+        currentPrice: result.currentPrice,
+        expectedMovePercent,
+        metrics: result.metrics,
+        liquidityScore: result.calendarLiquidityScore || 5,
+        earningsDate: result.earningsDate,
+        enhancedHistoricalData: enhancedData
+      };
+
+      // Run enhanced Monte Carlo simulation
+      const simulationResults = await runMonteCarloSimulation(simulationParams);
+
+      // Update the scan results with new simulation results
+      const updatedResults = optionsData.scanResults.map(result => {
+        if (result.ticker === selectedRefineTicker) {
+          return {
+            ...result,
+            simulationResults: {
+              probabilityOfProfit: simulationResults.probabilityOfProfit,
+              expectedReturn: simulationResults.expectedReturn,
+              percentiles: simulationResults.percentiles,
+              maxLossScenario: simulationResults.maxLossScenario,
+              confidenceInterval: simulationResults.confidenceInterval,
+              simulationCount: simulationResults.simulationCount,
+              rawResults: simulationResults.rawResults
+            }
+          };
+        }
+        return result;
+      });
+
+      // Update the state with the new results
+      dispatch({
+        type: ActionType.SCAN_EARNINGS_SUCCESS,
+        payload: updatedResults
+      });
+
+      // Update the cache
+      setSimulationResultsCache(prev => new Map(prev).set(selectedRefineTicker, simulationResults));
+
+      toast({
+        title: "Simulation Refined",
+        description: `Enhanced Monte Carlo simulation completed for ${selectedRefineTicker} using your historical data.`,
+        status: "success",
+        duration: 5000,
+        isClosable: true,
+      });
+
+    } catch (error) {
+      console.error('Error running refined simulation:', error);
+      toast({
+        title: "Simulation Error",
+        description: "Failed to run enhanced simulation. Please try again.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setRefiningSimulation(false);
+    }
   };
 
   // NOTE: Removed calculateLiquidityScores function - liquidity scores are now calculated in streaming mode
@@ -1202,8 +1294,26 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
                                 handleShowChart(result.ticker, result.simulationResults);
                               }}
                               width="full"
+                              mb={1}
                             >
                               Show Chart
+                            </Button>
+                          </Tooltip>
+                          <Tooltip label="Refine simulation with historical data" placement="top">
+                            <Button
+                              size="xs"
+                              variant="outline"
+                              colorScheme="green"
+                              leftIcon={<Icon as={FiSettings} />}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRefineSimulation(result.ticker);
+                              }}
+                              width="full"
+                              isLoading={refiningSimulation && selectedRefineTicker === result.ticker}
+                              loadingText="Refining..."
+                            >
+                              Refine
                             </Button>
                           </Tooltip>
                         </VStack>
@@ -1301,6 +1411,15 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           rawSimulationData={selectedChartResults?.rawResults}
         />
       )}
+
+      {/* Refine Simulation Modal */}
+      <RefineSimulationModal
+        isOpen={refineModalOpen}
+        onClose={() => setRefineModalOpen(false)}
+        onRefine={handleRunRefinedSimulation}
+        ticker={selectedRefineTicker}
+        isLoading={refiningSimulation}
+      />
     </Box>
   );
 };

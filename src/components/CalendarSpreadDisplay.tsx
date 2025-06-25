@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Box,
   Heading,
@@ -18,12 +18,17 @@ import {
   AlertIcon,
   AlertTitle,
   AlertDescription,
+  Button,
+  HStack,
+  useToast,
 } from '@chakra-ui/react';
-import { OptimalCalendarSpread } from '../types';
+import { OptimalCalendarSpread, EnhancedHistoricalData } from '../types';
 import ScoreThermometer from './ScoreThermometer';
 import LiquidityThermometer from './LiquidityThermometer';
-import { FiInfo } from 'react-icons/fi';
+import RefineSimulationModal from './RefineSimulationModal';
+import { FiInfo, FiSettings } from 'react-icons/fi';
 import { parseLocalDate, formatShortDate, daysBetween } from '../utils/dateUtils';
+import { runMonteCarloSimulation } from '../services/monteCarloSimulation';
 
 interface CalendarSpreadDisplayProps {
   ticker: string;
@@ -31,6 +36,7 @@ interface CalendarSpreadDisplayProps {
   expectedMove: { percent: number; dollars: number };
   daysToExpiration: number;
   compact?: boolean; // Add compact mode for use in DirectSearch
+  onSimulationUpdate?: (updatedSpread: OptimalCalendarSpread) => void; // Callback for simulation updates
 }
 
 /**
@@ -39,15 +45,101 @@ interface CalendarSpreadDisplayProps {
  * This component displays the optimal calendar spread for a given ticker.
  * Can be displayed in compact mode for use within other components.
  */
-const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({ 
-  ticker, 
-  calendarSpread, 
+const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
+  ticker,
+  calendarSpread,
   expectedMove,
   daysToExpiration,
-  compact = false 
+  compact = false,
+  onSimulationUpdate
 }) => {
+  const [isRefineModalOpen, setIsRefineModalOpen] = useState(false);
+  const [isRefining, setIsRefining] = useState(false);
+  const [currentSpread, setCurrentSpread] = useState(calendarSpread);
+  const toast = useToast();
   const borderColor = useColorModeValue('gray.200', 'gray.700');
   const bgColor = useColorModeValue('white', 'gray.800');
+
+  // Handle refined simulation
+  const handleRefineSimulation = async (enhancedData: EnhancedHistoricalData) => {
+    setIsRefining(true);
+    setIsRefineModalOpen(false);
+
+    try {
+      // Get current price from expected move calculation
+      const currentPrice = expectedMove?.dollars ? expectedMove.dollars / expectedMove.percent : 0;
+      
+      if (!currentPrice) {
+        throw new Error('Unable to determine current price for simulation');
+      }
+
+      // Parse expected move percentage
+      const expectedMovePercent = (expectedMove?.percent || 0) * 100;
+
+      // Create simulation parameters with enhanced data
+      const simulationParams = {
+        ticker,
+        currentPrice,
+        expectedMovePercent,
+        metrics: {
+          avgVolume: 5000000, // Default fallback - ideally this would come from props
+          avgVolumePass: "true",
+          iv30Rv30: 1.2, // Default fallback
+          iv30Rv30Pass: "true",
+          tsSlope: -0.005, // Default fallback
+          tsSlopePass: "true"
+        },
+        liquidityScore: currentSpread.combinedLiquidity?.score || 5,
+        spreadCost: currentSpread.spreadCost,
+        enhancedHistoricalData: enhancedData
+      };
+
+      // Run enhanced Monte Carlo simulation
+      const simulationResults = await runMonteCarloSimulation(simulationParams);
+
+      // Update the spread with new simulation results
+      const updatedSpread: OptimalCalendarSpread = {
+        ...currentSpread,
+        monteCarloResults: {
+          probabilityOfProfit: simulationResults.probabilityOfProfit / 100, // Convert back to decimal
+          raw_probability: simulationResults.probabilityOfProfit / 100,
+          expectedProfit: simulationResults.expectedReturn * currentSpread.spreadCost / 100,
+          maxProfit: simulationResults.percentiles.p75 * currentSpread.spreadCost / 100,
+          returnOnRisk: simulationResults.expectedReturn / 100,
+          maxReturn: simulationResults.percentiles.p75 / 100,
+          numSimulations: simulationResults.simulationCount,
+          percentiles: simulationResults.percentiles
+        }
+      };
+
+      setCurrentSpread(updatedSpread);
+      
+      // Notify parent component if callback provided
+      if (onSimulationUpdate) {
+        onSimulationUpdate(updatedSpread);
+      }
+
+      toast({
+        title: "Simulation Refined",
+        description: `Enhanced Monte Carlo simulation completed for ${ticker} using your historical data.`,
+        status: "success",
+        duration: 5000,
+        isClosable: true,
+      });
+
+    } catch (error) {
+      console.error('Error running refined simulation:', error);
+      toast({
+        title: "Simulation Error",
+        description: "Failed to run enhanced simulation. Please try again.",
+        status: "error",
+        duration: 5000,
+        isClosable: true,
+      });
+    } finally {
+      setIsRefining(false);
+    }
+  };
   
   // Format currency
   const formatCurrency = (value: number): string => {
@@ -70,42 +162,42 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
   
   // Calculate days between expirations
   const daysBetweenExpirations = () => {
-    return daysBetween(calendarSpread.frontMonth, calendarSpread.backMonth);
+    return daysBetween(currentSpread.frontMonth, currentSpread.backMonth);
   };
   
   // Use the estimated max profit from the backend or calculate it as fallback
-  const estimatedMaxProfit = calendarSpread.estimatedMaxProfit ||
-    calendarSpread.spreadCost * 2.8; // Fallback for backward compatibility
+  const estimatedMaxProfit = currentSpread.estimatedMaxProfit ||
+    currentSpread.spreadCost * 2.8; // Fallback for backward compatibility
   
   // Use the return on risk from the backend or calculate it as fallback
-  const returnOnRisk = calendarSpread.returnOnRisk ||
-    (estimatedMaxProfit / calendarSpread.spreadCost);
+  const returnOnRisk = currentSpread.returnOnRisk ||
+    (estimatedMaxProfit / currentSpread.spreadCost);
   
   // Calculate break-even points (approximate)
-  const breakEvenLower = calendarSpread.strike - calendarSpread.spreadCost;
-  const breakEvenUpper = calendarSpread.strike + calendarSpread.spreadCost;
+  const breakEvenLower = currentSpread.strike - currentSpread.spreadCost;
+  const breakEvenUpper = currentSpread.strike + currentSpread.spreadCost;
   
   // Use the probability from the backend or calculate it as fallback
-  const standardProbability = calendarSpread.probabilityOfProfit ||
-    Math.min(0.95, 0.5 + (calendarSpread.ivDifferential * 0.5));
+  const standardProbability = currentSpread.probabilityOfProfit ||
+    Math.min(0.95, 0.5 + (currentSpread.ivDifferential * 0.5));
   
   // Use the enhanced probability from the backend or calculate it as fallback
-  const enhancedProbability = calendarSpread.enhancedProbability ||
+  const enhancedProbability = currentSpread.enhancedProbability ||
     Math.min(0.95, standardProbability * 1.06);
   
   // Get liquidity scores from the backend data
   // Handle both object and number formats for backward compatibility
-  const frontLiquidityScore = typeof calendarSpread.frontLiquidity === 'number'
-    ? calendarSpread.frontLiquidity
-    : (calendarSpread.frontLiquidity?.score || 0);
+  const frontLiquidityScore = typeof currentSpread.frontLiquidity === 'number'
+    ? currentSpread.frontLiquidity
+    : (currentSpread.frontLiquidity?.score || 0);
   
-  const backLiquidityScore = typeof calendarSpread.backLiquidity === 'number'
-    ? calendarSpread.backLiquidity
-    : (calendarSpread.backLiquidity?.score || 0);
+  const backLiquidityScore = typeof currentSpread.backLiquidity === 'number'
+    ? currentSpread.backLiquidity
+    : (currentSpread.backLiquidity?.score || 0);
   
   // Create liquidity detail objects with default values if they don't exist
-  const frontLiquidity = typeof calendarSpread.frontLiquidity === 'object' && calendarSpread.frontLiquidity
-    ? calendarSpread.frontLiquidity
+  const frontLiquidity = typeof currentSpread.frontLiquidity === 'object' && currentSpread.frontLiquidity
+    ? currentSpread.frontLiquidity
     : {
         score: frontLiquidityScore,
         spread_pct: 0.05,
@@ -115,8 +207,8 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         spread_dollars: 0.05
       };
   
-  const backLiquidity = typeof calendarSpread.backLiquidity === 'object' && calendarSpread.backLiquidity
-    ? calendarSpread.backLiquidity
+  const backLiquidity = typeof currentSpread.backLiquidity === 'object' && currentSpread.backLiquidity
+    ? currentSpread.backLiquidity
     : {
         score: backLiquidityScore,
         spread_pct: 0.05,
@@ -127,7 +219,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
       };
   
   // Create combined liquidity if it doesn't exist
-  const combinedLiquidity = calendarSpread.combinedLiquidity || {
+  const combinedLiquidity = currentSpread.combinedLiquidity || {
     score: (frontLiquidityScore + backLiquidityScore) / 2,
     front_liquidity: frontLiquidity,
     back_liquidity: backLiquidity,
@@ -136,16 +228,16 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
   };
   
   // Use actual IV values from the API if available
-  const frontMonthIV = calendarSpread.frontIv !== undefined ? calendarSpread.frontIv : 0.39; // Default to 39% if not available
-  const backMonthIV = calendarSpread.backIv !== undefined ? calendarSpread.backIv : (frontMonthIV / (1 + calendarSpread.ivDifferential));
+  const frontMonthIV = currentSpread.frontIv !== undefined ? currentSpread.frontIv : 0.39; // Default to 39% if not available
+  const backMonthIV = currentSpread.backIv !== undefined ? currentSpread.backIv : (frontMonthIV / (1 + currentSpread.ivDifferential));
   
   // Calculate strike distance from current price as percentage
   // We need to use the current price from the expected move calculation
   const currentPrice = expectedMove?.dollars ? expectedMove.dollars / expectedMove.percent : 0;
-  const strikeDistancePercent = currentPrice ? ((calendarSpread.strike / currentPrice) - 1) * 100 : 0;
+  const strikeDistancePercent = currentPrice ? ((currentSpread.strike / currentPrice) - 1) * 100 : 0;
   const isStrikeOutsideExpectedMove = Math.abs(strikeDistancePercent) > (expectedMove?.percent || 0) * 100;
   
-  const monteCarloProb = calendarSpread.monteCarloResults?.probabilityOfProfit;
+  const monteCarloProb = currentSpread.monteCarloResults?.probabilityOfProfit;
 
   return (
     <Box
@@ -158,17 +250,32 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
       borderColor="brand.500"
       bg={useColorModeValue('gray.50', 'gray.800')}
     >
-      <Heading
-        size={compact ? "sm" : "md"}
-        mb={4}
-        color="white"
-        textAlign="center"
-        borderBottom={compact ? "2px solid" : "none"}
-        borderColor="brand.500"
-        pb={2}
-      >
-        {ticker} {calendarSpread.optionType?.toUpperCase() || 'Call'} Calendar Spread Strategy
-      </Heading>
+      <Flex justify="space-between" align="center" mb={4}>
+        <Heading
+          size={compact ? "sm" : "md"}
+          color="white"
+          textAlign="center"
+          borderBottom={compact ? "2px solid" : "none"}
+          borderColor="brand.500"
+          pb={2}
+          flex="1"
+        >
+          {ticker} {currentSpread.optionType?.toUpperCase() || 'Call'} Calendar Spread Strategy
+        </Heading>
+        
+        <Button
+          size={compact ? "xs" : "sm"}
+          colorScheme="blue"
+          variant="outline"
+          leftIcon={<Icon as={FiSettings} />}
+          onClick={() => setIsRefineModalOpen(true)}
+          isLoading={isRefining}
+          loadingText="Refining..."
+          ml={4}
+        >
+          {compact ? "Refine" : "Refine Simulation"}
+        </Button>
+      </Flex>
       
       <Divider mb={4} />
       
@@ -198,9 +305,9 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           <Flex alignItems="center" gap={4} flexWrap="wrap">
             <Flex alignItems="center">
               <Text mr={2} fontSize="sm" fontWeight="bold">Strategy Score:</Text>
-              <ScoreThermometer score={calendarSpread.score} size="sm" />
+              <ScoreThermometer score={currentSpread.score} size="sm" />
               <Text ml={2} fontSize="sm" fontWeight="bold">
-                {calendarSpread.score.toFixed(0)}/100
+                {currentSpread.score.toFixed(0)}/100
               </Text>
               <Tooltip label="Normalized score (0-100) based on IV differential, cost efficiency, liquidity, and other factors">
                 <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
@@ -221,14 +328,14 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Flex>
         
         {/* Liquidity Warning Display */}
-        {calendarSpread.liquidityWarnings && (
+        {currentSpread.liquidityWarnings && (
           <Box mb={4}>
-            {(calendarSpread.liquidityWarnings.frontMonth.level !== 'safe' ||
-              calendarSpread.liquidityWarnings.backMonth.level !== 'safe') && (
+            {(currentSpread.liquidityWarnings.frontMonth.level !== 'safe' ||
+              currentSpread.liquidityWarnings.backMonth.level !== 'safe') && (
               <Alert
                 status={
-                  calendarSpread.liquidityWarnings.backMonth.level === 'high_risk' ||
-                  calendarSpread.liquidityWarnings.frontMonth.level === 'high_risk'
+                  currentSpread.liquidityWarnings.backMonth.level === 'high_risk' ||
+                  currentSpread.liquidityWarnings.frontMonth.level === 'high_risk'
                     ? 'error'
                     : 'warning'
                 }
@@ -240,17 +347,17 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
                   <AlertTitle>Liquidity Warning!</AlertTitle>
                   <AlertDescription>
                     <Text fontSize="sm" mb={2}>
-                      <strong>{calendarSpread.liquidityWarnings.thresholdInfo.tier}</strong> stock
-                      (Market Cap: ${(calendarSpread.liquidityWarnings.thresholdInfo.market_cap / 1_000_000_000).toFixed(1)}B)
+                      <strong>{currentSpread.liquidityWarnings.thresholdInfo.tier}</strong> stock
+                      (Market Cap: ${(currentSpread.liquidityWarnings.thresholdInfo.market_cap / 1_000_000_000).toFixed(1)}B)
                     </Text>
-                    {calendarSpread.liquidityWarnings.frontMonth.level !== 'safe' && (
+                    {currentSpread.liquidityWarnings.frontMonth.level !== 'safe' && (
                       <Text fontSize="sm" mb={1}>
-                        • Front month: {calendarSpread.liquidityWarnings.frontMonth.description}
+                        • Front month: {currentSpread.liquidityWarnings.frontMonth.description}
                       </Text>
                     )}
-                    {calendarSpread.liquidityWarnings.backMonth.level !== 'safe' && (
+                    {currentSpread.liquidityWarnings.backMonth.level !== 'safe' && (
                       <Text fontSize="sm" mb={1}>
-                        • Back month: {calendarSpread.liquidityWarnings.backMonth.description}
+                        • Back month: {currentSpread.liquidityWarnings.backMonth.description}
                       </Text>
                     )}
                     <Text fontSize="sm" fontStyle="italic">
@@ -266,21 +373,21 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         <Grid templateColumns="repeat(2, 1fr)" gap={4} mb={4}>
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Front Month</Text>
-            <Text fontSize="lg" fontWeight="bold">{formatShortDate(calendarSpread.frontMonth)}</Text>
+            <Text fontSize="lg" fontWeight="bold">{formatShortDate(currentSpread.frontMonth)}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(frontMonthIV * 100).toFixed(2)}%</Text>
-            <Text fontSize="sm">Short {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
+            <Text fontSize="sm">Short {currentSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Back Month</Text>
-            <Text fontSize="lg" fontWeight="bold">{formatShortDate(calendarSpread.backMonth)}</Text>
+            <Text fontSize="lg" fontWeight="bold">{formatShortDate(currentSpread.backMonth)}</Text>
             <Text fontSize="sm" color={useColorModeValue('gray.600', 'gray.300')}>IV: {(backMonthIV * 100).toFixed(2)}%</Text>
-            <Text fontSize="sm">Long {calendarSpread.optionType?.toUpperCase() || 'Call'}</Text>
+            <Text fontSize="sm">Long {currentSpread.optionType?.toUpperCase() || 'Call'}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Strike Price</Text>
-            <Text fontSize="lg" fontWeight="bold">${calendarSpread.strike.toFixed(2)}</Text>
+            <Text fontSize="lg" fontWeight="bold">${currentSpread.strike.toFixed(2)}</Text>
             
             {/* Show strike distance from current price */}
             {currentPrice > 0 && (
@@ -307,20 +414,20 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>IV Differential</Text>
-            <Text fontSize="lg" fontWeight="bold" color="green.400">{(calendarSpread.ivDifferential * 100).toFixed(2)}%</Text>
+            <Text fontSize="lg" fontWeight="bold" color="green.400">{(currentSpread.ivDifferential * 100).toFixed(2)}%</Text>
             
             {/* Display IV Quality if available */}
-            {calendarSpread.ivQuality && (
+            {currentSpread.ivQuality && (
               <Text
                 fontSize="sm"
                 fontWeight="semibold"
                 color={
-                  calendarSpread.ivQuality === "Excellent" ? "green.500" :
-                  calendarSpread.ivQuality === "Good" ? "blue.500" :
+                  currentSpread.ivQuality === "Excellent" ? "green.500" :
+                  currentSpread.ivQuality === "Good" ? "blue.500" :
                   "gray.500"
                 }
               >
-                {calendarSpread.ivQuality}
+                {currentSpread.ivQuality}
                 <Tooltip label="IV differential quality rating based on thresholds: Excellent (≥15%), Good (≥10%), Below threshold (<10%)">
                   <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
                 </Tooltip>
@@ -337,7 +444,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Flex alignItems="center">
               <Text fontWeight="bold" mb={2}>Spread Cost</Text>
-              {calendarSpread.spreadCost < 0.20 && (
+              {currentSpread.spreadCost < 0.20 && (
                 <Tooltip label="Very low spread costs often indicate pricing inefficiencies rather than opportunities">
                   <Box ml={1} mb={2}>
                     <Icon as={FiInfo} color="yellow.500" />
@@ -348,12 +455,12 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
             <Text
               fontSize="lg"
               fontWeight="bold"
-              color={calendarSpread.spreadCost < 0.15 ? "yellow.500" : "inherit"}
+              color={currentSpread.spreadCost < 0.15 ? "yellow.500" : "inherit"}
             >
-              ${calendarSpread.spreadCost.toFixed(2)}
-              {calendarSpread.spreadCost < 0.15 && " ⚠️"}
+              ${currentSpread.spreadCost.toFixed(2)}
+              {currentSpread.spreadCost < 0.15 && " ⚠️"}
             </Text>
-            {calendarSpread.spreadCost < 0.15 && (
+            {currentSpread.spreadCost < 0.15 && (
               <Text fontSize="xs" color="yellow.500">
                 Warning: Extremely low cost may indicate pricing anomalies
               </Text>
@@ -362,7 +469,7 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
             <Text fontWeight="bold" mb={2}>Max Risk</Text>
-            <Text fontSize="lg" fontWeight="bold">${calendarSpread.spreadCost.toFixed(2)}</Text>
+            <Text fontSize="lg" fontWeight="bold">${currentSpread.spreadCost.toFixed(2)}</Text>
           </Box>
           
           <Box p={3} bg={useColorModeValue('gray.50', 'gray.700')} borderRadius="md">
@@ -554,27 +661,34 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Heading>
         
         {/* Add debug logging outside of JSX completely */}
-        {calendarSpread.monteCarloResults && monteCarloProb !== undefined &&
+        {currentSpread.monteCarloResults && monteCarloProb !== undefined &&
           console.log('CalendarSpreadDisplay: monteCarloResults', {
             monteCarloProb,
-            raw_probability: calendarSpread.monteCarloResults.raw_probability,
-            numSimulations: calendarSpread.monteCarloResults.numSimulations,
-            monteCarloResults: calendarSpread.monteCarloResults
+            raw_probability: currentSpread.monteCarloResults.raw_probability,
+            numSimulations: currentSpread.monteCarloResults.numSimulations,
+            monteCarloResults: currentSpread.monteCarloResults
           })
         }
         
         <Box mb={4}>
-          {calendarSpread.monteCarloResults && monteCarloProb !== undefined ? (
+          {currentSpread.monteCarloResults && monteCarloProb !== undefined ? (
             <Box p={2} borderRadius="md" bg={useColorModeValue('blue.50', 'rgba(66, 153, 225, 0.1)')} borderWidth="1px" borderColor="blue.200">
-              <Text fontSize="sm" fontWeight="bold" color="blue.500">
-                Monte Carlo Probability: {(monteCarloProb * 100).toFixed(2)}%
-              </Text>
+              <HStack justify="space-between" align="center">
+                <Text fontSize="sm" fontWeight="bold" color="blue.500">
+                  Monte Carlo Probability: {(monteCarloProb * 100).toFixed(2)}%
+                </Text>
+                {currentSpread.monteCarloResults.raw_probability !== currentSpread.monteCarloResults.probabilityOfProfit && (
+                  <Text fontSize="xs" color="orange.500" fontWeight="bold">
+                    Enhanced with Historical Data
+                  </Text>
+                )}
+              </HStack>
               
               {/* Display raw probability if available */}
-              {calendarSpread.monteCarloResults.raw_probability !== undefined && (
+              {currentSpread.monteCarloResults.raw_probability !== undefined && (
                 <Flex alignItems="center" mt={1}>
                   <Text fontSize="xs" color="blue.500">
-                    Raw Probability: {(calendarSpread.monteCarloResults.raw_probability * 100).toFixed(2)}%
+                    Raw Probability: {(currentSpread.monteCarloResults.raw_probability * 100).toFixed(2)}%
                   </Text>
                   <Tooltip label="Raw probability before conservative adjustments are applied">
                     <span><Icon as={FiInfo} ml={1} fontSize="xs" /></span>
@@ -583,10 +697,10 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
               )}
               
               <Text fontSize="xs" color="blue.500">
-                Based on {calendarSpread.monteCarloResults.expectedProfit >= 0 ? "positive" : "negative"} expected profit of ${calendarSpread.monteCarloResults.expectedProfit.toFixed(2)}
+                Based on {currentSpread.monteCarloResults.expectedProfit >= 0 ? "positive" : "negative"} expected profit of ${currentSpread.monteCarloResults.expectedProfit.toFixed(2)}
               </Text>
               <Text fontSize="xs" color="blue.500" mt={1}>
-                Based on {calendarSpread.monteCarloResults.numSimulations?.toLocaleString() || 500} simulations
+                Based on {currentSpread.monteCarloResults.numSimulations?.toLocaleString() || 500} simulations
               </Text>
               <Text fontSize="xs" color="blue.500">
                 Simulates price movement and volatility crush with realistic transaction costs
@@ -612,6 +726,15 @@ const CalendarSpreadDisplay: React.FC<CalendarSpreadDisplayProps> = ({
         </Box>
         </>
       </Box>
+      
+      {/* Refine Simulation Modal */}
+      <RefineSimulationModal
+        isOpen={isRefineModalOpen}
+        onClose={() => setIsRefineModalOpen(false)}
+        onRefine={handleRefineSimulation}
+        ticker={ticker}
+        isLoading={isRefining}
+      />
     </Box>
   );
 };
