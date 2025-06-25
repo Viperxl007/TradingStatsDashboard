@@ -58,6 +58,8 @@ import TimeframeSelector from './TimeframeSelector';
 import TradingRecommendationPanel from './TradingRecommendationPanel';
 import ModelSelector from './ModelSelector';
 import ModernCandlestickChart from './ModernCandlestickChart';
+import ChartIndicatorControls from './ChartIndicatorControls';
+import { hasVolumeData } from '../utils/technicalIndicators';
 
 const ChartAnalysis: React.FC = () => {
   const { state, dispatch } = useData();
@@ -74,6 +76,14 @@ const ChartAnalysis: React.FC = () => {
   const [additionalContext, setAdditionalContext] = useState('');
   const [chartInstance, setChartInstance] = useState<any>(null);
   const { isOpen: isContextOpen, onOpen: onContextOpen, onClose: onContextClose } = useDisclosure();
+  
+  // Technical Indicator toggles
+  const [showVolume, setShowVolume] = useState(false);
+  const [showSMA20, setShowSMA20] = useState(false);
+  const [showSMA50, setShowSMA50] = useState(false);
+  const [showSMA200, setShowSMA200] = useState(false);
+  const [showVWAP, setShowVWAP] = useState(false);
+  const [chartData, setChartData] = useState<any[]>([]);
   
   // Get chart analysis state
   const {
@@ -378,6 +388,20 @@ const ChartAnalysis: React.FC = () => {
     setAdditionalContext('');
     setChartInstance(null); // Reset chart instance
     setActiveTab(0);
+    setChartData([]); // Reset chart data for indicators
+    
+    // Reset timeframe and period to defaults
+    setTimeframe('1D'); // Reset to default 1D timeframe
+    setCustomPeriod('6mo'); // Reset to default 6 month period
+    
+    // Reset ALL technical indicator states to OFF
+    setShowVolume(false);
+    setShowSMA20(false);
+    setShowSMA50(false);
+    setShowSMA200(false);
+    setShowVWAP(false);
+    
+    console.log('🔄 [ChartAnalysis] Complete state reset - timeframe: 1D, indicators: all OFF');
     
     toast({
       title: 'Reset Complete',
@@ -438,20 +462,34 @@ const ChartAnalysis: React.FC = () => {
       console.log('📸 Attempting to capture screenshot...');
       let screenshot: string;
 
-      // Try native screenshot first if chart instance is available
+      // Start capturing mode to prevent chart cleanup
+      if (chartInstance && typeof (chartInstance as any).startCapturing === 'function') {
+        console.log('🎯 [ChartAnalysis] Starting capture mode');
+        (chartInstance as any).startCapturing();
+      }
+
       try {
-        console.log('🎯 Trying native chart screenshot method...');
-        screenshot = await captureChartScreenshotNative(chartInstance);
-        console.log('✅ Native screenshot successful!');
-      } catch (nativeError) {
-        console.warn('⚠️ Native screenshot failed, falling back to html2canvas:', nativeError);
-        
-        // Fallback to html2canvas method
-        const chartContainer = document.querySelector('[data-testid="modern-chart-container"]') as HTMLElement;
-        if (!chartContainer) {
-          throw new Error('Chart container not found for fallback capture method');
+        // Try native screenshot first if chart instance is available
+        try {
+          console.log('🎯 Trying native chart screenshot method...');
+          screenshot = await captureChartScreenshotNative(chartInstance);
+          console.log('✅ Native screenshot successful!');
+        } catch (nativeError) {
+          console.warn('⚠️ Native screenshot failed, falling back to html2canvas:', nativeError);
+          
+          // Fallback to html2canvas method
+          const chartContainer = document.querySelector('[data-testid="modern-chart-container"]') as HTMLElement;
+          if (!chartContainer) {
+            throw new Error('Chart container not found for fallback capture method');
+          }
+          screenshot = await captureChartScreenshot(chartContainer);
         }
-        screenshot = await captureChartScreenshot(chartContainer);
+      } finally {
+        // Stop capturing mode
+        if (chartInstance && typeof (chartInstance as any).stopCapturing === 'function') {
+          console.log('🎯 [ChartAnalysis] Stopping capture mode');
+          (chartInstance as any).stopCapturing();
+        }
       }
 
       console.log('✅ Screenshot captured successfully, length:', screenshot.length);
@@ -903,7 +941,7 @@ const ChartAnalysis: React.FC = () => {
                       symbol={selectedTicker}
                       timeframe={timeframe}
                       period={customPeriod}
-                      height="650px"
+                      height="700px"
                       width="100%"
                       keyLevels={currentAnalysis?.keyLevels || []}
                       showHeader={true}
@@ -912,6 +950,29 @@ const ChartAnalysis: React.FC = () => {
                       onChartReady={handleChartReady}
                       onTimeframeChange={handleTimeframeChange}
                       currentAnalysis={currentAnalysis}
+                      showVolume={showVolume}
+                      showSMA20={showSMA20}
+                      showSMA50={showSMA50}
+                      showSMA200={showSMA200}
+                      showVWAP={showVWAP}
+                      onDataLoaded={setChartData}
+                    />
+                  </Box>
+                  
+                  {/* Chart Indicator Controls */}
+                  <Box>
+                    <ChartIndicatorControls
+                      showVolume={showVolume}
+                      showSMA20={showSMA20}
+                      showSMA50={showSMA50}
+                      showSMA200={showSMA200}
+                      showVWAP={showVWAP}
+                      onToggleVolume={setShowVolume}
+                      onToggleSMA20={setShowSMA20}
+                      onToggleSMA50={setShowSMA50}
+                      onToggleSMA200={setShowSMA200}
+                      onToggleVWAP={setShowVWAP}
+                      hasVolumeData={hasVolumeData(chartData)}
                     />
                   </Box>
                   

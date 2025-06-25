@@ -164,47 +164,49 @@ Focus on what you can clearly see in the chart. Be specific about price levels a
     def _stage_2_technical_indicators(self, image_base64: str, ticker: str, initial_data: Dict) -> Dict[str, Any]:
         """Stage 2: Detailed analysis of technical indicators."""
         prompt = f"""
-Based on this {ticker} chart, analyze ALL visible technical indicators in detail.
+Based on this {ticker} chart, analyze ONLY the specific technical indicators that are actually visible.
+
+IMPORTANT: The ONLY indicators that may be present on these charts are:
+- Volume Bars (obvious volume bars at bottom of chart)
+- 20 SMA (orange colored line)
+- 50 SMA (teal colored line)
+- 200 SMA (purple colored line)
+- VWAP (dotted very light green/cream colored line)
 
 Previous analysis context: {json.dumps(initial_data.get('chart_overview', {}), indent=2)}
 
 CRITICAL: Respond ONLY with valid JSON in this exact format:
 
 {{
-    "moving_averages": {{
-        "visible_mas": ["list all visible MAs like '20 SMA', '50 EMA', etc."],
-        "ma_analysis": {{
-            "price_vs_ma20": "above|below|at",
-            "price_vs_ma50": "above|below|at",
-            "price_vs_ma200": "above|below|at",
-            "ma_alignment": "bullish|bearish|mixed",
-            "ma_slopes": "all_rising|all_falling|mixed"
-        }}
-    }},
     "volume_analysis": {{
-        "volume_trend": "increasing|decreasing|stable|irregular",
-        "volume_vs_average": "above_average|below_average|average",
-        "volume_price_correlation": "positive|negative|neutral",
-        "volume_spikes": ["list significant volume events"]
+        "volume_visible": true|false,
+        "volume_trend": "increasing|decreasing|stable|irregular|not_visible",
+        "volume_vs_average": "above_average|below_average|average|not_visible",
+        "volume_price_correlation": "positive|negative|neutral|not_visible",
+        "volume_spikes": ["list significant volume events or empty array if not visible"]
     }},
-    "momentum_indicators": {{
-        "rsi_reading": 0-100,
-        "rsi_condition": "overbought|oversold|neutral",
-        "macd_signal": "bullish|bearish|neutral",
-        "macd_histogram": "rising|falling|flat",
-        "stochastic": "overbought|oversold|neutral"
+    "moving_averages": {{
+        "sma_20_visible": true|false,
+        "sma_20_color_confirmed": "orange|other|not_visible",
+        "sma_50_visible": true|false,
+        "sma_50_color_confirmed": "teal|other|not_visible",
+        "sma_200_visible": true|false,
+        "sma_200_color_confirmed": "purple|other|not_visible",
+        "price_vs_sma20": "above|below|at|not_visible",
+        "price_vs_sma50": "above|below|at|not_visible",
+        "price_vs_sma200": "above|below|at|not_visible",
+        "sma_alignment": "bullish|bearish|mixed|not_enough_data",
+        "sma_slopes": "all_rising|all_falling|mixed|not_enough_data"
     }},
-    "volatility_indicators": {{
-        "bollinger_bands": {{
-            "position": "upper|middle|lower|outside",
-            "squeeze": true|false,
-            "expansion": true|false
-        }},
-        "atr_assessment": "high|normal|low"
+    "vwap_analysis": {{
+        "vwap_visible": true|false,
+        "vwap_color_confirmed": "light_green_cream_dotted|other|not_visible",
+        "price_vs_vwap": "above|below|at|not_visible",
+        "vwap_slope": "rising|falling|flat|not_visible"
     }}
 }}
 
-Be precise about what you can actually see. If an indicator isn't visible, don't guess.
+NEVER make up indicators that you don't clearly see. Only analyze what is actually visible on the chart. If you don't see an indicator, mark it as not_visible or false.
 """
         
         return self._make_api_request(image_base64, prompt, "stage_2")
@@ -522,7 +524,19 @@ Be specific with exact price levels and realistic probability assessments.
             data_completeness = 0.0
             if levels.get('support_levels') or levels.get('resistance_levels'):
                 data_completeness += 0.3
-            if technical.get('moving_averages'):
+            
+            # Check for any visible technical indicators
+            technical_indicators_found = False
+            if technical.get('volume_analysis', {}).get('volume_visible', False):
+                technical_indicators_found = True
+            if technical.get('moving_averages', {}).get('sma_20_visible', False) or \
+               technical.get('moving_averages', {}).get('sma_50_visible', False) or \
+               technical.get('moving_averages', {}).get('sma_200_visible', False):
+                technical_indicators_found = True
+            if technical.get('vwap_analysis', {}).get('vwap_visible', False):
+                technical_indicators_found = True
+            
+            if technical_indicators_found:
                 data_completeness += 0.3
             if trading.get('trading_bias'):
                 data_completeness += 0.4
@@ -600,39 +614,69 @@ Be specific with exact price levels and realistic probability assessments.
         try:
             formatted_indicators = []
             
-            # Moving averages
-            ma_analysis = technical.get('moving_averages', {}).get('ma_analysis', {})
-            if ma_analysis:
-                ma_signal = 'bullish' if ma_analysis.get('ma_alignment') == 'bullish' else 'bearish'
-                formatted_indicators.append({
-                    "name": "Moving Averages",
-                    "value": 0,  # Could calculate a score
-                    "signal": ma_signal,
-                    "description": f"MA alignment is {ma_analysis.get('ma_alignment', 'mixed')}"
-                })
-            
-            # RSI
-            momentum = technical.get('momentum_indicators', {})
-            if 'rsi_reading' in momentum:
-                rsi_value = momentum['rsi_reading']
-                rsi_signal = 'bullish' if rsi_value < 30 else 'bearish' if rsi_value > 70 else 'neutral'
-                formatted_indicators.append({
-                    "name": "RSI",
-                    "value": rsi_value,
-                    "signal": rsi_signal,
-                    "description": f"RSI at {rsi_value}, {momentum.get('rsi_condition', 'neutral')}"
-                })
-            
-            # Volume
+            # Volume Analysis
             volume_analysis = technical.get('volume_analysis', {})
-            if volume_analysis:
-                volume_signal = 'bullish' if volume_analysis.get('volume_trend') == 'increasing' else 'neutral'
+            if volume_analysis.get('volume_visible', False):
+                volume_trend = volume_analysis.get('volume_trend', 'not_visible')
+                if volume_trend != 'not_visible':
+                    volume_signal = 'bullish' if volume_trend == 'increasing' else 'bearish' if volume_trend == 'decreasing' else 'neutral'
+                    formatted_indicators.append({
+                        "name": "Volume Bars",
+                        "value": 0,
+                        "signal": volume_signal,
+                        "description": f"Volume trend is {volume_trend}, correlation with price is {volume_analysis.get('volume_price_correlation', 'neutral')}"
+                    })
+            
+            # Moving Averages - Only include if visible
+            ma_analysis = technical.get('moving_averages', {})
+            visible_smas = []
+            
+            # 20 SMA
+            if ma_analysis.get('sma_20_visible', False):
+                color_status = " (orange)" if ma_analysis.get('sma_20_color_confirmed') == 'orange' else ""
+                price_vs = ma_analysis.get('price_vs_sma20', 'not_visible')
+                if price_vs != 'not_visible':
+                    visible_smas.append(f"20 SMA{color_status}: price {price_vs}")
+            
+            # 50 SMA
+            if ma_analysis.get('sma_50_visible', False):
+                color_status = " (teal)" if ma_analysis.get('sma_50_color_confirmed') == 'teal' else ""
+                price_vs = ma_analysis.get('price_vs_sma50', 'not_visible')
+                if price_vs != 'not_visible':
+                    visible_smas.append(f"50 SMA{color_status}: price {price_vs}")
+            
+            # 200 SMA
+            if ma_analysis.get('sma_200_visible', False):
+                color_status = " (purple)" if ma_analysis.get('sma_200_color_confirmed') == 'purple' else ""
+                price_vs = ma_analysis.get('price_vs_sma200', 'not_visible')
+                if price_vs != 'not_visible':
+                    visible_smas.append(f"200 SMA{color_status}: price {price_vs}")
+            
+            if visible_smas:
+                ma_alignment = ma_analysis.get('sma_alignment', 'not_enough_data')
+                ma_signal = 'bullish' if ma_alignment == 'bullish' else 'bearish' if ma_alignment == 'bearish' else 'neutral'
                 formatted_indicators.append({
-                    "name": "Volume",
-                    "value": 0,
-                    "signal": volume_signal,
-                    "description": f"Volume trend is {volume_analysis.get('volume_trend', 'stable')}"
+                    "name": "Simple Moving Averages",
+                    "value": len(visible_smas),
+                    "signal": ma_signal,
+                    "description": f"Visible SMAs: {', '.join(visible_smas)}. Alignment: {ma_alignment}"
                 })
+            
+            # VWAP Analysis
+            vwap_analysis = technical.get('vwap_analysis', {})
+            if vwap_analysis.get('vwap_visible', False):
+                color_status = " (light green/cream dotted)" if vwap_analysis.get('vwap_color_confirmed') == 'light_green_cream_dotted' else ""
+                price_vs_vwap = vwap_analysis.get('price_vs_vwap', 'not_visible')
+                vwap_slope = vwap_analysis.get('vwap_slope', 'not_visible')
+                
+                if price_vs_vwap != 'not_visible':
+                    vwap_signal = 'bullish' if price_vs_vwap == 'above' else 'bearish' if price_vs_vwap == 'below' else 'neutral'
+                    formatted_indicators.append({
+                        "name": "VWAP",
+                        "value": 0,
+                        "signal": vwap_signal,
+                        "description": f"VWAP{color_status}: price {price_vs_vwap}, slope {vwap_slope}"
+                    })
             
             return formatted_indicators
             
