@@ -227,6 +227,11 @@ const SimpleChartViewer: React.FC<SimpleChartViewerProps> = ({
           showHeader={true}
           tradingRecommendation={tradingRecommendation}
           showTradingOverlays={showTradingOverlays}
+          showVolume={false}
+          showSMA20={false}
+          showSMA50={false}
+          showSMA200={false}
+          showVWAP={false}
         />
       </Box>
 

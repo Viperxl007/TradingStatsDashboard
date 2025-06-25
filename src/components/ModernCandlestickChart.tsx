@@ -1,12 +1,14 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Box, useColorMode, Spinner, Center, Text, VStack, HStack, Badge, Icon } from '@chakra-ui/react';
 import { FiTrendingUp, FiTrendingDown, FiActivity } from 'react-icons/fi';
-import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, LineStyle, LineSeries } from 'lightweight-charts';
+import { createChart, IChartApi, ISeriesApi, CandlestickData, Time, CandlestickSeries, LineStyle, LineSeries, HistogramSeries } from 'lightweight-charts';
 import { fetchMarketData } from '../services/marketDataService';
 import { KeyLevel, TradingRecommendationOverlay as TradingRecommendationType } from '../types/chartAnalysis';
+import { calculateSMA, calculateVWAP, prepareVolumeData, hasVolumeData, filterValidIndicatorData } from '../utils/technicalIndicators';
 import SupportResistanceZones from './SupportResistanceZones';
 import EnhancedTradingOverlay from './EnhancedTradingOverlay';
 import TradingLegend from './TradingLegend';
+import ChartIndicatorLegend from './ChartIndicatorLegend';
 import './ModernChart.css';
 
 interface ModernCandlestickChartProps {
@@ -22,6 +24,14 @@ interface ModernCandlestickChartProps {
   tradingRecommendation?: TradingRecommendationType | null;
   showTradingOverlays?: boolean;
   currentAnalysis?: any; // Analysis result for HOLD message display
+  // Technical Indicators
+  showVolume?: boolean;
+  showSMA20?: boolean;
+  showSMA50?: boolean;
+  showSMA200?: boolean;
+  showVWAP?: boolean;
+  onDataLoaded?: (data: CandlestickData[]) => void;
+  onCapturingStateChange?: (isCapturing: boolean) => void;
 }
 
 /**
@@ -35,7 +45,7 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   symbol,
   timeframe = '1D',
   period,
-  height = '600px',
+  height = '700px',
   width = '100%',
   onChartReady,
   onTimeframeChange,
@@ -43,16 +53,51 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   showHeader = true,
   tradingRecommendation = null,
   showTradingOverlays = true,
-  currentAnalysis = null
+  currentAnalysis = null,
+  // Technical Indicators
+  showVolume = false,
+  showSMA20 = false,
+  showSMA50 = false,
+  showSMA200 = false,
+  showVWAP = false,
+  onDataLoaded,
+  onCapturingStateChange
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  
+  // Technical Indicator Series References
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+  const sma20SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const sma50SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const sma200SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+  
   const { colorMode } = useColorMode();
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [marketData, setMarketData] = useState<CandlestickData[]>([]);
   const [priceChange, setPriceChange] = useState<{ value: number; percentage: number } | null>(null);
+  const [isCapturing, setIsCapturing] = useState(false);
+
+  // Notify parent when capturing state changes
+  useEffect(() => {
+    if (onCapturingStateChange) {
+      onCapturingStateChange(isCapturing);
+    }
+  }, [isCapturing, onCapturingStateChange]);
+
+  // Expose capturing control methods
+  const startCapturing = useCallback(() => {
+    console.log('🎯 [ModernChart] Starting capture mode');
+    setIsCapturing(true);
+  }, []);
+
+  const stopCapturing = useCallback(() => {
+    console.log('🎯 [ModernChart] Stopping capture mode');
+    setIsCapturing(false);
+  }, []);
 
   // Modern color palette with flair
   const colors = {
@@ -69,7 +114,12 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       downColorBright: '#dc2626',
       accent: '#3b82f6', // Blue accent
       accentGradient: 'linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%)',
-      volume: '#94a3b8'
+      volume: '#94a3b8',
+      // Technical Indicators
+      sma20: '#ff6b35', // Orange
+      sma50: '#4ecdc4', // Teal
+      sma200: '#9333ea', // Purple - more contrasting from teal
+      vwap: '#96ceb4'   // Light green
     },
     dark: {
       background: '#1a202c',
@@ -84,7 +134,12 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       downColorBright: '#fca5a5',
       accent: '#60a5fa', // Lighter blue for dark mode
       accentGradient: 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)',
-      volume: '#718096'
+      volume: '#718096',
+      // Technical Indicators (slightly brighter for dark mode)
+      sma20: '#ff8c69', // Lighter orange
+      sma50: '#5fd3ca', // Lighter teal
+      sma200: '#a855f7', // Lighter purple - more contrasting from teal
+      vwap: '#a8d8c2'   // Lighter green
     }
   };
 
@@ -134,6 +189,165 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
     }
   }, [isLoading]); // Include isLoading to ensure function updates when needed
 
+  // Add technical indicators to the chart
+  const addTechnicalIndicators = useCallback(async (chart: IChartApi, data: CandlestickData[]) => {
+    try {
+      console.log('📊 [ModernChart] Adding technical indicators...');
+      
+      // Clean up existing indicator series - only if they exist and are valid
+      try {
+        if (volumeSeriesRef.current && chart) {
+          chart.removeSeries(volumeSeriesRef.current);
+        }
+      } catch (e) {
+        console.log('🧹 [ModernChart] Volume series already removed or invalid');
+      }
+      volumeSeriesRef.current = null;
+      
+      try {
+        if (sma20SeriesRef.current && chart) {
+          chart.removeSeries(sma20SeriesRef.current);
+        }
+      } catch (e) {
+        console.log('🧹 [ModernChart] SMA20 series already removed or invalid');
+      }
+      sma20SeriesRef.current = null;
+      
+      try {
+        if (sma50SeriesRef.current && chart) {
+          chart.removeSeries(sma50SeriesRef.current);
+        }
+      } catch (e) {
+        console.log('🧹 [ModernChart] SMA50 series already removed or invalid');
+      }
+      sma50SeriesRef.current = null;
+      
+      try {
+        if (sma200SeriesRef.current && chart) {
+          chart.removeSeries(sma200SeriesRef.current);
+        }
+      } catch (e) {
+        console.log('🧹 [ModernChart] SMA200 series already removed or invalid');
+      }
+      sma200SeriesRef.current = null;
+      
+      try {
+        if (vwapSeriesRef.current && chart) {
+          chart.removeSeries(vwapSeriesRef.current);
+        }
+      } catch (e) {
+        console.log('🧹 [ModernChart] VWAP series already removed or invalid');
+      }
+      vwapSeriesRef.current = null;
+
+      // Add Volume Series
+      if (showVolume && hasVolumeData(data)) {
+        console.log('📊 [ModernChart] Adding volume series...');
+        const volumeSeries = chart.addSeries(HistogramSeries, {
+          priceFormat: {
+            type: 'volume',
+          },
+          priceScaleId: '', // Set as overlay
+          color: currentColors.volume,
+        });
+
+        // Position volume in bottom 30% of chart
+        volumeSeries.priceScale().applyOptions({
+          scaleMargins: {
+            top: 0.7, // 70% from top
+            bottom: 0,
+          },
+        });
+
+        const volumeData = prepareVolumeData(data, currentColors.upColor, currentColors.downColor);
+        volumeSeries.setData(volumeData);
+        volumeSeriesRef.current = volumeSeries;
+        console.log('✅ [ModernChart] Volume series added');
+      }
+
+      // Add SMA 20
+      if (showSMA20) {
+        console.log('📊 [ModernChart] Adding SMA 20...');
+        const sma20Data = calculateSMA(data, 20);
+        const validSMA20Data = filterValidIndicatorData(sma20Data);
+        
+        if (validSMA20Data.length > 0) {
+          const sma20Series = chart.addSeries(LineSeries, {
+            color: currentColors.sma20,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          sma20Series.setData(validSMA20Data);
+          sma20SeriesRef.current = sma20Series;
+          console.log('✅ [ModernChart] SMA 20 added');
+        }
+      }
+
+      // Add SMA 50
+      if (showSMA50) {
+        console.log('📊 [ModernChart] Adding SMA 50...');
+        const sma50Data = calculateSMA(data, 50);
+        const validSMA50Data = filterValidIndicatorData(sma50Data);
+        
+        if (validSMA50Data.length > 0) {
+          const sma50Series = chart.addSeries(LineSeries, {
+            color: currentColors.sma50,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          sma50Series.setData(validSMA50Data);
+          sma50SeriesRef.current = sma50Series;
+          console.log('✅ [ModernChart] SMA 50 added');
+        }
+      }
+
+      // Add SMA 200
+      if (showSMA200) {
+        console.log('📊 [ModernChart] Adding SMA 200...');
+        const sma200Data = calculateSMA(data, 200);
+        const validSMA200Data = filterValidIndicatorData(sma200Data);
+        
+        if (validSMA200Data.length > 0) {
+          const sma200Series = chart.addSeries(LineSeries, {
+            color: currentColors.sma200,
+            lineWidth: 2,
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          sma200Series.setData(validSMA200Data);
+          sma200SeriesRef.current = sma200Series;
+          console.log('✅ [ModernChart] SMA 200 added');
+        }
+      }
+
+      // Add VWAP
+      if (showVWAP && hasVolumeData(data)) {
+        console.log('📊 [ModernChart] Adding VWAP...');
+        const vwapData = calculateVWAP(data);
+        const validVWAPData = filterValidIndicatorData(vwapData);
+        
+        if (validVWAPData.length > 0) {
+          const vwapSeries = chart.addSeries(LineSeries, {
+            color: currentColors.vwap,
+            lineWidth: 2,
+            lineStyle: 1, // Dotted line
+            priceLineVisible: false,
+            lastValueVisible: false,
+          });
+          vwapSeries.setData(validVWAPData);
+          vwapSeriesRef.current = vwapSeries;
+          console.log('✅ [ModernChart] VWAP added');
+        }
+      }
+
+      console.log('✅ [ModernChart] Technical indicators setup complete');
+    } catch (error) {
+      console.error('❌ [ModernChart] Error adding technical indicators:', error);
+    }
+  }, [showVolume, showSMA20, showSMA50, showSMA200, showVWAP, currentColors]);
+
   // Single useEffect to handle both chart creation and data loading
   useEffect(() => {
     if (!containerRef.current) {
@@ -145,16 +359,53 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
 
     const initializeChart = async () => {
       try {
+        // Skip initialization if we're currently capturing
+        if (isCapturing) {
+          console.log('🚫 [ModernChart] Skipping chart initialization during capture');
+          return;
+        }
+        
         // Clean up existing chart if it exists
         if (chartRef.current) {
           console.log('🧹 [ModernChart] Cleaning up existing chart');
-          chartRef.current.remove();
+          try {
+            // Clean up indicator series first
+            if (volumeSeriesRef.current) {
+              try { chartRef.current.removeSeries(volumeSeriesRef.current); } catch (e) {}
+            }
+            if (sma20SeriesRef.current) {
+              try { chartRef.current.removeSeries(sma20SeriesRef.current); } catch (e) {}
+            }
+            if (sma50SeriesRef.current) {
+              try { chartRef.current.removeSeries(sma50SeriesRef.current); } catch (e) {}
+            }
+            if (sma200SeriesRef.current) {
+              try { chartRef.current.removeSeries(sma200SeriesRef.current); } catch (e) {}
+            }
+            if (vwapSeriesRef.current) {
+              try { chartRef.current.removeSeries(vwapSeriesRef.current); } catch (e) {}
+            }
+            // Remove the chart itself
+            chartRef.current.remove();
+          } catch (e) {
+            console.log('🧹 [ModernChart] Error during chart cleanup:', e);
+          }
+          
+          // Reset all references
           chartRef.current = null;
           seriesRef.current = null;
+          volumeSeriesRef.current = null;
+          sma20SeriesRef.current = null;
+          sma50SeriesRef.current = null;
+          sma200SeriesRef.current = null;
+          vwapSeriesRef.current = null;
         }
 
+        // Reset state for new chart
         setIsLoading(true);
         setError(null);
+        setMarketData([]); // Clear old market data
+        setPriceChange(null); // Clear old price change
 
         console.log('🎨 [ModernChart] Creating modern chart instance...');
         
@@ -261,6 +512,15 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         console.log(`📈 [ModernChart] RECEIVED ${data.length} DATA POINTS - Setting on chart series...`);
         candlestickSeries.setData(data);
 
+        // Notify parent component about data loading
+        if (onDataLoaded) {
+          onDataLoaded(data);
+        }
+
+        // Add technical indicators if enabled
+        console.log('📊 [ModernChart] Adding technical indicators...');
+        await addTechnicalIndicators(chart, data);
+
         // Key levels and trading overlays are now handled by separate components
         // This prevents chart recreation when switching tabs
         console.log(`📍 [ModernChart] Key levels and trading overlays will be handled by separate components`);
@@ -270,10 +530,16 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
 
         console.log('✅ [ModernChart] Chart initialization and data loading complete');
 
-        // Call onChartReady callback
+        // Call onChartReady callback with capturing control methods
         if (onChartReady) {
           console.log('🔄 [ModernChart] Calling onChartReady callback');
-          onChartReady(chart);
+          // Extend chart with capturing control methods
+          const chartWithCapturing = Object.assign(chart, {
+            startCapturing,
+            stopCapturing,
+            isCapturing: () => isCapturing
+          });
+          onChartReady(chartWithCapturing);
         }
 
         setIsLoading(false);
@@ -316,9 +582,37 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       
       if (chartRef.current) {
         console.log('🧹 [ModernChart] Cleaning up chart on unmount');
-        chartRef.current.remove();
+        try {
+          // Clean up indicator series first
+          if (volumeSeriesRef.current) {
+            try { chartRef.current.removeSeries(volumeSeriesRef.current); } catch (e) {}
+          }
+          if (sma20SeriesRef.current) {
+            try { chartRef.current.removeSeries(sma20SeriesRef.current); } catch (e) {}
+          }
+          if (sma50SeriesRef.current) {
+            try { chartRef.current.removeSeries(sma50SeriesRef.current); } catch (e) {}
+          }
+          if (sma200SeriesRef.current) {
+            try { chartRef.current.removeSeries(sma200SeriesRef.current); } catch (e) {}
+          }
+          if (vwapSeriesRef.current) {
+            try { chartRef.current.removeSeries(vwapSeriesRef.current); } catch (e) {}
+          }
+          // Remove the chart itself
+          chartRef.current.remove();
+        } catch (e) {
+          console.log('🧹 [ModernChart] Error during unmount cleanup:', e);
+        }
+        
+        // Reset all references
         chartRef.current = null;
         seriesRef.current = null;
+        volumeSeriesRef.current = null;
+        sma20SeriesRef.current = null;
+        sma50SeriesRef.current = null;
+        sma200SeriesRef.current = null;
+        vwapSeriesRef.current = null;
       }
     };
   }, [symbol, timeframe, period, colorMode]); // Recreate chart when any of these change
@@ -358,6 +652,14 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       recommendationTimeframe: tradingRecommendation?.timeframe
     });
   }, [tradingRecommendation, showTradingOverlays, timeframe]);
+
+  // Effect to handle technical indicator updates without recreating the chart
+  useEffect(() => {
+    if (!chartRef.current || !marketData || marketData.length === 0) return;
+
+    console.log('📊 [ModernChart] Updating technical indicators...');
+    addTechnicalIndicators(chartRef.current, marketData);
+  }, [showVolume, showSMA20, showSMA50, showSMA200, showVWAP, marketData]);
 
   if (error) {
     return (
@@ -416,49 +718,61 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
           background={currentColors.backgroundGradient}
           className="chart-header"
         >
-          <HStack justify="space-between" align="center">
-            <HStack spacing={3}>
-              <Text fontWeight="bold" fontSize="lg" color={currentColors.text}>
-                {symbol}
-              </Text>
-              <Badge 
-                colorScheme={timeframe.includes('m') ? 'blue' : timeframe.includes('h') ? 'purple' : 'green'}
-                variant="subtle"
-                borderRadius="full"
-                px={3}
-                py={1}
-              >
-                {timeframe}
-              </Badge>
-              {period && (
-                <Badge 
-                  colorScheme="gray"
-                  variant="outline"
+          <VStack spacing={2} align="stretch">
+            <HStack justify="space-between" align="center">
+              <HStack spacing={3}>
+                <Text fontWeight="bold" fontSize="lg" color={currentColors.text}>
+                  {symbol}
+                </Text>
+                <Badge
+                  colorScheme={timeframe.includes('m') ? 'blue' : timeframe.includes('h') ? 'purple' : 'green'}
+                  variant="subtle"
                   borderRadius="full"
                   px={3}
                   py={1}
                 >
-                  {period}
+                  {timeframe}
                 </Badge>
+                {period && (
+                  <Badge
+                    colorScheme="gray"
+                    variant="outline"
+                    borderRadius="full"
+                    px={3}
+                    py={1}
+                  >
+                    {period}
+                  </Badge>
+                )}
+              </HStack>
+              
+              {priceChange && (
+                <HStack spacing={2}>
+                  <Icon
+                    as={priceChange.value >= 0 ? FiTrendingUp : FiTrendingDown}
+                    color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
+                  />
+                  <Text
+                    fontWeight="semibold"
+                    color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
+                    fontSize="sm"
+                  >
+                    {priceChange.value >= 0 ? '+' : ''}{priceChange.percentage.toFixed(2)}%
+                  </Text>
+                </HStack>
               )}
             </HStack>
             
-            {priceChange && (
-              <HStack spacing={2}>
-                <Icon 
-                  as={priceChange.value >= 0 ? FiTrendingUp : FiTrendingDown}
-                  color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
-                />
-                <Text 
-                  fontWeight="semibold"
-                  color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
-                  fontSize="sm"
-                >
-                  {priceChange.value >= 0 ? '+' : ''}{priceChange.percentage.toFixed(2)}%
-                </Text>
-              </HStack>
-            )}
-          </HStack>
+            {/* Indicator Legend */}
+            <ChartIndicatorLegend
+              showVolume={showVolume}
+              showSMA20={showSMA20}
+              showSMA50={showSMA50}
+              showSMA200={showSMA200}
+              showVWAP={showVWAP}
+              hasVolumeData={hasVolumeData(marketData)}
+            />
+          </VStack>
         </Box>
       )}
       

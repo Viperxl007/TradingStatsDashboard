@@ -219,19 +219,26 @@ const fetchFromYahooFinanceWithProxy = async (
     
     const timestamps = result.timestamp;
     const quote = result.indicators.quote[0];
-    const { open, high, low, close } = quote;
+    const { open, high, low, close, volume } = quote;
     
     const candlestickData: CandlestickData[] = [];
     
     for (let i = 0; i < timestamps.length; i++) {
       if (open[i] != null && high[i] != null && low[i] != null && close[i] != null) {
-        candlestickData.push({
+        const dataPoint: any = {
           time: timestamps[i] as Time,
           open: Number(open[i].toFixed(2)),
           high: Number(high[i].toFixed(2)),
           low: Number(low[i].toFixed(2)),
           close: Number(close[i].toFixed(2))
-        });
+        };
+        
+        // Add volume if available
+        if (volume && volume[i] != null) {
+          dataPoint.volume = Number(volume[i]);
+        }
+        
+        candlestickData.push(dataPoint);
       }
     }
     
@@ -362,19 +369,26 @@ const fetchFromYahooFinance = async (
     
     const timestamps = result.timestamp;
     const quote = result.indicators.quote[0];
-    const { open, high, low, close } = quote;
+    const { open, high, low, close, volume } = quote;
     
     const candlestickData: CandlestickData[] = [];
     
     for (let i = 0; i < timestamps.length; i++) {
       if (open[i] != null && high[i] != null && low[i] != null && close[i] != null) {
-        candlestickData.push({
+        const dataPoint: any = {
           time: timestamps[i] as Time,
           open: Number(open[i].toFixed(2)),
           high: Number(high[i].toFixed(2)),
           low: Number(low[i].toFixed(2)),
           close: Number(close[i].toFixed(2))
-        });
+        };
+        
+        // Add volume if available
+        if (volume && volume[i] != null) {
+          dataPoint.volume = Number(volume[i]);
+        }
+        
+        candlestickData.push(dataPoint);
       }
     }
     
@@ -453,13 +467,20 @@ const fetchFromAlphaVantage = async (
     
     Object.entries(timeSeries).forEach(([dateStr, values]: [string, any]) => {
       const timestamp = Math.floor(new Date(dateStr).getTime() / 1000) as Time;
-      candlestickData.push({
+      const dataPoint: any = {
         time: timestamp,
         open: Number(parseFloat(values['1. open']).toFixed(2)),
         high: Number(parseFloat(values['2. high']).toFixed(2)),
         low: Number(parseFloat(values['3. low']).toFixed(2)),
         close: Number(parseFloat(values['4. close']).toFixed(2))
-      });
+      };
+      
+      // Add volume if available (AlphaVantage uses '5. volume')
+      if (values['5. volume']) {
+        dataPoint.volume = Number(parseFloat(values['5. volume']));
+      }
+      
+      candlestickData.push(dataPoint);
     });
     
     // Sort by time and return last 'limit' data points
@@ -684,13 +705,22 @@ const fetchFromHyperliquid = async (
     console.log(`📊 [Hyperliquid] Received ${data.length} candles`);
     
     // Convert Hyperliquid format to TradingView Lightweight Charts format
-    const candlestickData: CandlestickData[] = data.map((candle: any) => ({
-      time: Math.floor(candle.t / 1000) as Time, // Convert from milliseconds to seconds
-      open: Number(parseFloat(candle.o).toFixed(2)),
-      high: Number(parseFloat(candle.h).toFixed(2)),
-      low: Number(parseFloat(candle.l).toFixed(2)),
-      close: Number(parseFloat(candle.c).toFixed(2))
-    }));
+    const candlestickData: CandlestickData[] = data.map((candle: any) => {
+      const dataPoint: any = {
+        time: Math.floor(candle.t / 1000) as Time, // Convert from milliseconds to seconds
+        open: Number(parseFloat(candle.o).toFixed(2)),
+        high: Number(parseFloat(candle.h).toFixed(2)),
+        low: Number(parseFloat(candle.l).toFixed(2)),
+        close: Number(parseFloat(candle.c).toFixed(2))
+      };
+      
+      // Add volume if available (Hyperliquid uses 'v' for volume)
+      if (candle.v != null) {
+        dataPoint.volume = Number(parseFloat(candle.v));
+      }
+      
+      return dataPoint;
+    });
     
     // Sort by time and return last 'limit' data points
     const sortedData = candlestickData

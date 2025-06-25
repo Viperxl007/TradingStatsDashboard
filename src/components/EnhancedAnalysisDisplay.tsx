@@ -202,88 +202,132 @@ const EnhancedAnalysisDisplay: React.FC<EnhancedAnalysisDisplayProps> = ({
             </AccordionButton>
             <AccordionPanel pb={4}>
               <VStack align="stretch" spacing={4}>
-                {/* Moving Averages */}
-                {detailedAnalysis.technicalIndicators.moving_averages && (
-                  <Box>
-                    <Text fontSize="sm" fontWeight="semibold" mb={2}>Moving Averages</Text>
-                    <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
-                      <Box>
-                        <Text fontSize="xs" color="gray.500">Visible MAs</Text>
-                        <Text fontSize="sm">
-                          {detailedAnalysis.technicalIndicators.moving_averages.visible_mas?.join(', ') || 'None detected'}
-                        </Text>
-                      </Box>
-                      <Box>
-                        <Text fontSize="xs" color="gray.500">MA Alignment</Text>
-                        <Badge
-                          colorScheme={getTrendColor(detailedAnalysis.technicalIndicators.moving_averages.ma_analysis?.ma_alignment)}
-                          variant="outline"
-                        >
-                          {detailedAnalysis.technicalIndicators.moving_averages.ma_analysis?.ma_alignment || 'Unknown'}
-                        </Badge>
-                      </Box>
-                    </SimpleGrid>
-                  </Box>
-                )}
-
-                {/* Momentum Indicators */}
-                {detailedAnalysis.technicalIndicators.momentum_indicators && (
-                  <Box>
-                    <Text fontSize="sm" fontWeight="semibold" mb={2}>Momentum Indicators</Text>
-                    <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
-                      {detailedAnalysis.technicalIndicators.momentum_indicators.rsi_reading && (
-                        <Stat size="sm">
-                          <StatLabel>RSI</StatLabel>
-                          <StatNumber fontSize="md">
-                            {detailedAnalysis.technicalIndicators.momentum_indicators.rsi_reading}
-                          </StatNumber>
-                          <StatHelpText>
-                            {detailedAnalysis.technicalIndicators.momentum_indicators.rsi_condition}
-                          </StatHelpText>
-                        </Stat>
-                      )}
-                      
-                      {detailedAnalysis.technicalIndicators.momentum_indicators.macd_signal && (
-                        <Box>
-                          <Text fontSize="xs" color="gray.500">MACD Signal</Text>
-                          <Badge
-                            colorScheme={getTrendColor(detailedAnalysis.technicalIndicators.momentum_indicators.macd_signal)}
-                            variant="outline"
-                          >
-                            {detailedAnalysis.technicalIndicators.momentum_indicators.macd_signal}
-                          </Badge>
-                        </Box>
-                      )}
-                      
-                      {detailedAnalysis.technicalIndicators.momentum_indicators.stochastic && (
-                        <Box>
-                          <Text fontSize="xs" color="gray.500">Stochastic</Text>
-                          <Text fontSize="sm">
-                            {detailedAnalysis.technicalIndicators.momentum_indicators.stochastic}
-                          </Text>
-                        </Box>
-                      )}
-                    </SimpleGrid>
-                  </Box>
-                )}
-
                 {/* Volume Analysis */}
                 {detailedAnalysis.technicalIndicators.volume_analysis && (
                   <Box>
-                    <Text fontSize="sm" fontWeight="semibold" mb={2}>Volume Analysis</Text>
-                    <SimpleGrid columns={{ base: 1, md: 2 }} spacing={3}>
+                    <Text fontSize="sm" fontWeight="semibold" mb={2}>Volume Bars</Text>
+                    <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
                       <Box>
-                        <Text fontSize="xs" color="gray.500">Volume Trend</Text>
-                        <Text fontSize="sm">
-                          {detailedAnalysis.technicalIndicators.volume_analysis.volume_trend || 'Unknown'}
-                        </Text>
+                        <Text fontSize="xs" color="gray.500">Visible</Text>
+                        <Badge colorScheme={detailedAnalysis.technicalIndicators.volume_analysis.volume_visible ? 'green' : 'red'}>
+                          {detailedAnalysis.technicalIndicators.volume_analysis.volume_visible ? 'Yes' : 'No'}
+                        </Badge>
                       </Box>
+                      {detailedAnalysis.technicalIndicators.volume_analysis.volume_visible && (
+                        <>
+                          <Box>
+                            <Text fontSize="xs" color="gray.500">Volume Trend</Text>
+                            <Text fontSize="sm">
+                              {detailedAnalysis.technicalIndicators.volume_analysis.volume_trend || 'Unknown'}
+                            </Text>
+                          </Box>
+                          <Box>
+                            <Text fontSize="xs" color="gray.500">vs Average</Text>
+                            <Text fontSize="sm">
+                              {detailedAnalysis.technicalIndicators.volume_analysis.volume_vs_average || 'Unknown'}
+                            </Text>
+                          </Box>
+                        </>
+                      )}
+                    </SimpleGrid>
+                  </Box>
+                )}
+
+                {/* Simple Moving Averages */}
+                {detailedAnalysis.technicalIndicators.moving_averages && (
+                  <Box>
+                    <Text fontSize="sm" fontWeight="semibold" mb={2}>Simple Moving Averages</Text>
+                    <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
+                      {/* 20 SMA */}
                       <Box>
-                        <Text fontSize="xs" color="gray.500">vs Average</Text>
-                        <Text fontSize="sm">
-                          {detailedAnalysis.technicalIndicators.volume_analysis.volume_vs_average || 'Unknown'}
-                        </Text>
+                        <Text fontSize="xs" color="gray.500">20 SMA (Orange)</Text>
+                        <VStack align="start" spacing={1}>
+                          <Badge colorScheme={detailedAnalysis.technicalIndicators.moving_averages.sma_20_visible ? 'green' : 'red'}>
+                            {detailedAnalysis.technicalIndicators.moving_averages.sma_20_visible ? 'Visible' : 'Not Visible'}
+                          </Badge>
+                          {detailedAnalysis.technicalIndicators.moving_averages.sma_20_visible && (
+                            <Text fontSize="xs">
+                              Price: {detailedAnalysis.technicalIndicators.moving_averages.price_vs_sma20 || 'Unknown'}
+                            </Text>
+                          )}
+                        </VStack>
                       </Box>
+                      
+                      {/* 50 SMA */}
+                      <Box>
+                        <Text fontSize="xs" color="gray.500">50 SMA (Teal)</Text>
+                        <VStack align="start" spacing={1}>
+                          <Badge colorScheme={detailedAnalysis.technicalIndicators.moving_averages.sma_50_visible ? 'green' : 'red'}>
+                            {detailedAnalysis.technicalIndicators.moving_averages.sma_50_visible ? 'Visible' : 'Not Visible'}
+                          </Badge>
+                          {detailedAnalysis.technicalIndicators.moving_averages.sma_50_visible && (
+                            <Text fontSize="xs">
+                              Price: {detailedAnalysis.technicalIndicators.moving_averages.price_vs_sma50 || 'Unknown'}
+                            </Text>
+                          )}
+                        </VStack>
+                      </Box>
+                      
+                      {/* 200 SMA */}
+                      <Box>
+                        <Text fontSize="xs" color="gray.500">200 SMA (Purple)</Text>
+                        <VStack align="start" spacing={1}>
+                          <Badge colorScheme={detailedAnalysis.technicalIndicators.moving_averages.sma_200_visible ? 'green' : 'red'}>
+                            {detailedAnalysis.technicalIndicators.moving_averages.sma_200_visible ? 'Visible' : 'Not Visible'}
+                          </Badge>
+                          {detailedAnalysis.technicalIndicators.moving_averages.sma_200_visible && (
+                            <Text fontSize="xs">
+                              Price: {detailedAnalysis.technicalIndicators.moving_averages.price_vs_sma200 || 'Unknown'}
+                            </Text>
+                          )}
+                        </VStack>
+                      </Box>
+                    </SimpleGrid>
+                    
+                    {/* SMA Alignment */}
+                    {(detailedAnalysis.technicalIndicators.moving_averages.sma_20_visible ||
+                      detailedAnalysis.technicalIndicators.moving_averages.sma_50_visible ||
+                      detailedAnalysis.technicalIndicators.moving_averages.sma_200_visible) && (
+                      <Box mt={3}>
+                        <Text fontSize="xs" color="gray.500">SMA Alignment</Text>
+                        <Badge
+                          colorScheme={getTrendColor(detailedAnalysis.technicalIndicators.moving_averages.sma_alignment)}
+                          variant="outline"
+                        >
+                          {detailedAnalysis.technicalIndicators.moving_averages.sma_alignment || 'Unknown'}
+                        </Badge>
+                      </Box>
+                    )}
+                  </Box>
+                )}
+
+                {/* VWAP Analysis */}
+                {detailedAnalysis.technicalIndicators.vwap_analysis && (
+                  <Box>
+                    <Text fontSize="sm" fontWeight="semibold" mb={2}>VWAP (Light Green/Cream Dotted)</Text>
+                    <SimpleGrid columns={{ base: 1, md: 3 }} spacing={3}>
+                      <Box>
+                        <Text fontSize="xs" color="gray.500">Visible</Text>
+                        <Badge colorScheme={detailedAnalysis.technicalIndicators.vwap_analysis.vwap_visible ? 'green' : 'red'}>
+                          {detailedAnalysis.technicalIndicators.vwap_analysis.vwap_visible ? 'Yes' : 'No'}
+                        </Badge>
+                      </Box>
+                      {detailedAnalysis.technicalIndicators.vwap_analysis.vwap_visible && (
+                        <>
+                          <Box>
+                            <Text fontSize="xs" color="gray.500">Price vs VWAP</Text>
+                            <Text fontSize="sm">
+                              {detailedAnalysis.technicalIndicators.vwap_analysis.price_vs_vwap || 'Unknown'}
+                            </Text>
+                          </Box>
+                          <Box>
+                            <Text fontSize="xs" color="gray.500">VWAP Slope</Text>
+                            <Text fontSize="sm">
+                              {detailedAnalysis.technicalIndicators.vwap_analysis.vwap_slope || 'Unknown'}
+                            </Text>
+                          </Box>
+                        </>
+                      )}
                     </SimpleGrid>
                   </Box>
                 )}
