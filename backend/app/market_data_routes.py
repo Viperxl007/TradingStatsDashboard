@@ -43,23 +43,39 @@ def get_market_data(symbol):
         # Fetch data using yfinance
         data = fetch_yfinance_data(yf_symbol, timeframe, period)
         
-        if not data:
-            logger.error(f"No data found for {symbol}")
+        if data and len(data) > 0:
+            logger.info(f"✅ [MarketData] Successfully fetched {len(data)} data points for {symbol} from yfinance")
             return jsonify({
-                'error': f'No market data available for {symbol}',
                 'symbol': symbol,
-                'yf_symbol': yf_symbol
-            }), 404
+                'timeframe': timeframe,
+                'data': data,
+                'count': len(data),
+                'source': 'yfinance'
+            })
         
-        logger.info(f"Successfully fetched {len(data)} data points for {symbol}")
+        # Try Hyperliquid for crypto tokens if yfinance failed
+        if is_crypto_symbol(symbol):
+            logger.info(f"🔄 [MarketData] yfinance failed for crypto {symbol}, trying Hyperliquid...")
+            hyperliquid_data = fetch_hyperliquid_data(symbol, timeframe, period)
+            
+            if hyperliquid_data and len(hyperliquid_data) > 0:
+                logger.info(f"✅ [MarketData] Successfully fetched {len(hyperliquid_data)} data points for {symbol} from Hyperliquid")
+                return jsonify({
+                    'symbol': symbol,
+                    'timeframe': timeframe,
+                    'data': hyperliquid_data,
+                    'count': len(hyperliquid_data),
+                    'source': 'hyperliquid'
+                })
         
+        # If all methods fail
+        logger.error(f"❌ [MarketData] No data found for {symbol} from any source")
         return jsonify({
+            'error': f'No market data available for {symbol}',
             'symbol': symbol,
-            'timeframe': timeframe,
-            'data': data,
-            'count': len(data),
-            'source': 'yfinance'
-        })
+            'yf_symbol': yf_symbol,
+            'attempted_sources': ['yfinance'] + (['hyperliquid'] if is_crypto_symbol(symbol) else [])
+        }), 404
         
     except Exception as e:
         logger.error(f"Error fetching market data for {symbol}: {str(e)}")
@@ -171,3 +187,200 @@ def convert_period_to_yfinance(period):
     
     # Convert from our format to yfinance format
     return period_map.get(period, period)
+
+def is_crypto_symbol(symbol):
+    """Check if symbol is a crypto symbol"""
+    return symbol.endswith('USD') and symbol not in ['EURUSD', 'GBPUSD', 'JPYUSD']
+
+def fetch_hyperliquid_data(symbol, timeframe, period):
+    """Fetch data using Hyperliquid Perps Dex Info API"""
+    try:
+        # Convert symbol to Hyperliquid format (remove USD suffix)
+        hyperliquid_symbol = convert_to_hyperliquid_symbol(symbol)
+        logger.info(f"🔍 [Hyperliquid] Using symbol: {hyperliquid_symbol} for {symbol}")
+        
+        # Convert timeframe to Hyperliquid interval
+        interval = get_hyperliquid_interval(timeframe)
+        logger.info(f"📊 [Hyperliquid] Using interval: {interval} for timeframe: {timeframe}")
+        
+        # Calculate date range
+        import time
+        end_time = int(time.time() * 1000)  # Current time in milliseconds
+        
+        if period:
+            start_time = calculate_start_time_from_period(period, end_time)
+        else:
+            # Default to 30 days of data for better chart analysis
+            start_time = end_time - (30 * 24 * 60 * 60 * 1000)
+        
+        days_diff = round((end_time - start_time) / (24 * 60 * 60 * 1000))
+        logger.info(f"📅 [Hyperliquid] Date range: {start_time} to {end_time}")
+        logger.info(f"📊 [Hyperliquid] Requesting ~{days_diff} days of {interval} data for enhanced chart analysis")
+        
+        # Prepare request body
+        request_body = {
+            "type": "candleSnapshot",
+            "req": {
+                "coin": hyperliquid_symbol,
+                "interval": interval,
+                "startTime": start_time,
+                "endTime": end_time
+            }
+        }
+        
+        logger.info(f"🌐 [Hyperliquid] Request body: {request_body}")
+        
+        # Make API request
+        response = requests.post(
+            'https://api.hyperliquid.xyz/info',
+            json=request_body,
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        if not response.ok:
+            logger.error(f"Hyperliquid API error: {response.status_code} {response.text}")
+            return None
+        
+        data = response.json()
+        
+        if not isinstance(data, list) or len(data) == 0:
+            logger.warning(f"No data returned from Hyperliquid for {symbol}")
+            return None
+        
+        logger.info(f"📊 [Hyperliquid] Received {len(data)} candles")
+        
+        # Convert Hyperliquid format to TradingView Lightweight Charts format
+        candlestick_data = []
+        for candle in data:
+            try:
+                candlestick_data.append({
+                    'time': int(candle['t'] // 1000),  # Convert from milliseconds to seconds
+                    'open': round(float(candle['o']), 2),
+                    'high': round(float(candle['h']), 2),
+                    'low': round(float(candle['l']), 2),
+                    'close': round(float(candle['c']), 2),
+                    'volume': int(float(candle.get('v', 0)))  # Volume if available
+                })
+            except (KeyError, ValueError, TypeError) as e:
+                logger.warning(f"Skipping invalid candle data: {candle}, error: {e}")
+                continue
+        
+        # Sort by time
+        candlestick_data.sort(key=lambda x: x['time'])
+        
+        logger.info(f"✅ [Hyperliquid] Processed {len(candlestick_data)} data points")
+        return candlestick_data
+        
+    except Exception as e:
+        logger.error(f"🔴 [Hyperliquid] Fetch failed for {symbol}: {str(e)}")
+        return None
+
+def convert_to_hyperliquid_symbol(symbol):
+    """Convert symbol to Hyperliquid format"""
+    # Remove USD suffix and return base currency
+    if symbol.endswith('USD'):
+        return symbol.replace('USD', '')
+    
+    # Handle common symbol mappings
+    symbol_map = {
+        'AVAXUSD': 'AVAX',
+        'BTCUSD': 'BTC',
+        'ETHUSD': 'ETH',
+        'SOLUSD': 'SOL',
+        'ADAUSD': 'ADA',
+        'DOTUSD': 'DOT',
+        'LINKUSD': 'LINK',
+        'MATICUSD': 'MATIC',
+        'ALGOUSD': 'ALGO',
+        'ATOMUSD': 'ATOM',
+        'UNIUSD': 'UNI',
+        'AAVEUSD': 'AAVE',
+        'COMPUSD': 'COMP',
+        'MKRUSD': 'MKR',
+        'SNXUSD': 'SNX',
+        'YFIUSD': 'YFI',
+        'SUSHIUSD': 'SUSHI',
+        'CRVUSD': 'CRV',
+        'BALUSD': 'BAL',
+        'RENUSD': 'REN',
+        'KNCUSD': 'KNC',
+        'ZRXUSD': 'ZRX',
+        'BANDUSD': 'BAND',
+        'STORJUSD': 'STORJ',
+        'MANAUSD': 'MANA',
+        'SANDUSD': 'SAND',
+        'AXSUSD': 'AXS',
+        'ENJUSD': 'ENJ',
+        'CHZUSD': 'CHZ',
+        'FLOWUSD': 'FLOW',
+        'ICPUSD': 'ICP',
+        'FILUSD': 'FIL',
+        'ARUSD': 'AR',
+        'GRTUSD': 'GRT',
+        'LRCUSD': 'LRC',
+        'SKLUSD': 'SKL',
+        'ANKRUSD': 'ANKR',
+        'CTSIUSD': 'CTSI',
+        'OCEANUSD': 'OCEAN',
+        'NMRUSD': 'NMR',
+        'FETUSD': 'FET',
+        'NUUSD': 'NU',
+        'KEEPUSD': 'KEEP'
+    }
+    
+    return symbol_map.get(symbol, symbol)
+
+def get_hyperliquid_interval(timeframe):
+    """Convert timeframe to Hyperliquid interval"""
+    # Hyperliquid supported intervals: "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"
+    interval_map = {
+        '1m': '1m',
+        '5m': '5m',
+        '15m': '15m',
+        '1h': '1h',
+        '4h': '4h',
+        '1D': '1d',
+        '1W': '1w'
+    }
+    
+    return interval_map.get(timeframe, '1h')  # Default to 1h if not found
+
+def calculate_start_time_from_period(period, end_time):
+    """Calculate start time from period string"""
+    import re
+    
+    period_match = re.match(r'^(\d+)([dwmy])$', period)
+    if period_match:
+        num, unit = period_match.groups()
+        value = int(num)
+        
+        if unit == 'd':
+            return end_time - (value * 24 * 60 * 60 * 1000)
+        elif unit == 'w':
+            return end_time - (value * 7 * 24 * 60 * 60 * 1000)
+        elif unit == 'm':
+            return end_time - (value * 30 * 24 * 60 * 60 * 1000)  # Approximate month
+        elif unit == 'y':
+            return end_time - (value * 365 * 24 * 60 * 60 * 1000)  # Approximate year
+    
+    # Handle yfinance-style periods with more generous data ranges
+    period_map = {
+        '1d': 1 * 24 * 60 * 60 * 1000,
+        '5d': 5 * 24 * 60 * 60 * 1000,
+        '7d': 7 * 24 * 60 * 60 * 1000,
+        '14d': 14 * 24 * 60 * 60 * 1000,
+        '1mo': 30 * 24 * 60 * 60 * 1000,
+        '3mo': 90 * 24 * 60 * 60 * 1000,
+        '6mo': 180 * 24 * 60 * 60 * 1000,
+        '1y': 365 * 24 * 60 * 60 * 1000,
+        '2y': 730 * 24 * 60 * 60 * 1000,
+        '5y': 1825 * 24 * 60 * 60 * 1000,
+        'max': 1825 * 24 * 60 * 60 * 1000  # 5 years max for Hyperliquid
+    }
+    
+    if period in period_map:
+        return end_time - period_map[period]
+    
+    # Default to 30 days for better chart analysis
+    return end_time - (30 * 24 * 60 * 60 * 1000)
