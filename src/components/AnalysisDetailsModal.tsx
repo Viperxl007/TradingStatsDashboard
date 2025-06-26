@@ -225,6 +225,7 @@ const AnalysisDetailsModal: React.FC<AnalysisDetailsModalProps> = ({
                   <Tab>Chart Image</Tab>
                   <Tab>Trade Recommendation Chart</Tab>
                   <Tab>Trading Recommendations</Tab>
+                  <Tab>Context Assessment</Tab>
                   <Tab>Support & Resistance</Tab>
                   <Tab>Technical Analysis</Tab>
                   <Tab>Raw Data</Tab>
@@ -366,6 +367,57 @@ const AnalysisDetailsModal: React.FC<AnalysisDetailsModalProps> = ({
                           <AlertIcon />
                           No trading recommendations available for this analysis
                         </Alert>
+                      )}
+                    </VStack>
+                  </TabPanel>
+
+                  {/* Context Assessment Tab */}
+                  <TabPanel>
+                    <VStack spacing={4} align="stretch">
+                      {analysisData.analysis.context_assessment ? (
+                        <Card>
+                          <CardHeader>
+                            <HStack>
+                              <Icon as={FiActivity} color="purple.500" />
+                              <Heading size="md">Context Assessment</Heading>
+                            </HStack>
+                          </CardHeader>
+                          <CardBody>
+                            <Box
+                              p={4}
+                              bg={colorMode === 'dark' ? 'purple.900' : 'purple.50'}
+                              borderRadius="md"
+                              borderLeft="4px solid"
+                              borderLeftColor="purple.500"
+                            >
+                              <Text
+                                fontSize="sm"
+                                lineHeight="1.6"
+                                whiteSpace="pre-wrap"
+                                color={colorMode === 'dark' ? 'purple.100' : 'purple.800'}
+                              >
+                                {analysisData.analysis.context_assessment}
+                              </Text>
+                            </Box>
+                          </CardBody>
+                        </Card>
+                      ) : (
+                        <Card>
+                          <CardHeader>
+                            <HStack>
+                              <Icon as={FiActivity} color="gray.500" />
+                              <Heading size="md">Context Assessment</Heading>
+                            </HStack>
+                          </CardHeader>
+                          <CardBody>
+                            <Alert status="info">
+                              <AlertIcon />
+                              <Text fontSize="sm">
+                                No context assessment available for this analysis. This feature provides insights into how previous trading positions were considered when making the current recommendation.
+                              </Text>
+                            </Alert>
+                          </CardBody>
+                        </Card>
                       )}
                     </VStack>
                   </TabPanel>

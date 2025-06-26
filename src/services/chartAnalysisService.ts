@@ -120,6 +120,12 @@ export const analyzeChart = async (request: ChartAnalysisRequest): Promise<Chart
     console.log(`🔍 [ChartAnalysisService] Sending timeframe to backend: ${request.timeframe || '1D'}`);
     formData.append('timeframe', request.timeframe || '1D');
     
+    // Add current price for forward-looking validation
+    if (request.currentPrice) {
+      formData.append('currentPrice', request.currentPrice.toString());
+      console.log(`💰 Current price: $${request.currentPrice}`);
+    }
+    
     // Add selected model if provided
     if (request.model) {
       formData.append('model', request.model);
@@ -640,12 +646,13 @@ export const captureChartScreenshot = async (chartElement: HTMLElement): Promise
 
 /**
  * Convert chart screenshot to analysis request
- * 
+ *
  * @param ticker Stock ticker symbol
  * @param chartImage Base64 encoded chart image
  * @param timeframe Chart timeframe
  * @param additionalContext Additional context for analysis
  * @param selectedModel Selected Claude model for analysis
+ * @param currentPrice Current price for forward-looking validation
  * @returns Chart analysis request object
  */
 export const createAnalysisRequest = (
@@ -653,13 +660,15 @@ export const createAnalysisRequest = (
   chartImage: string,
   timeframe: string,
   additionalContext?: string,
-  selectedModel?: string
+  selectedModel?: string,
+  currentPrice?: number
 ): ChartAnalysisRequest => {
   return {
     ticker: ticker.toUpperCase(),
     chartImage,
     timeframe,
     additionalContext,
-    model: selectedModel
+    model: selectedModel,
+    currentPrice
   };
 };

@@ -11,6 +11,7 @@ export interface ChartAnalysisRequest {
   ticker: string;
   chartImage: string; // Base64 encoded image
   timeframe?: string;
+  currentPrice?: number; // Current price for forward-looking validation
   additionalContext?: string;
   model?: string; // Selected Claude model
 }
@@ -168,6 +169,9 @@ export interface ChartAnalysisResult {
   
   // Context data
   contextData?: any;
+  
+  // Context Assessment (NEW - Accountability Layer)
+  context_assessment?: string;
   
   // Processing info
   processing_info?: {

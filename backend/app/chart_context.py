@@ -66,6 +66,11 @@ class ChartContextManager:
                     CREATE INDEX IF NOT EXISTS idx_chart_analyses_timestamp
                     ON chart_analyses(analysis_timestamp)
                 ''')
+                # Add composite index for efficient context queries
+                cursor.execute('''
+                    CREATE INDEX IF NOT EXISTS idx_chart_analysis_ticker_timestamp
+                    ON chart_analyses (ticker, analysis_timestamp DESC)
+                ''')
                 
                 # Create key_levels table
                 cursor.execute('''

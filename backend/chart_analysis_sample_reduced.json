@@ -1,0 +1,392 @@
+{
+  "metadata": {
+    "description": "Sample historical chart analysis 'Raw Data' entry with reduced size",
+    "original_timestamp": "2025-06-25 16:48:25.849042",
+    "ticker": "VIRTUALUSD",
+    "confidence_score": 0.5,
+    "data_reduction_applied": true,
+    "reduction_rules": {
+      "image_fields": "Replaced with <IMAGE_DATA>",
+      "binary_fields": "Replaced with <BINARY_DATA>",
+      "long_strings": "Replaced with <LONG_STRING_X_CHARS> or <LONG_TEXT_FIELD_X_CHARS>",
+      "base64_data": "Replaced with <BASE64_ENCODED_DATA>",
+      "max_string_length": 200
+    }
+  },
+  "schema_sample": {
+    "id": 89,
+    "ticker": "VIRTUALUSD",
+    "analysis_timestamp": "2025-06-25 16:48:25.849042",
+    "analysis_data": {
+      "id": "VIRTUALUSD_1750884505",
+      "ticker": "VIRTUALUSD",
+      "timestamp": 1750884505.848041,
+      "timeframe": "1h",
+      "currentPrice": 1.47,
+      "priceRange": {
+        "low": 1.4,
+        "high": 2.8
+      },
+      "summary": "Overall trend is bearish with strong strength. Identified 3 support and 4 resistance levels. Trading bias is bullish with medium conviction",
+      "sentiment": "bullish",
+      "confidence": 0.9666666666666667,
+      "keyLevels": [
+        {
+          "price": 1.4,
+          "type": "support",
+          "strength": "strong",
+          "description": "Major swing low tested multiple times with strong bounces, recent bottoming action",
+          "confidence": 0.8
+        },
+        {
+          "price": 1.5,
+          "type": "support",
+          "strength": "moderate",
+          "description": "Previous significant low that provided support during initial decline",
+          "confidence": 0.6
+        },
+        {
+          "price": 1.7,
+          "type": "support",
+          "strength": "weak",
+          "description": "Minor support level from consolidation area",
+          "confidence": 0.6
+        },
+        {
+          "price": 2.2,
+          "type": "resistance",
+          "strength": "strong",
+          "description": "Failed recovery high after initial decline, strong rejection level",
+          "confidence": 0.8
+        },
+        {
+          "price": 1.9,
+          "type": "resistance",
+          "strength": "moderate",
+          "description": "Multiple tests during downtrend with rejections, confluence with moving averages",
+          "confidence": 0.6
+        },
+        {
+          "price": 1.6,
+          "type": "resistance",
+          "strength": "moderate",
+          "description": "Previous support turned resistance, recent rejection point",
+          "confidence": 0.6
+        },
+        {
+          "price": 2.8,
+          "type": "resistance",
+          "strength": "strong",
+          "description": "All-time high and major distribution area",
+          "confidence": 0.8
+        }
+      ],
+      "patterns": [
+        {
+          "name": "channel",
+          "type": "bullish",
+          "confidence": 0.7,
+          "description": "Descending channel pattern with lower highs and lower lows, price respecting channel boundaries",
+          "targetPrice": 1.2,
+          "stopLoss": null
+        }
+      ],
+      "technicalIndicators": [
+        {
+          "name": "Volume Bars",
+          "value": 0,
+          "signal": "neutral",
+          "description": "Volume trend is irregular, correlation with price is neutral"
+        },
+        {
+          "name": "Simple Moving Averages",
+          "value": 3,
+          "signal": "bearish",
+          "description": "Visible SMAs: 20 SMA (orange): price below, 50 SMA (teal): price below, 200 SMA (purple): price below. Alignment: bearish"
+        },
+        {
+          "name": "VWAP",
+          "value": 0,
+          "signal": "bearish",
+          "description": "VWAP (light green/cream dotted): price below, slope falling"
+        }
+      ],
+      "recommendations": {
+        "action": "buy",
+        "entryPrice": 1.45,
+        "targetPrice": 1.58,
+        "stopLoss": 1.38,
+        "riskReward": 1.8571428571428572,
+        "reasoning": "<LONG_STRING_321_CHARS>"
+      },
+      "detailedAnalysis": {
+        "chartOverview": {
+          "timeframe_detected": "4h",
+          "price_action_summary": "<LONG_STRING_378_CHARS>",
+          "overall_trend": "bearish",
+          "trend_strength": "strong",
+          "current_price_estimate": 1.47,
+          "price_range_visible": {
+            "low": 1.4,
+            "high": 2.8
+          }
+        },
+        "marketStructure": {
+          "higher_highs": false,
+          "higher_lows": false,
+          "lower_highs": true,
+          "lower_lows": true,
+          "consolidation_pattern": false
+        },
+        "technicalIndicators": {
+          "volume_analysis": {
+            "volume_visible": true,
+            "volume_trend": "irregular",
+            "volume_vs_average": "below_average",
+            "volume_price_correlation": "neutral",
+            "volume_spikes": [
+              "Volume spike during initial decline from peak",
+              "Elevated volume during recovery attempt around middle of chart",
+              "Recent volume pickup at current low levels"
+            ]
+          },
+          "moving_averages": {
+            "sma_20_visible": true,
+            "sma_20_color_confirmed": "orange",
+            "sma_50_visible": true,
+            "sma_50_color_confirmed": "teal",
+            "sma_200_visible": true,
+            "sma_200_color_confirmed": "purple",
+            "price_vs_sma20": "below",
+            "price_vs_sma50": "below",
+            "price_vs_sma200": "below",
+            "sma_alignment": "bearish",
+            "sma_slopes": "all_falling"
+          },
+          "vwap_analysis": {
+            "vwap_visible": true,
+            "vwap_color_confirmed": "light_green_cream_dotted",
+            "price_vs_vwap": "below",
+            "vwap_slope": "falling"
+          },
+          "stage": "stage_2",
+          "raw_response": "<LONG_STRING_1007_CHARS>"
+        },
+        "priceLevels": {
+          "support_levels": [
+            {
+              "price": 1.4,
+              "strength": "strong",
+              "tests": 3,
+              "description": "Major swing low tested multiple times with strong bounces, recent bottoming action"
+            },
+            {
+              "price": 1.5,
+              "strength": "moderate",
+              "tests": 2,
+              "description": "Previous significant low that provided support during initial decline"
+            },
+            {
+              "price": 1.7,
+              "strength": "weak",
+              "tests": 1,
+              "description": "Minor support level from consolidation area"
+            }
+          ],
+          "resistance_levels": [
+            {
+              "price": 2.2,
+              "strength": "strong",
+              "tests": 2,
+              "description": "Failed recovery high after initial decline, strong rejection level"
+            },
+            {
+              "price": 1.9,
+              "strength": "moderate",
+              "tests": 3,
+              "description": "Multiple tests during downtrend with rejections, confluence with moving averages"
+            },
+            {
+              "price": 1.6,
+              "strength": "moderate",
+              "tests": 2,
+              "description": "Previous support turned resistance, recent rejection point"
+            },
+            {
+              "price": 2.8,
+              "strength": "strong",
+              "tests": 1,
+              "description": "All-time high and major distribution area"
+            }
+          ],
+          "chart_patterns": [
+            {
+              "pattern_name": "channel",
+              "pattern_type": "continuation",
+              "completion_status": "forming",
+              "target_price": 1.2,
+              "pattern_description": "Descending channel pattern with lower highs and lower lows, price respecting channel boundaries"
+            }
+          ],
+          "key_price_zones": [
+            {
+              "zone_type": "demand",
+              "price_range": {
+                "low": 1.38,
+                "high": 1.45
+              },
+              "significance": "high",
+              "description": "Strong demand zone with multiple tests and bounces, potential reversal area"
+            },
+            {
+              "zone_type": "supply",
+              "price_range": {
+                "low": 2.15,
+                "high": 2.25
+              },
+              "significance": "high",
+              "description": "Major supply zone where recovery attempts failed, strong selling pressure"
+            },
+            {
+              "zone_type": "supply",
+              "price_range": {
+                "low": 1.85,
+                "high": 1.95
+              },
+              "significance": "medium",
+              "description": "Secondary supply zone with moving average confluence and multiple rejections"
+            }
+          ],
+          "fibonacci_levels": {
+            "retracement_levels": [
+              {
+                "level": "23.6%",
+                "price": 2.47,
+                "acting_as": "resistance"
+              },
+              {
+                "level": "38.2%",
+                "price": 2.27,
+                "acting_as": "resistance"
+              },
+              {
+                "level": "50%",
+                "price": 2.1,
+                "acting_as": "resistance"
+              },
+              {
+                "level": "61.8%",
+                "price": 1.93,
+                "acting_as": "resistance"
+              },
+              {
+                "level": "78.6%",
+                "price": 1.7,
+                "acting_as": "support"
+              }
+            ],
+            "extension_levels": [
+              {
+                "level": "127.2%",
+                "price": 1.2,
+                "target_type": "conservative"
+              },
+              {
+                "level": "161.8%",
+                "price": 0.91,
+                "target_type": "aggressive"
+              }
+            ]
+          },
+          "stage": "stage_3",
+          "raw_response": "<LONG_STRING_2837_CHARS>"
+        },
+        "tradingAnalysis": {
+          "trading_bias": {
+            "direction": "bullish",
+            "conviction": "medium",
+            "time_horizon": "swing",
+            "reasoning": "<LONG_STRING_321_CHARS>"
+          },
+          "entry_strategies": [
+            {
+              "strategy_type": "reversal",
+              "entry_price": 1.45,
+              "entry_condition": "On pullback to 1.45 support with bullish reversal candle confirmation",
+              "probability": "medium"
+            },
+            {
+              "strategy_type": "breakout",
+              "entry_price": 1.52,
+              "entry_condition": "Break above 1.52 resistance with volume confirmation",
+              "probability": "medium"
+            }
+          ],
+          "risk_management": {
+            "stop_loss_levels": [
+              {
+                "price": 1.38,
+                "type": "technical",
+                "reasoning": "Below recent swing low and key support level at 1.40"
+              }
+            ],
+            "position_sizing": "conservative",
+            "risk_reward_ratio": "1:2"
+          },
+          "profit_targets": [
+            {
+              "target_price": 1.58,
+              "target_type": "conservative",
+              "probability": "medium",
+              "reasoning": "First resistance level and 50% retracement of recent decline"
+            },
+            {
+              "target_price": 1.68,
+              "target_type": "moderate",
+              "probability": "low",
+              "reasoning": "Next significant resistance level based on previous support turned resistance"
+            }
+          ],
+          "options_strategy": {
+            "recommended_strategy": "calls",
+            "strike_suggestions": [
+              1.5,
+              1.55
+            ],
+            "expiration_guidance": "monthly",
+            "iv_consideration": "high"
+          },
+          "key_catalysts": [
+            "Break above 1.52 resistance level",
+            "Volume surge on any bounce attempt",
+            "Reclaim of 1.60 level which was previous support",
+            "Overall market sentiment improvement"
+          ],
+          "invalidation_levels": [
+            {
+              "price": 1.38,
+              "description": "Break below 1.38 would invalidate reversal thesis and suggest continuation of downtrend toward 1.30 or lower"
+            }
+          ],
+          "stage": "stage_4",
+          "raw_response": "<LONG_STRING_2335_CHARS>"
+        }
+      },
+      "analysisStages": {
+        "stage1_success": true,
+        "stage2_success": true,
+        "stage3_success": true,
+        "stage4_success": true
+      },
+      "contextData": {},
+      "chartImageUrl": null,
+      "errors": [],
+      "chartImageBase64": "<IMAGE_DATA>",
+      "markedUpChartImageBase64": "<IMAGE_DATA>"
+    },
+    "confidence_score": 0.5,
+    "image_hash": "9cee770435631b44d2de3bdd6a053f5f28395317dcf96d0926212a99ed661946",
+    "context_data": null,
+    "created_at": "2025-06-25 20:48:25"
+  }
+}

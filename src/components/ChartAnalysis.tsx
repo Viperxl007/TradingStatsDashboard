@@ -84,6 +84,7 @@ const ChartAnalysis: React.FC = () => {
   const [showSMA200, setShowSMA200] = useState(false);
   const [showVWAP, setShowVWAP] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
+  const [currentPrice, setCurrentPrice] = useState<number | undefined>(undefined);
   
   // Get chart analysis state
   const {
@@ -162,7 +163,8 @@ const ChartAnalysis: React.FC = () => {
         chartImage,
         timeframe,
         contextToUse,
-        selectedModel
+        selectedModel,
+        currentPrice
       );
       console.log(`🔍 [ChartAnalysis] Analysis request created:`, request);
       
@@ -948,6 +950,7 @@ const ChartAnalysis: React.FC = () => {
                       tradingRecommendation={activeTradingRecommendations.get(`${selectedTicker}-${timeframe}`) || null}
                       showTradingOverlays={showTradingOverlays}
                       onChartReady={handleChartReady}
+                      onCurrentPriceUpdate={setCurrentPrice}
                       onTimeframeChange={handleTimeframeChange}
                       currentAnalysis={currentAnalysis}
                       showVolume={showVolume}

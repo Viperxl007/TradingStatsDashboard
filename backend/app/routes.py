@@ -1220,6 +1220,19 @@ def analyze_chart():
         # Get selected model (optional, defaults to configured default)
         selected_model = request.form.get('model', None)
         
+        # Extract current price (for forward-looking validation)
+        current_price = request.form.get('currentPrice')
+        if current_price:
+            try:
+                current_price = float(current_price)
+                logger.info(f"💰 Current price provided: ${current_price}")
+            except ValueError:
+                logger.warning(f"⚠️ Invalid current price format: {current_price}")
+                current_price = 0.0
+        else:
+            logger.warning("⚠️ No current price provided - forward-looking validation limited")
+            current_price = 0.0
+        
         if image_file.filename == '':
             return jsonify({
                 "error": "No image file selected",
@@ -1245,25 +1258,49 @@ def analyze_chart():
             except json.JSONDecodeError:
                 logger.warning(f"Invalid context JSON for {ticker}")
         
-        # Add current market data to context
-        try:
-            current_price = get_current_price(ticker)
-            if current_price:
-                context_data['current_price'] = current_price
-        except Exception as e:
-            logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        # Add current market data to context if not already provided
+        if current_price == 0.0:
+            try:
+                fetched_price = get_current_price(ticker)
+                if fetched_price:
+                    current_price = fetched_price
+                    context_data['current_price'] = current_price
+                    logger.info(f"💰 Fetched current price: ${current_price}")
+            except Exception as e:
+                logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        else:
+            context_data['current_price'] = current_price
+        
+        # Get historical context for accountability
+        logger.info(f"🔍 Checking for historical context for {ticker}")
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        from services.analysis_context_service import AnalysisContextService
+        # Use the same database path as the existing chart_context_manager
+        context_service = AnalysisContextService(chart_context_manager.db_path)
+        historical_context = context_service.get_recent_analysis_context(
+            ticker, timeframe, current_price
+        )
+        
+        if historical_context:
+            logger.info(f"📚 Context found: {historical_context['context_urgency']} analysis from "
+                       f"{historical_context['hours_ago']:.1f}h ago with {historical_context['action']} recommendation")
+        else:
+            logger.info("📭 No relevant historical context found - proceeding with fresh analysis")
         
         # Get additional context from storage
         stored_context = chart_context_manager.get_context(ticker)
         context_data.update(stored_context)
         
-        # Perform enhanced AI analysis
+        # Perform enhanced AI analysis with historical context
         analysis_result = enhanced_chart_analyzer.analyze_chart_comprehensive(
             processing_result['processed_data'],
             ticker,
             context_data,
             timeframe=timeframe,
-            selected_model=selected_model
+            selected_model=selected_model,
+            historical_context=historical_context
         )
         
         if 'error' in analysis_result:
