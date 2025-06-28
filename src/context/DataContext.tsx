@@ -1119,6 +1119,21 @@ interface DataProviderProps {
 export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
   const [state, dispatch] = React.useReducer(dataReducer, initialState);
   
+  // Initialize AI Trade Tracker database on app start
+  React.useEffect(() => {
+    const initializeAITradeTracker = async () => {
+      try {
+        const { aiTradeTrackerDB } = await import('../services/aiTradeTrackerDB');
+        await aiTradeTrackerDB.init();
+        console.log('✅ [DataProvider] AI Trade Tracker database initialized');
+      } catch (error) {
+        console.error('❌ [DataProvider] Failed to initialize AI Trade Tracker database:', error);
+      }
+    };
+    
+    initializeAITradeTracker();
+  }, []);
+  
   return (
     <DataContext.Provider value={{ state, dispatch }}>
       {children}

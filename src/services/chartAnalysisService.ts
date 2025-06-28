@@ -131,12 +131,22 @@ export const analyzeChart = async (request: ChartAnalysisRequest): Promise<Chart
       formData.append('model', request.model);
     }
     
+    // Prepare context data including synchronization information
+    const contextData: any = {
+      timeframe: request.timeframe
+    };
+    
     if (request.additionalContext) {
-      formData.append('context', JSON.stringify({
-        timeframe: request.timeframe,
-        additionalContext: request.additionalContext
-      }));
+      contextData.additionalContext = request.additionalContext;
     }
+    
+    // Include context synchronization data if present
+    if ((request as any).contextSync) {
+      contextData.contextSync = (request as any).contextSync;
+      console.log(`🔄 [ChartAnalysisService] Including context sync data:`, (request as any).contextSync);
+    }
+    
+    formData.append('context', JSON.stringify(contextData));
     
     const response = await fetchWithRetry(`${API_BASE_URL}/analyze`, {
       method: 'POST',

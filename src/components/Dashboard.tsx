@@ -34,6 +34,7 @@ import HistoryView from './HistoryView';
 import OptionsEarningsScreener from './OptionsEarningsScreener';
 import TradeTracker from './TradeTracker';
 import ChartAnalysis from './ChartAnalysis';
+import AITradeTracker from './AITradeTracker';
 import LiquidityTrackingDashboard from './liquidityTracking/LiquidityTrackingDashboard';
 import { useData, importDataStart, importDataSuccess, importDataError, setActiveTab, toggleDarkMode } from '../context/DataContext';
 import { importData } from '../services/dataImport';
@@ -199,6 +200,7 @@ const Dashboard: React.FC = () => {
               <Tab>Options Earnings</Tab>
               <Tab>Trade Tracker</Tab>
               <Tab>Chart Analysis</Tab>
+              <Tab>AI Trade Tracker</Tab>
               <Tab>Liquidity Tracking</Tab>
             </TabList>
 
@@ -226,6 +228,9 @@ const Dashboard: React.FC = () => {
               </TabPanel>
               <TabPanel>
                 <ChartAnalysis />
+              </TabPanel>
+              <TabPanel>
+                <AITradeTracker />
               </TabPanel>
               <TabPanel>
                 <LiquidityTrackingDashboard />

@@ -51,8 +51,10 @@ import {
   clearChartOverlays
 } from '../context/DataContext';
 import { analyzeChart, getAnalysisHistory, createAnalysisRequest, deleteAnalysis, deleteAnalysesBulk, getAnalysisDetails } from '../services/chartAnalysisService';
-import { createTradingRecommendationOverlay, getActiveRecommendationsForTimeframe } from '../services/tradingRecommendationService';
+import { createTradingRecommendationOverlay, getActiveRecommendationsForTimeframe, deactivateRecommendationsForTicker } from '../services/tradingRecommendationService';
+import { processAnalysisForTradeActions } from '../services/aiTradeIntegrationService';
 import { getActiveTradeOverlay } from '../services/activeTradeService';
+import { prepareContextSync, enhanceAnalysisRequest, validateContextResponse, createEnhancedContextPrompt } from '../services/contextSynchronizationService';
 import { TradingRecommendationOverlay } from '../types/chartAnalysis';
 import ChartViewer from './ChartViewer';
 import AnalysisPanel from './AnalysisPanel';
@@ -212,11 +214,16 @@ const ChartAnalysis: React.FC = () => {
     try {
       dispatch(analyzeChartStart(selectedTicker));
       
+      // Prepare context synchronization
+      console.log(`🔄 [ChartAnalysis] Preparing context sync for ${selectedTicker}...`);
+      const contextSync = await prepareContextSync(selectedTicker, timeframe, currentPrice || 0);
+      console.log(`🧠 [ChartAnalysis] Context sync prepared:`, contextSync);
+      
       // Use the additional context from state, or override if provided
       const contextToUse = contextOverride || additionalContext.trim() || undefined;
       
       console.log(`🔍 [ChartAnalysis] Creating analysis request with timeframe: ${timeframe}`);
-      const request = createAnalysisRequest(
+      const baseRequest = createAnalysisRequest(
         selectedTicker,
         chartImage,
         timeframe,
@@ -224,10 +231,113 @@ const ChartAnalysis: React.FC = () => {
         selectedModel,
         currentPrice
       );
-      console.log(`🔍 [ChartAnalysis] Analysis request created:`, request);
       
-      const result = await analyzeChart(request);
+      // Enhance request with context synchronization
+      const enhancedRequest = enhanceAnalysisRequest(baseRequest, contextSync);
+      console.log(`✨ [ChartAnalysis] Enhanced analysis request with context sync for ${selectedTicker}`);
+      
+      const result = await analyzeChart(enhancedRequest);
+      
+      // Validate context response
+      const contextValidation = validateContextResponse(result, contextSync);
+      console.log(`🔍 [ChartAnalysis] Context validation result:`, contextValidation);
+      
+      if (!contextValidation.success && contextSync.analysisType !== 'fresh') {
+        console.warn(`⚠️ [ChartAnalysis] Context validation failed for ${selectedTicker}:`, contextValidation.error);
+        
+        toast({
+          title: 'Context Synchronization Warning',
+          description: `AI may not have received proper context: ${contextValidation.error}`,
+          status: 'warning',
+          duration: 7000,
+          isClosable: true,
+        });
+      }
+      
       dispatch(analyzeChartSuccess(result));
+      
+      // Process trade actions (close existing positions, create new trades)
+      try {
+        console.log(`🔄 [ChartAnalysis] Processing trade actions for ${selectedTicker}...`);
+        const tradeActionResult = await processAnalysisForTradeActions(result);
+        
+        if (tradeActionResult.success) {
+          console.log(`✅ [ChartAnalysis] Trade actions processed successfully:`, tradeActionResult);
+          
+          // Handle MAINTAIN status - preserve existing targets and don't create new recommendations
+          if (tradeActionResult.shouldPreserveExistingTargets && tradeActionResult.actionType === 'maintain') {
+            console.log(`🔄 [ChartAnalysis] MAINTAIN status detected - preserving existing targets for ${selectedTicker}`);
+            
+            toast({
+              title: 'Position Maintained',
+              description: `AI recommends maintaining current position for ${selectedTicker}. Existing targets preserved.`,
+              status: 'info',
+              duration: 5000,
+              isClosable: true,
+            });
+            
+            // Don't create new trading recommendation overlays when maintaining
+            // The existing active trade overlay will continue to be displayed
+            return;
+          }
+          
+          // Deactivate old trading recommendations if positions were closed
+          if (tradeActionResult.shouldDeactivateRecommendations && tradeActionResult.ticker) {
+            const updatedRecommendations = deactivateRecommendationsForTicker(
+              activeTradingRecommendations,
+              tradeActionResult.ticker
+            );
+            
+            dispatch({
+              type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
+              payload: updatedRecommendations
+            });
+            
+            console.log(`🔒 [ChartAnalysis] Deactivated old recommendations for ${tradeActionResult.ticker}`);
+          }
+          
+          // Show success message for trade actions
+          if (tradeActionResult.closedTrades?.length || tradeActionResult.newTrades?.length) {
+            let actionMessage = '';
+            if (tradeActionResult.closedTrades?.length) {
+              actionMessage += `Closed ${tradeActionResult.closedTrades.length} existing position(s). `;
+            }
+            if (tradeActionResult.newTrades?.length) {
+              actionMessage += `Created ${tradeActionResult.newTrades.length} new trade recommendation(s).`;
+            }
+            
+            toast({
+              title: 'Trade Actions Completed',
+              description: actionMessage,
+              status: 'info',
+              duration: 7000,
+              isClosable: true,
+            });
+          }
+        } else {
+          console.warn(`⚠️ [ChartAnalysis] Trade action processing had issues:`, tradeActionResult);
+          
+          if (tradeActionResult.errors?.length) {
+            toast({
+              title: 'Trade Action Warnings',
+              description: tradeActionResult.errors.join('; '),
+              status: 'warning',
+              duration: 7000,
+              isClosable: true,
+            });
+          }
+        }
+      } catch (tradeActionError) {
+        console.error(`❌ [ChartAnalysis] Error processing trade actions:`, tradeActionError);
+        // Don't fail the entire analysis if trade actions fail
+        toast({
+          title: 'Trade Action Error',
+          description: 'Analysis completed but trade actions could not be processed',
+          status: 'warning',
+          duration: 5000,
+          isClosable: true,
+        });
+      }
       
       // Create trading recommendation overlay if we have recommendations
       if (result.recommendations && result.recommendations.action !== 'hold') {

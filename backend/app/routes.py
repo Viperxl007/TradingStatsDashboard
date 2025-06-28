@@ -1290,6 +1290,14 @@ def analyze_chart():
         from services.analysis_context_service import AnalysisContextService
         # Use the same database path as the existing chart_context_manager
         context_service = AnalysisContextService(chart_context_manager.db_path)
+        
+        # Check if frontend provided context synchronization data
+        context_sync = context_data.get('contextSync', {})
+        if context_sync:
+            logger.info(f"🔄 Frontend context sync data received: {context_sync.get('analysisType', 'unknown')} analysis")
+            if context_sync.get('previousAnalysisId'):
+                logger.info(f"📋 Previous analysis ID provided: {context_sync['previousAnalysisId']}")
+        
         historical_context = context_service.get_comprehensive_context(
             ticker, timeframe, current_price
         )

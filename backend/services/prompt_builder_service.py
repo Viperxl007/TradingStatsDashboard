@@ -34,12 +34,19 @@ CURRENT MARKET STATE:
         # Add context if available (historical or active trade)
         context_section = ""
         if context and context.get('has_context'):
-            if context.get('context_type') == 'active_trade':
-                context_section = PromptBuilderService._build_active_trade_context_section(context)
-                logger.info(f"📝 Added active trade context: {context['status']} trade")
-            else:
+            # Use context_urgency to determine context type since context_type is not set
+            context_urgency = context.get('context_urgency', '')
+            if context_urgency in ['recent', 'active']:
                 context_section = PromptBuilderService._build_context_section(context)
-                logger.info(f"📝 Added historical context: {context['context_urgency']} ({context['hours_ago']:.1f}h ago)")
+                logger.info(f"📝 Added historical context: {context_urgency} ({context['hours_ago']:.1f}h ago)")
+            elif context.get('context_type') == 'active_trade':
+                # Fallback for explicit active trade context (if ever implemented)
+                context_section = PromptBuilderService._build_active_trade_context_section(context)
+                logger.info(f"📝 Added active trade context: {context.get('status', 'unknown')} trade")
+            else:
+                # Reference or other context types
+                context_section = PromptBuilderService._build_context_section(context)
+                logger.info(f"📝 Added reference context: {context_urgency} ({context['hours_ago']:.1f}h ago)")
         else:
             logger.info("📝 No context added - fresh analysis")
             
