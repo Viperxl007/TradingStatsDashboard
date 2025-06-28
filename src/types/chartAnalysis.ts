@@ -86,6 +86,7 @@ export interface TradingRecommendationOverlay {
   confidence: number;
   isActive: boolean; // Whether this recommendation is currently active/valid
   expiresAt?: number; // When this recommendation expires (timestamp)
+  isActiveTrade?: boolean; // Flag to distinguish active trades from AI recommendations
 }
 
 /**

@@ -9,6 +9,7 @@ import SupportResistanceZones from './SupportResistanceZones';
 import EnhancedTradingOverlay from './EnhancedTradingOverlay';
 import TradingLegend from './TradingLegend';
 import ChartIndicatorLegend from './ChartIndicatorLegend';
+import ActiveTradeAlert from './ActiveTradeAlert';
 import './ModernChart.css';
 
 interface ModernCandlestickChartProps {
@@ -753,6 +754,9 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
                     {period}
                   </Badge>
                 )}
+                
+                {/* Active Trade Alert */}
+                <ActiveTradeAlert ticker={symbol} />
               </HStack>
               
               {priceChange && (

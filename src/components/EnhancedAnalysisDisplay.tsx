@@ -45,6 +45,7 @@ import {
   FiDollarSign
 } from 'react-icons/fi';
 import { ChartAnalysisResult } from '../types/chartAnalysis';
+import { ActiveTradePanel } from './ActiveTradePanel';
 
 interface EnhancedAnalysisDisplayProps {
   analysis: ChartAnalysisResult;
@@ -91,6 +92,9 @@ const EnhancedAnalysisDisplay: React.FC<EnhancedAnalysisDisplayProps> = ({
 
   return (
     <VStack spacing={6} align="stretch">
+      {/* Active Trade Panel */}
+      <ActiveTradePanel ticker={ticker} />
+      
       {/* Analysis Stages Status */}
       {analysisStages && (
         <Card>

@@ -31,13 +31,17 @@ CURRENT MARKET STATE:
 - Timeframe: {timeframe}
         """.strip()
         
-        # Add historical context if available
+        # Add context if available (historical or active trade)
         context_section = ""
         if context and context.get('has_context'):
-            context_section = PromptBuilderService._build_context_section(context)
-            logger.info(f"📝 Added context section: {context['context_urgency']} ({context['hours_ago']:.1f}h ago)")
+            if context.get('context_type') == 'active_trade':
+                context_section = PromptBuilderService._build_active_trade_context_section(context)
+                logger.info(f"📝 Added active trade context: {context['status']} trade")
+            else:
+                context_section = PromptBuilderService._build_context_section(context)
+                logger.info(f"📝 Added historical context: {context['context_urgency']} ({context['hours_ago']:.1f}h ago)")
         else:
-            logger.info("📝 No historical context added - fresh analysis")
+            logger.info("📝 No context added - fresh analysis")
             
         # Forward-looking validation requirements
         forward_looking_section = PromptBuilderService._build_forward_looking_section(current_price)
@@ -81,6 +85,28 @@ Example: "context_assessment": "EXISTING POSITION CONFIRMED: The previous buy re
     def _build_context_section(context: Dict[str, Any]) -> str:
         """Build the historical context section of the prompt"""
         
+        # Build trigger status section
+        trigger_section = ""
+        if context.get('trigger_hit'):
+            trigger_details = context.get('trigger_details', {})
+            trigger_section = f"""
+🎯 ENTRY TRIGGER STATUS: ✅ TRIGGERED
+{context.get('trigger_message', 'Entry trigger was hit')}
+- Trigger occurred at: {trigger_details.get('trigger_time', 'Unknown time')}
+- Trigger price: ${trigger_details.get('trigger_price', 'N/A')}
+- Target entry price: ${trigger_details.get('entry_price', 'N/A')}
+
+🚨 CRITICAL: The entry condition HAS BEEN TRIGGERED since the last analysis. You must acknowledge this in your assessment.
+"""
+        else:
+            trigger_section = f"""
+🎯 ENTRY TRIGGER STATUS: ⏳ NOT TRIGGERED
+The entry condition has NOT been triggered since the last analysis.
+- Entry price target: ${context.get('entry_price', 'N/A')}
+- Current price: ${context.get('current_price', 'N/A')}
+- Status: Still WAITING for entry condition to be met
+"""
+        
         if context['context_urgency'] == 'recent':
             return f"""
 {context['context_message']}:
@@ -93,6 +119,8 @@ Example: "context_assessment": "EXISTING POSITION CONFIRMED: The previous buy re
 - Sentiment: {context['sentiment']} (confidence: {context.get('confidence', 0):.2f})
 - Reasoning: {context.get('reasoning', 'N/A')[:150]}...
 
+{trigger_section}
+
 🚨 CRITICAL REQUIREMENT - EXISTING POSITION ASSESSMENT:
 You MUST explicitly address this recent position in your analysis. Choose ONE of the following:
 
@@ -103,16 +131,8 @@ A) MAINTAIN EXISTING POSITION: If the previous recommendation is still valid, st
    
    🚨 IMPORTANT: The timestamp ({context['hours_ago']:.1f}h ago) refers to when the ANALYSIS was made, NOT when any trade was executed.
    
-   🔍 CRITICAL TEMPORAL ANALYSIS: You have the price when the analysis was made (${context.get('previous_analysis_price', 'N/A')}) vs current price (${context.get('current_price', 'N/A')}).
-   
-   You MUST determine and state:
-   - Has this entry condition been triggered SINCE the previous analysis was made?
-   - If PULLBACK strategy to ${context.get('entry_price', 'N/A')}: Has price dropped to that level SINCE the analysis was made at ${context.get('previous_analysis_price', 'N/A')}?
-   - If BREAKOUT strategy: Has the breakout occurred with volume SINCE the analysis was made?
-   - Current status: WAITING for entry condition OR entry condition has been TRIGGERED since analysis
-   
-   ⚠️ DO NOT assume the trade was executed just because an analysis was made. The analysis timestamp ≠ trade execution.
-   ⚠️ DO NOT assume entry condition was triggered just because price hit that level at some point - it must have happened AFTER the analysis.
+   🔍 ENTRY TRIGGER ANALYSIS: Based on candlestick data analysis:
+   {"✅ ENTRY TRIGGER HAS BEEN HIT - " + context.get('trigger_message', '') if context.get('trigger_hit') else "⏳ ENTRY TRIGGER NOT YET HIT - Still waiting for entry condition"}
    
    ⚠️ IMPORTANT: If maintaining, you MUST use the EXACT SAME entry price (${context.get('entry_price', 'N/A')}) in your recommendations.
    DO NOT suggest a different entry price unless there's a fundamental change in market structure.
@@ -145,6 +165,8 @@ you should MAINTAIN the existing position with the SAME entry price. Minor price
 - Target: ${context.get('target_price', 'N/A')} | Stop: ${context.get('stop_loss', 'N/A')}
 - Original sentiment: {context['sentiment']}
 - Original reasoning: {context.get('summary', 'N/A')[:150]}...
+
+{trigger_section}
 
 📊 ACTIVE POSITION ASSESSMENT REQUIRED:
 You MUST evaluate the existing position and provide explicit guidance:
@@ -187,6 +209,100 @@ If you choose MAINTAIN, use the EXACT SAME entry price in your recommendations.
             
         else:  # reference or error
             return f"{context['context_message']}"
+    
+    @staticmethod
+    def _build_active_trade_context_section(context: Dict[str, Any]) -> str:
+        """Build the active trade context section of the prompt"""
+        
+        trade_status = context.get('status', 'unknown')
+        action = context.get('action', 'unknown')
+        entry_price = context.get('entry_price', 0)
+        target_price = context.get('target_price')
+        stop_loss = context.get('stop_loss')
+        current_price = context.get('current_price', 0)
+        unrealized_pnl = context.get('unrealized_pnl', 0)
+        time_since_creation = context.get('time_since_creation_hours', 0)
+        time_since_trigger = context.get('time_since_trigger_hours')
+        
+        if trade_status == 'waiting':
+            return f"""
+🎯 ACTIVE TRADE MONITORING - WAITING FOR ENTRY:
+- Trade ID: {context.get('trade_id')}
+- Action: {action.upper()} at ${entry_price}
+- Entry Strategy: {context.get('entry_strategy', 'unknown')}
+- Entry Condition: {context.get('entry_condition', 'No condition specified')}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Current Price: ${current_price}
+- Time Since Setup: {time_since_creation:.1f} hours
+- Status: WAITING for entry trigger
+
+🚨 CRITICAL - ACTIVE TRADE ASSESSMENT REQUIRED:
+You MUST acknowledge this WAITING trade and assess its current status:
+
+A) MAINTAIN WAITING POSITION: If the entry condition is still valid, state:
+   "ACTIVE TRADE CONFIRMED: Maintaining {action.upper()} setup at ${entry_price}. Entry condition '{context.get('entry_condition', 'unknown')}' has not been triggered yet. Current analysis supports continuing to wait for entry."
+
+B) MODIFY ENTRY LEVELS: If market conditions have changed, state:
+   "TRADE MODIFICATION: Adjusting {action.upper()} entry from ${entry_price} to [new price] due to [specific market structure change]."
+
+C) CANCEL WAITING TRADE: If the setup is no longer valid, state:
+   "TRADE CANCELLATION: Canceling {action.upper()} setup at ${entry_price} due to [specific reason - trend invalidation/market structure change]."
+
+🔒 CONSISTENCY RULE: Unless there's a fundamental change in market structure, you should MAINTAIN the existing trade setup.
+The trade was created {time_since_creation:.1f} hours ago and is still waiting for the entry condition to be met.
+
+⚠️ You MUST explicitly address this waiting trade in your recommendations. Do not ignore it or create conflicting recommendations.
+            """.strip()
+            
+        elif trade_status == 'active':
+            pnl_text = f"${unrealized_pnl:.2f}" if unrealized_pnl != 0 else "$0.00"
+            pnl_status = "profit" if unrealized_pnl > 0 else "loss" if unrealized_pnl < 0 else "breakeven"
+            
+            return f"""
+🎯 ACTIVE TRADE MONITORING - TRADE IS OPEN:
+- Trade ID: {context.get('trade_id')}
+- Position: {action.upper()} at ${entry_price}
+- Current Price: ${current_price}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Unrealized P&L: {pnl_text} ({pnl_status})
+- Time Since Entry: {time_since_trigger:.1f} hours
+- Max Favorable: ${context.get('max_favorable_price', entry_price)}
+- Max Adverse: ${context.get('max_adverse_price', entry_price)}
+- Status: ACTIVE TRADE IN PROGRESS
+
+🚨 CRITICAL - ACTIVE TRADE MANAGEMENT REQUIRED:
+You MUST acknowledge this ACTIVE trade and provide explicit guidance:
+
+A) MAINTAIN ACTIVE POSITION: If the trade thesis still holds, state:
+   "ACTIVE TRADE CONFIRMED: Maintaining {action.upper()} position from ${entry_price}. Current P&L: {pnl_text}. Technical analysis supports holding the position toward target ${target_price}."
+
+B) SUGGEST EARLY CLOSE: ONLY if there are overwhelming technical reasons, state:
+   "EARLY CLOSE RECOMMENDED: Close {action.upper()} position at ${current_price} due to [CRITICAL market structure change]. Reason: [specific technical invalidation]."
+   
+   ⚠️ IMPORTANT: Early close should ONLY be suggested for:
+   - Major trend reversal with strong confirmation
+   - Critical support/resistance break with volume
+   - Fundamental market structure change
+   - NOT for minor pullbacks or temporary weakness
+
+C) ADJUST STOP/TARGET: If risk management needs updating, state:
+   "POSITION ADJUSTMENT: Modify stop loss to [new level] and/or target to [new level] due to [specific technical development]."
+
+🔒 BIAS TOWARD HOLDING: Unless there's overwhelming evidence of trend invalidation or major market structure change,
+you should DEFAULT to maintaining the active position. The trade is currently showing {pnl_status} of {pnl_text}.
+
+⚠️ You MUST explicitly address this active trade. Do not provide conflicting recommendations or ignore the open position.
+            """.strip()
+            
+        else:
+            return f"""
+🎯 TRADE STATUS: {trade_status.upper()}
+- Previous {action.upper()} trade at ${entry_price}
+- Current Price: ${current_price}
+- Status: Trade is no longer active
+
+📊 FRESH ANALYSIS: Since the previous trade is closed, you may provide new recommendations based on current market conditions.
+            """.strip()
     
     @staticmethod
     def _build_forward_looking_section(current_price: float) -> str:

@@ -12,6 +12,9 @@ from typing import Dict, Any, Optional, List
 import sqlite3
 import os
 from threading import Lock
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from services.active_trade_service import ActiveTradeService
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +36,7 @@ class ChartContextManager:
         self.db_path = db_path or os.path.join(os.path.dirname(__file__), '..', 'instance', 'chart_analysis.db')
         self.db_lock = Lock()
         self._ensure_database()
+        self.active_trade_service = ActiveTradeService(self.db_path)
     
     def _ensure_database(self):
         """Ensure the database and tables exist."""
@@ -132,16 +136,18 @@ class ChartContextManager:
             logger.error(f"Error initializing database: {str(e)}")
             raise
     
-    def store_analysis(self, ticker: str, analysis_data: Dict[str, Any], 
-                      image_hash: Optional[str] = None, context_data: Optional[Dict] = None) -> int:
+    def store_analysis(self, ticker: str, analysis_data: Dict[str, Any],
+                      image_hash: Optional[str] = None, context_data: Optional[Dict] = None,
+                      timeframe: str = "1h") -> int:
         """
-        Store a chart analysis in the database.
+        Store a chart analysis in the database and create active trade if applicable.
         
         Args:
             ticker (str): Stock ticker symbol
             analysis_data (Dict[str, Any]): Analysis results
             image_hash (Optional[str]): Hash of the analyzed image
             context_data (Optional[Dict]): Additional context data
+            timeframe (str): Chart timeframe
             
         Returns:
             int: Analysis ID
@@ -152,7 +158,7 @@ class ChartContextManager:
                     cursor = conn.cursor()
                     
                     cursor.execute('''
-                        INSERT INTO chart_analyses 
+                        INSERT INTO chart_analyses
                         (ticker, analysis_timestamp, analysis_data, confidence_score, image_hash, context_data)
                         VALUES (?, ?, ?, ?, ?, ?)
                     ''', (
@@ -172,6 +178,18 @@ class ChartContextManager:
                     conn.commit()
                     
                     logger.info(f"Stored analysis for {ticker} with ID {analysis_id}")
+                    
+                    # Create active trade if this analysis contains a buy/sell recommendation
+                    try:
+                        trade_id = self.active_trade_service.create_trade_from_analysis(
+                            ticker, timeframe, analysis_id, analysis_data, context_data
+                        )
+                        if trade_id:
+                            logger.info(f"Created active trade {trade_id} for {ticker} from analysis {analysis_id}")
+                    except Exception as trade_error:
+                        logger.warning(f"Failed to create active trade for {ticker}: {str(trade_error)}")
+                        # Don't fail the analysis storage if trade creation fails
+                    
                     return analysis_id
                     
         except Exception as e:
@@ -497,11 +515,35 @@ class ChartContextManager:
                     
                     cutoff_date = datetime.now() - timedelta(days=days_to_keep)
                     
-                    # Clean up old analyses
+                    # Get analyses older than cutoff date
                     cursor.execute('''
-                        DELETE FROM chart_analyses 
+                        SELECT id FROM chart_analyses
                         WHERE created_at < ?
                     ''', (cutoff_date,))
+                    
+                    old_analysis_ids = [row[0] for row in cursor.fetchall()]
+                    
+                    if old_analysis_ids:
+                        # Import and check for active trades
+                        from services.active_trade_service import ActiveTradeService
+                        active_trade_service = ActiveTradeService()
+                        
+                        # Get analyses safe to delete (no active trades)
+                        safe_to_delete = active_trade_service.get_analyses_safe_to_delete(old_analysis_ids)
+                        
+                        if safe_to_delete:
+                            # Delete only analyses without active trades
+                            placeholders = ','.join('?' * len(safe_to_delete))
+                            cursor.execute(f'''
+                                DELETE FROM chart_analyses
+                                WHERE id IN ({placeholders})
+                            ''', safe_to_delete)
+                            
+                            logger.info(f"Cleaned up {len(safe_to_delete)} old analyses (protected {len(old_analysis_ids) - len(safe_to_delete)} with active trades)")
+                        else:
+                            logger.info(f"No old analyses could be deleted - all {len(old_analysis_ids)} have active trades")
+                    else:
+                        logger.info("No old analyses found to clean up")
                     
                     # Clean up expired context
                     cursor.execute('''
@@ -544,7 +586,15 @@ class ChartContextManager:
                     if not cursor.fetchone():
                         return False
                     
-                    # Delete the analysis
+                    # Check for active trades before deletion
+                    from services.active_trade_service import ActiveTradeService
+                    active_trade_service = ActiveTradeService()
+                    
+                    if active_trade_service.has_active_trades_for_analysis(analysis_id):
+                        logger.warning(f"Cannot delete analysis {analysis_id} - it has active trades")
+                        return False
+                    
+                    # Delete the analysis (safe - no active trades)
                     cursor.execute('DELETE FROM chart_analyses WHERE id = ?', (analysis_id,))
                     conn.commit()
                     
@@ -570,8 +620,15 @@ class ChartContextManager:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     
+                    # Check which analyses are safe to delete (no active trades)
+                    from services.active_trade_service import ActiveTradeService
+                    active_trade_service = ActiveTradeService()
+                    
+                    safe_to_delete = active_trade_service.get_analyses_safe_to_delete(analysis_ids)
+                    protected_count = len(analysis_ids) - len(safe_to_delete)
+                    
                     deleted_count = 0
-                    for analysis_id in analysis_ids:
+                    for analysis_id in safe_to_delete:
                         try:
                             cursor.execute('DELETE FROM chart_analyses WHERE id = ?', (analysis_id,))
                             if cursor.rowcount > 0:
@@ -579,6 +636,9 @@ class ChartContextManager:
                         except Exception as e:
                             logger.warning(f"Failed to delete analysis {analysis_id}: {str(e)}")
                             continue
+                    
+                    if protected_count > 0:
+                        logger.info(f"Protected {protected_count} analyses with active trades from deletion")
                     
                     conn.commit()
                     logger.info(f"Bulk deleted {deleted_count} of {len(analysis_ids)} analyses")
