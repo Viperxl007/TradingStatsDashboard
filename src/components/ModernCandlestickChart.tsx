@@ -9,6 +9,7 @@ import SupportResistanceZones from './SupportResistanceZones';
 import EnhancedTradingOverlay from './EnhancedTradingOverlay';
 import TradingLegend from './TradingLegend';
 import ChartIndicatorLegend from './ChartIndicatorLegend';
+import ActiveTradeAlert from './ActiveTradeAlert';
 import './ModernChart.css';
 
 interface ModernCandlestickChartProps {
@@ -32,6 +33,7 @@ interface ModernCandlestickChartProps {
   showVWAP?: boolean;
   onDataLoaded?: (data: CandlestickData[]) => void;
   onCapturingStateChange?: (isCapturing: boolean) => void;
+  onCurrentPriceUpdate?: (currentPrice: number) => void;
 }
 
 /**
@@ -61,7 +63,8 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   showSMA200 = false,
   showVWAP = false,
   onDataLoaded,
-  onCapturingStateChange
+  onCapturingStateChange,
+  onCurrentPriceUpdate
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -182,6 +185,13 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       }
       
       setMarketData(data);
+      
+      // Call current price callback if provided
+      if (onCurrentPriceUpdate && data.length > 0) {
+        const currentPrice = data[data.length - 1].close;
+        onCurrentPriceUpdate(currentPrice);
+      }
+      
       return data;
     } catch (error) {
       console.error('❌ [ModernChart] FETCH ERROR:', error);
@@ -744,6 +754,9 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
                     {period}
                   </Badge>
                 )}
+                
+                {/* Active Trade Alert */}
+                <ActiveTradeAlert ticker={symbol} />
               </HStack>
               
               {priceChange && (

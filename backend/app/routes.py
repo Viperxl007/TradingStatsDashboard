@@ -94,6 +94,17 @@ earnings_history_logger.addFilter(EarningsHistoryFilter())
 # Create blueprint
 api_bp = Blueprint('api', __name__, url_prefix='/api')
 
+# Import active trade service for trade management endpoints
+try:
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+    from services.active_trade_service import ActiveTradeService
+    active_trade_service = None  # Will be initialized when needed
+except ImportError:
+    logger.warning("Could not import ActiveTradeService")
+    active_trade_service = None
+
 def get_common_strikes(stock, front_month, back_month):
     """
     Get strike prices that exist in both front and back month expirations.
@@ -1220,6 +1231,19 @@ def analyze_chart():
         # Get selected model (optional, defaults to configured default)
         selected_model = request.form.get('model', None)
         
+        # Extract current price (for forward-looking validation)
+        current_price = request.form.get('currentPrice')
+        if current_price:
+            try:
+                current_price = float(current_price)
+                logger.info(f"💰 Current price provided: ${current_price}")
+            except ValueError:
+                logger.warning(f"⚠️ Invalid current price format: {current_price}")
+                current_price = 0.0
+        else:
+            logger.warning("⚠️ No current price provided - forward-looking validation limited")
+            current_price = 0.0
+        
         if image_file.filename == '':
             return jsonify({
                 "error": "No image file selected",
@@ -1245,25 +1269,60 @@ def analyze_chart():
             except json.JSONDecodeError:
                 logger.warning(f"Invalid context JSON for {ticker}")
         
-        # Add current market data to context
-        try:
-            current_price = get_current_price(ticker)
-            if current_price:
-                context_data['current_price'] = current_price
-        except Exception as e:
-            logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        # Add current market data to context if not already provided
+        if current_price == 0.0:
+            try:
+                fetched_price = get_current_price(ticker)
+                if fetched_price:
+                    current_price = fetched_price
+                    context_data['current_price'] = current_price
+                    logger.info(f"💰 Fetched current price: ${current_price}")
+            except Exception as e:
+                logger.warning(f"Could not get current price for {ticker}: {str(e)}")
+        else:
+            context_data['current_price'] = current_price
+        
+        # Get comprehensive context (historical + active trades)
+        logger.info(f"🔍 Checking for historical context for {ticker}")
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        from services.analysis_context_service import AnalysisContextService
+        # Use the same database path as the existing chart_context_manager
+        context_service = AnalysisContextService(chart_context_manager.db_path)
+        
+        # Check if frontend provided context synchronization data
+        context_sync = context_data.get('contextSync', {})
+        if context_sync:
+            logger.info(f"🔄 Frontend context sync data received: {context_sync.get('analysisType', 'unknown')} analysis")
+            if context_sync.get('previousAnalysisId'):
+                logger.info(f"📋 Previous analysis ID provided: {context_sync['previousAnalysisId']}")
+        
+        historical_context = context_service.get_comprehensive_context(
+            ticker, timeframe, current_price
+        )
+        
+        if historical_context:
+            if historical_context.get('context_type') == 'active_trade':
+                logger.info(f"🎯 Active trade found: {historical_context['status']} {historical_context['action']} at ${historical_context['entry_price']}")
+            else:
+                logger.info(f"📚 Historical context found: {historical_context['context_urgency']} analysis from "
+                           f"{historical_context['hours_ago']:.1f}h ago with {historical_context['action']} recommendation")
+        else:
+            logger.info("📭 No relevant context found - proceeding with fresh analysis")
         
         # Get additional context from storage
         stored_context = chart_context_manager.get_context(ticker)
         context_data.update(stored_context)
         
-        # Perform enhanced AI analysis
+        # Perform enhanced AI analysis with historical context
         analysis_result = enhanced_chart_analyzer.analyze_chart_comprehensive(
             processing_result['processed_data'],
             ticker,
             context_data,
             timeframe=timeframe,
-            selected_model=selected_model
+            selected_model=selected_model,
+            historical_context=historical_context
         )
         
         if 'error' in analysis_result:
@@ -1279,7 +1338,8 @@ def analyze_chart():
                 ticker,
                 analysis_result,
                 processing_result['image_hash'],
-                context_data
+                context_data,
+                timeframe
             )
             analysis_result['analysis_id'] = analysis_id
         except Exception as e:
@@ -1739,6 +1799,199 @@ def get_claude_models():
         
     except Exception as e:
         logger.error(f"Error getting Claude models: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+# ============================================================================
+# ACTIVE TRADE MANAGEMENT ENDPOINTS
+# ============================================================================
+
+def get_active_trade_service():
+    """Get or initialize the active trade service"""
+    global active_trade_service
+    if active_trade_service is None:
+        from app.chart_context import chart_context_manager
+        from services.active_trade_service import ActiveTradeService
+        active_trade_service = ActiveTradeService(chart_context_manager.db_path)
+    return active_trade_service
+
+@api_bp.route('/active-trades/<ticker>', methods=['GET'])
+def get_active_trade(ticker):
+    """
+    Get the current active trade for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Query parameters:
+        timeframe (str): Optional timeframe filter
+        
+    Returns:
+        JSON: Active trade data or null if no active trade
+    """
+    try:
+        ticker = ticker.upper().strip()
+        timeframe = request.args.get('timeframe')
+        
+        trade_service = get_active_trade_service()
+        active_trade = trade_service.get_active_trade(ticker, timeframe)
+        
+        return jsonify({
+            "ticker": ticker,
+            "active_trade": active_trade,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting active trade for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/active-trades/<ticker>/close', methods=['POST'])
+def close_active_trade(ticker):
+    """
+    Close an active trade (user override).
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Request body:
+        current_price (float): Current market price
+        notes (str): Optional notes about the closure
+        
+    Returns:
+        JSON: Success status
+    """
+    try:
+        ticker = ticker.upper().strip()
+        
+        if not request.is_json:
+            return jsonify({
+                "error": "Request must be JSON",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        data = request.get_json()
+        current_price = data.get('current_price')
+        notes = data.get('notes', '')
+        
+        if current_price is None:
+            return jsonify({
+                "error": "current_price is required",
+                "timestamp": datetime.now().timestamp()
+            }), 400
+        
+        trade_service = get_active_trade_service()
+        success = trade_service.close_trade_by_user(ticker, float(current_price), notes)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "ticker": ticker,
+                "message": "Trade closed successfully",
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": "No active trade found to close",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error closing active trade for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/active-trades/<ticker>/history', methods=['GET'])
+def get_trade_history(ticker):
+    """
+    Get trade history for a ticker.
+    
+    Args:
+        ticker (str): Stock ticker symbol
+        
+    Query parameters:
+        limit (int): Maximum number of trades to return (default: 10)
+        
+    Returns:
+        JSON: Trade history
+    """
+    try:
+        ticker = ticker.upper().strip()
+        limit = request.args.get('limit', 10, type=int)
+        
+        trade_service = get_active_trade_service()
+        history = trade_service.get_trade_history(ticker, limit)
+        
+        return jsonify({
+            "ticker": ticker,
+            "trade_history": history,
+            "count": len(history),
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting trade history for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/active-trades/all', methods=['GET'])
+def get_all_active_trades():
+    """
+    Get all currently active trades across all tickers.
+    
+    Returns:
+        JSON: List of all active trades
+    """
+    try:
+        trade_service = get_active_trade_service()
+        
+        # Query all active trades from database
+        import sqlite3
+        with sqlite3.connect(trade_service.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT ticker, timeframe, status, action, entry_price, target_price,
+                       stop_loss, current_price, unrealized_pnl, created_at, updated_at
+                FROM active_trades
+                WHERE status IN ('waiting', 'active')
+                ORDER BY updated_at DESC
+            ''')
+            
+            active_trades = []
+            for row in cursor.fetchall():
+                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at = row
+                active_trades.append({
+                    'ticker': ticker,
+                    'timeframe': timeframe,
+                    'status': status,
+                    'action': action,
+                    'entry_price': entry_price,
+                    'target_price': target_price,
+                    'stop_loss': stop_loss,
+                    'current_price': current_price,
+                    'unrealized_pnl': unrealized_pnl,
+                    'created_at': created_at,
+                    'updated_at': updated_at
+                })
+        
+        return jsonify({
+            "active_trades": active_trades,
+            "count": len(active_trades),
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting all active trades: {str(e)}")
         return jsonify({
             "error": str(e),
             "timestamp": datetime.now().timestamp()

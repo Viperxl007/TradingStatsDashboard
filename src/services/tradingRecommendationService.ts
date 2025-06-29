@@ -102,6 +102,33 @@ export const updateRecommendationStatus = (
 };
 
 /**
+ * Deactivate all recommendations for a specific ticker
+ * Used when closing positions or when new recommendations supersede old ones
+ */
+export const deactivateRecommendationsForTicker = (
+  recommendations: Map<string, TradingRecommendationOverlay>,
+  ticker: string
+): Map<string, TradingRecommendationOverlay> => {
+  const updated = new Map<string, TradingRecommendationOverlay>();
+  
+  recommendations.forEach((recommendation, key) => {
+    if (key.startsWith(ticker)) {
+      // Deactivate recommendations for this ticker
+      updated.set(key, {
+        ...recommendation,
+        isActive: false
+      });
+      console.log(`🔒 [TradingRecommendationService] Deactivated recommendation: ${key}`);
+    } else {
+      // Keep other recommendations as-is
+      updated.set(key, recommendation);
+    }
+  });
+  
+  return updated;
+};
+
+/**
  * Get all active trading recommendations for a specific timeframe
  */
 export const getActiveRecommendationsForTimeframe = (

@@ -47,10 +47,15 @@ import {
   loadAnalysisHistoryStart,
   loadAnalysisHistorySuccess,
   loadAnalysisHistoryError,
-  clearChartAnalysisData
+  clearChartAnalysisData,
+  clearChartOverlays
 } from '../context/DataContext';
 import { analyzeChart, getAnalysisHistory, createAnalysisRequest, deleteAnalysis, deleteAnalysesBulk, getAnalysisDetails } from '../services/chartAnalysisService';
-import { createTradingRecommendationOverlay, getActiveRecommendationsForTimeframe } from '../services/tradingRecommendationService';
+import { createTradingRecommendationOverlay, getActiveRecommendationsForTimeframe, deactivateRecommendationsForTicker } from '../services/tradingRecommendationService';
+import { processAnalysisForTradeActions } from '../services/aiTradeIntegrationService';
+import { getActiveTradeOverlay } from '../services/activeTradeService';
+import { prepareContextSync, enhanceAnalysisRequest, validateContextResponse, createEnhancedContextPrompt } from '../services/contextSynchronizationService';
+import { TradingRecommendationOverlay } from '../types/chartAnalysis';
 import ChartViewer from './ChartViewer';
 import AnalysisPanel from './AnalysisPanel';
 import AnalysisHistory from './AnalysisHistory';
@@ -84,7 +89,56 @@ const ChartAnalysis: React.FC = () => {
   const [showSMA200, setShowSMA200] = useState(false);
   const [showVWAP, setShowVWAP] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
+  const [currentPrice, setCurrentPrice] = useState<number | undefined>(undefined);
+  const [activeTradeOverlays, setActiveTradeOverlays] = useState<Map<string, TradingRecommendationOverlay>>(new Map());
   
+  // Function to get prioritized trading recommendation (active trade > AI recommendation)
+  const getPrioritizedTradingRecommendation = (ticker: string, timeframe: string): TradingRecommendationOverlay | null => {
+    const activeTradeKey = `${ticker}-${timeframe}`;
+    const activeTradeOverlay = activeTradeOverlays.get(activeTradeKey);
+    
+    if (activeTradeOverlay) {
+      console.log(`🎯 [ChartAnalysis] Using active trade overlay for ${ticker} ${timeframe}:`, activeTradeOverlay);
+      return activeTradeOverlay;
+    }
+    
+    const aiRecommendation = activeTradingRecommendations.get(activeTradeKey);
+    if (aiRecommendation) {
+      console.log(`🤖 [ChartAnalysis] Using AI recommendation for ${ticker} ${timeframe}:`, aiRecommendation);
+      return aiRecommendation;
+    }
+    
+    console.log(`📭 [ChartAnalysis] No trading recommendation found for ${ticker} ${timeframe}`);
+    return null;
+  };
+
+  // Function to fetch active trades for current ticker
+  const fetchActiveTradesForTicker = async (ticker: string) => {
+    if (!ticker) return;
+    
+    try {
+      console.log(`🔍 [ChartAnalysis] Fetching active trades for ${ticker}`);
+      
+      // Get active trade overlay for current timeframe
+      const activeTradeOverlay = await getActiveTradeOverlay(ticker, timeframe);
+      
+      const updatedOverlays = new Map(activeTradeOverlays);
+      const key = `${ticker}-${timeframe}`;
+      
+      if (activeTradeOverlay) {
+        updatedOverlays.set(key, activeTradeOverlay);
+        console.log(`✅ [ChartAnalysis] Found active trade for ${ticker} ${timeframe}`);
+      } else {
+        updatedOverlays.delete(key);
+        console.log(`📭 [ChartAnalysis] No active trade found for ${ticker} ${timeframe}`);
+      }
+      
+      setActiveTradeOverlays(updatedOverlays);
+    } catch (error) {
+      console.error(`❌ [ChartAnalysis] Error fetching active trades for ${ticker}:`, error);
+    }
+  };
+
   // Get chart analysis state
   const {
     currentAnalysis,
@@ -97,6 +151,13 @@ const ChartAnalysis: React.FC = () => {
     activeTradingRecommendations,
     showTradingOverlays
   } = state.chartAnalysisData;
+
+  // Fetch active trades when ticker or timeframe changes
+  useEffect(() => {
+    if (selectedTicker) {
+      fetchActiveTradesForTicker(selectedTicker);
+    }
+  }, [selectedTicker, timeframe]);
 
   // Handle ticker selection
   const handleTickerSubmit = async () => {
@@ -153,21 +214,130 @@ const ChartAnalysis: React.FC = () => {
     try {
       dispatch(analyzeChartStart(selectedTicker));
       
+      // Prepare context synchronization
+      console.log(`🔄 [ChartAnalysis] Preparing context sync for ${selectedTicker}...`);
+      const contextSync = await prepareContextSync(selectedTicker, timeframe, currentPrice || 0);
+      console.log(`🧠 [ChartAnalysis] Context sync prepared:`, contextSync);
+      
       // Use the additional context from state, or override if provided
       const contextToUse = contextOverride || additionalContext.trim() || undefined;
       
       console.log(`🔍 [ChartAnalysis] Creating analysis request with timeframe: ${timeframe}`);
-      const request = createAnalysisRequest(
+      const baseRequest = createAnalysisRequest(
         selectedTicker,
         chartImage,
         timeframe,
         contextToUse,
-        selectedModel
+        selectedModel,
+        currentPrice
       );
-      console.log(`🔍 [ChartAnalysis] Analysis request created:`, request);
       
-      const result = await analyzeChart(request);
+      // Enhance request with context synchronization
+      const enhancedRequest = enhanceAnalysisRequest(baseRequest, contextSync);
+      console.log(`✨ [ChartAnalysis] Enhanced analysis request with context sync for ${selectedTicker}`);
+      
+      const result = await analyzeChart(enhancedRequest);
+      
+      // Validate context response
+      const contextValidation = validateContextResponse(result, contextSync);
+      console.log(`🔍 [ChartAnalysis] Context validation result:`, contextValidation);
+      
+      if (!contextValidation.success && contextSync.analysisType !== 'fresh') {
+        console.warn(`⚠️ [ChartAnalysis] Context validation failed for ${selectedTicker}:`, contextValidation.error);
+        
+        toast({
+          title: 'Context Synchronization Warning',
+          description: `AI may not have received proper context: ${contextValidation.error}`,
+          status: 'warning',
+          duration: 7000,
+          isClosable: true,
+        });
+      }
+      
       dispatch(analyzeChartSuccess(result));
+      
+      // Process trade actions (close existing positions, create new trades)
+      try {
+        console.log(`🔄 [ChartAnalysis] Processing trade actions for ${selectedTicker}...`);
+        const tradeActionResult = await processAnalysisForTradeActions(result);
+        
+        if (tradeActionResult.success) {
+          console.log(`✅ [ChartAnalysis] Trade actions processed successfully:`, tradeActionResult);
+          
+          // Handle MAINTAIN status - preserve existing targets and don't create new recommendations
+          if (tradeActionResult.shouldPreserveExistingTargets && tradeActionResult.actionType === 'maintain') {
+            console.log(`🔄 [ChartAnalysis] MAINTAIN status detected - preserving existing targets for ${selectedTicker}`);
+            
+            toast({
+              title: 'Position Maintained',
+              description: `AI recommends maintaining current position for ${selectedTicker}. Existing targets preserved.`,
+              status: 'info',
+              duration: 5000,
+              isClosable: true,
+            });
+            
+            // Don't create new trading recommendation overlays when maintaining
+            // The existing active trade overlay will continue to be displayed
+            return;
+          }
+          
+          // Deactivate old trading recommendations if positions were closed
+          if (tradeActionResult.shouldDeactivateRecommendations && tradeActionResult.ticker) {
+            const updatedRecommendations = deactivateRecommendationsForTicker(
+              activeTradingRecommendations,
+              tradeActionResult.ticker
+            );
+            
+            dispatch({
+              type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
+              payload: updatedRecommendations
+            });
+            
+            console.log(`🔒 [ChartAnalysis] Deactivated old recommendations for ${tradeActionResult.ticker}`);
+          }
+          
+          // Show success message for trade actions
+          if (tradeActionResult.closedTrades?.length || tradeActionResult.newTrades?.length) {
+            let actionMessage = '';
+            if (tradeActionResult.closedTrades?.length) {
+              actionMessage += `Closed ${tradeActionResult.closedTrades.length} existing position(s). `;
+            }
+            if (tradeActionResult.newTrades?.length) {
+              actionMessage += `Created ${tradeActionResult.newTrades.length} new trade recommendation(s).`;
+            }
+            
+            toast({
+              title: 'Trade Actions Completed',
+              description: actionMessage,
+              status: 'info',
+              duration: 7000,
+              isClosable: true,
+            });
+          }
+        } else {
+          console.warn(`⚠️ [ChartAnalysis] Trade action processing had issues:`, tradeActionResult);
+          
+          if (tradeActionResult.errors?.length) {
+            toast({
+              title: 'Trade Action Warnings',
+              description: tradeActionResult.errors.join('; '),
+              status: 'warning',
+              duration: 7000,
+              isClosable: true,
+            });
+          }
+        }
+      } catch (tradeActionError) {
+        console.error(`❌ [ChartAnalysis] Error processing trade actions:`, tradeActionError);
+        // Don't fail the entire analysis if trade actions fail
+        toast({
+          title: 'Trade Action Error',
+          description: 'Analysis completed but trade actions could not be processed',
+          status: 'warning',
+          duration: 5000,
+          isClosable: true,
+        });
+      }
       
       // Create trading recommendation overlay if we have recommendations
       if (result.recommendations && result.recommendations.action !== 'hold') {
@@ -276,34 +446,82 @@ const ChartAnalysis: React.FC = () => {
     }
   };
 
-  // Handle timeframe changes - mark that reanalysis is needed
+  // Handle timeframe changes - clear chart overlays but keep ticker selected
   const handleTimeframeChange = (newTimeframe: string) => {
+    console.log(`🔄 [ChartAnalysis] Timeframe changing from ${timeframe} to ${newTimeframe}`);
+    
+    // Clear only chart overlays/analysis data, but keep the selected ticker
+    // This provides a clean chart for the new timeframe while maintaining UX continuity
+    dispatch(clearChartOverlays());
+    
+    // Reset chart instance to force chart recreation with clean state
+    setChartInstance(null);
+    
+    // Reset technical indicator states to default (off) for clean analysis
+    setShowVolume(false);
+    setShowSMA20(false);
+    setShowSMA50(false);
+    setShowSMA200(false);
+    setShowVWAP(false);
+    
+    // Clear chart data
+    setChartData([]);
+    
+    // Update timeframe
     setTimeframe(newTimeframe);
-    if (hasInitialAnalysis) {
-      setNeedsReanalysis(true);
-      toast({
-        title: 'Timeframe Changed',
-        description: `Chart timeframe changed to ${newTimeframe}. Please re-analyze to get updated insights.`,
-        status: 'info',
-        duration: 4000,
-        isClosable: true,
-      });
-    }
+    
+    // Reset analysis state flags
+    setHasInitialAnalysis(false);
+    setNeedsReanalysis(false);
+    
+    console.log(`✅ [ChartAnalysis] Chart overlays cleared for timeframe change to ${newTimeframe} - ticker preserved, indicators reset`);
+    
+    toast({
+      title: 'Timeframe Changed',
+      description: `Chart timeframe changed to ${newTimeframe}. Chart cleared for fresh analysis.`,
+      status: 'info',
+      duration: 3000,
+      isClosable: true,
+    });
   };
 
-  // Handle period changes - mark that reanalysis is needed
+  // Handle period changes - clear chart overlays but keep ticker selected
   const handlePeriodChange = (newPeriod: string) => {
+    console.log(`🔄 [ChartAnalysis] Period changing from ${customPeriod} to ${newPeriod}`);
+    
+    // Clear only chart overlays/analysis data, but keep the selected ticker
+    // This provides a clean chart for the new period while maintaining UX continuity
+    dispatch(clearChartOverlays());
+    
+    // Reset chart instance to force chart recreation with clean state
+    setChartInstance(null);
+    
+    // Reset technical indicator states to default (off) for clean analysis
+    setShowVolume(false);
+    setShowSMA20(false);
+    setShowSMA50(false);
+    setShowSMA200(false);
+    setShowVWAP(false);
+    
+    // Clear chart data
+    setChartData([]);
+    
+    // Update period
     setCustomPeriod(newPeriod);
-    if (hasInitialAnalysis) {
-      setNeedsReanalysis(true);
-      toast({
-        title: 'Period Changed',
-        description: `Chart period changed to ${newPeriod}. Please re-analyze to get updated insights.`,
-        status: 'info',
-        duration: 4000,
-        isClosable: true,
-      });
-    }
+    
+    // Reset analysis state flags
+    setHasInitialAnalysis(false);
+    setNeedsReanalysis(false);
+    
+    console.log(`✅ [ChartAnalysis] Chart overlays cleared for period change to ${newPeriod} - ticker preserved, indicators reset`);
+    
+    toast({
+      title: 'Period Changed',
+      description: `Chart period changed to ${newPeriod}. Chart cleared for fresh analysis.`,
+      status: 'info',
+      duration: 3000,
+      isClosable: true,
+    });
   };
 
   // Handle Enter key press in ticker input
@@ -945,9 +1163,10 @@ const ChartAnalysis: React.FC = () => {
                       width="100%"
                       keyLevels={currentAnalysis?.keyLevels || []}
                       showHeader={true}
-                      tradingRecommendation={activeTradingRecommendations.get(`${selectedTicker}-${timeframe}`) || null}
+                      tradingRecommendation={getPrioritizedTradingRecommendation(selectedTicker, timeframe)}
                       showTradingOverlays={showTradingOverlays}
                       onChartReady={handleChartReady}
+                      onCurrentPriceUpdate={setCurrentPrice}
                       onTimeframeChange={handleTimeframeChange}
                       currentAnalysis={currentAnalysis}
                       showVolume={showVolume}

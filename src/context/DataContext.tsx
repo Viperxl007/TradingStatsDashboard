@@ -89,6 +89,7 @@ export enum ActionType {
   CAPTURE_CHART_SUCCESS = 'CAPTURE_CHART_SUCCESS',
   CAPTURE_CHART_ERROR = 'CAPTURE_CHART_ERROR',
   CLEAR_CHART_ANALYSIS_DATA = 'CLEAR_CHART_ANALYSIS_DATA',
+  CLEAR_CHART_OVERLAYS = 'CLEAR_CHART_OVERLAYS',
   UPDATE_CHART_ANALYSIS_SETTINGS = 'UPDATE_CHART_ANALYSIS_SETTINGS',
   UPDATE_TRADING_RECOMMENDATIONS = 'UPDATE_TRADING_RECOMMENDATIONS'
 }
@@ -353,6 +354,10 @@ interface ClearChartAnalysisDataAction {
   type: ActionType.CLEAR_CHART_ANALYSIS_DATA;
 }
 
+interface ClearChartOverlaysAction {
+  type: ActionType.CLEAR_CHART_OVERLAYS;
+}
+
 interface UpdateChartAnalysisSettingsAction {
   type: ActionType.UPDATE_CHART_ANALYSIS_SETTINGS;
   payload: Partial<Pick<ChartAnalysisState, 'autoAnalysis' | 'analysisInterval'>>;
@@ -420,6 +425,7 @@ type DataAction =
   | CaptureChartSuccessAction
   | CaptureChartErrorAction
   | ClearChartAnalysisDataAction
+  | ClearChartOverlaysAction
   | UpdateChartAnalysisSettingsAction
   | UpdateTradingRecommendationsAction;
 
@@ -1060,6 +1066,20 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
         }
       };
     
+    case ActionType.CLEAR_CHART_OVERLAYS:
+      return {
+        ...state,
+        chartAnalysisData: {
+          ...state.chartAnalysisData,
+          currentAnalysis: null,
+          chartScreenshot: null,
+          analysisContext: null,
+          activeTradingRecommendations: new Map(),
+          error: null
+          // Keep selectedTicker, analysisHistory, and other settings intact
+        }
+      };
+    
     case ActionType.UPDATE_CHART_ANALYSIS_SETTINGS:
       return {
         ...state,
@@ -1098,6 +1118,21 @@ interface DataProviderProps {
 
 export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
   const [state, dispatch] = React.useReducer(dataReducer, initialState);
+  
+  // Initialize AI Trade Tracker database on app start
+  React.useEffect(() => {
+    const initializeAITradeTracker = async () => {
+      try {
+        const { aiTradeTrackerDB } = await import('../services/aiTradeTrackerDB');
+        await aiTradeTrackerDB.init();
+        console.log('✅ [DataProvider] AI Trade Tracker database initialized');
+      } catch (error) {
+        console.error('❌ [DataProvider] Failed to initialize AI Trade Tracker database:', error);
+      }
+    };
+    
+    initializeAITradeTracker();
+  }, []);
   
   return (
     <DataContext.Provider value={{ state, dispatch }}>
@@ -1341,6 +1376,10 @@ export const captureChartError = (error: string): CaptureChartErrorAction => ({
 
 export const clearChartAnalysisData = (): ClearChartAnalysisDataAction => ({
   type: ActionType.CLEAR_CHART_ANALYSIS_DATA
+});
+
+export const clearChartOverlays = (): ClearChartOverlaysAction => ({
+  type: ActionType.CLEAR_CHART_OVERLAYS
 });
 
 export const updateChartAnalysisSettings = (settings: Partial<Pick<ChartAnalysisState, 'autoAnalysis' | 'analysisInterval'>>): UpdateChartAnalysisSettingsAction => ({

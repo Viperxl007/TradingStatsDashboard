@@ -298,6 +298,39 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
           </AccordionPanel>
         </AccordionItem>
 
+        {/* Context Assessment */}
+        {analysis.context_assessment && (
+          <AccordionItem>
+            <AccordionButton>
+              <Box flex="1" textAlign="left">
+                <HStack>
+                  <Icon as={FiActivity} color="purple.500" />
+                  <Text fontWeight="semibold">Context Assessment</Text>
+                </HStack>
+              </Box>
+              <AccordionIcon />
+            </AccordionButton>
+            <AccordionPanel pb={4}>
+              <Box
+                p={4}
+                bg={colorMode === 'dark' ? 'purple.900' : 'purple.50'}
+                borderRadius="md"
+                borderLeft="4px solid"
+                borderLeftColor="purple.500"
+              >
+                <Text
+                  fontSize="sm"
+                  lineHeight="1.6"
+                  whiteSpace="pre-wrap"
+                  color={colorMode === 'dark' ? 'purple.100' : 'purple.800'}
+                >
+                  {analysis.context_assessment}
+                </Text>
+              </Box>
+            </AccordionPanel>
+          </AccordionItem>
+        )}
+
         {/* Key Levels */}
         {analysis.keyLevels?.length > 0 && (
           <AccordionItem>

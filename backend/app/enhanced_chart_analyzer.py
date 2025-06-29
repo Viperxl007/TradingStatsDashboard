@@ -38,9 +38,9 @@ class EnhancedChartAnalyzer:
         if not self.api_key:
             logger.warning("CLAUDE_API_KEY not found in configuration or environment variables")
     
-    def analyze_chart_comprehensive(self, image_data: bytes, ticker: str, context_data: Optional[Dict] = None, timeframe: str = '1D', selected_model: Optional[str] = None) -> Dict[str, Any]:
+    def analyze_chart_comprehensive(self, image_data: bytes, ticker: str, context_data: Optional[Dict] = None, timeframe: str = '1D', selected_model: Optional[str] = None, historical_context: Optional[Dict] = None) -> Dict[str, Any]:
         """
-        Perform comprehensive multi-stage chart analysis.
+        Perform comprehensive multi-stage chart analysis with historical context.
         
         Args:
             image_data (bytes): Chart image data
@@ -48,6 +48,7 @@ class EnhancedChartAnalyzer:
             context_data (Optional[Dict]): Additional context data
             timeframe (str): Chart timeframe (e.g., '1h', '1D', '1W')
             selected_model (Optional[str]): Claude model to use for analysis
+            historical_context (Optional[Dict]): Historical analysis context for accountability
             
         Returns:
             Dict[str, Any]: Comprehensive analysis results
@@ -84,9 +85,9 @@ class EnhancedChartAnalyzer:
             # Encode image to base64
             image_base64 = base64.b64encode(image_data).decode('utf-8')
             
-            # Stage 1: Initial comprehensive overview
+            # Stage 1: Initial comprehensive overview with historical context
             logger.info(f"Stage 1: Initial analysis for {ticker}")
-            initial_analysis = self._stage_1_initial_analysis(image_base64, ticker, context_data)
+            initial_analysis = self._stage_1_initial_analysis(image_base64, ticker, context_data, timeframe, historical_context)
             
             if 'error' in initial_analysis:
                 return initial_analysis
@@ -122,10 +123,36 @@ class EnhancedChartAnalyzer:
             # Restore original model
             self.model = original_model
     
-    def _stage_1_initial_analysis(self, image_base64: str, ticker: str, context_data: Optional[Dict] = None) -> Dict[str, Any]:
-        """Stage 1: Get initial comprehensive overview of the chart."""
+    def _stage_1_initial_analysis(self, image_base64: str, ticker: str, context_data: Optional[Dict] = None, timeframe: str = '1D', historical_context: Optional[Dict] = None) -> Dict[str, Any]:
+        """Stage 1: Get initial comprehensive overview of the chart with historical context."""
+        
+        # Get current price from context
+        current_price = context_data.get('current_price', 0.0) if context_data else 0.0
+        
+        # Build contextual prompt using the new service
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        from services.prompt_builder_service import PromptBuilderService
+        
+        # Build additional context for the base prompt
+        additional_context = ""
+        if context_data:
+            additional_context = f"Market Context: {json.dumps(context_data, indent=2)}"
+        
+        # Get the contextual prompt
+        contextual_prompt = PromptBuilderService.build_contextual_analysis_prompt(
+            ticker=ticker,
+            timeframe=timeframe,
+            current_price=current_price,
+            context=historical_context,
+            additional_context=additional_context
+        )
+        
         prompt = f"""
-You are an expert technical analyst. Analyze this {ticker} chart and provide a comprehensive overview.
+{contextual_prompt}
+
+You are an expert technical analyst. Based on the above context and requirements, analyze this {ticker} chart and provide a comprehensive overview.
 
 CRITICAL: Respond ONLY with valid JSON in this exact format:
 
@@ -159,7 +186,16 @@ CRITICAL: Respond ONLY with valid JSON in this exact format:
 Focus on what you can clearly see in the chart. Be specific about price levels and patterns.
 """
         
-        return self._make_api_request(image_base64, prompt, "stage_1")
+        # Make the API request
+        result = self._make_api_request(image_base64, prompt, "stage_1")
+        
+        # Add historical context and metadata to the result for later stages
+        if isinstance(result, dict):
+            result['historical_context'] = historical_context
+            result['timeframe'] = timeframe
+            result['context_data'] = context_data
+        
+        return result
     
     def _stage_2_technical_indicators(self, image_base64: str, ticker: str, initial_data: Dict) -> Dict[str, Any]:
         """Stage 2: Detailed analysis of technical indicators."""
@@ -262,11 +298,32 @@ Provide EXACT price levels you can see on the chart. Count actual tests of level
         return self._make_api_request(image_base64, prompt, "stage_3")
     
     def _stage_4_trading_recommendations(self, image_base64: str, ticker: str, initial_data: Dict) -> Dict[str, Any]:
-        """Stage 4: Generate specific trading recommendations."""
+        """Stage 4: Generate specific trading recommendations with historical context."""
+        
+        # Get historical context from initial_data
+        historical_context = initial_data.get('historical_context')
+        current_price = initial_data.get('chart_overview', {}).get('current_price_estimate', 0.0)
+        timeframe = initial_data.get('timeframe', '1D')
+        
+        # Build contextual prompt using the PromptBuilderService
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
+        from services.prompt_builder_service import PromptBuilderService
+        
+        # Build the contextual prompt for trading recommendations
+        contextual_prompt = PromptBuilderService.build_contextual_analysis_prompt(
+            ticker=ticker,
+            timeframe=timeframe,
+            current_price=current_price,
+            context=historical_context,
+            additional_context=f"Chart Analysis Context: {json.dumps(initial_data.get('chart_overview', {}), indent=2)}"
+        )
+        
         prompt = f"""
-Based on this {ticker} chart analysis, provide SPECIFIC trading recommendations.
+{contextual_prompt}
 
-Chart overview: {json.dumps(initial_data.get('chart_overview', {}), indent=2)}
+Based on this {ticker} chart analysis, provide SPECIFIC trading recommendations.
 
 CRITICAL: Respond ONLY with valid JSON in this exact format:
 
@@ -306,6 +363,12 @@ CRITICAL: Respond ONLY with valid JSON in this exact format:
         "expiration_guidance": "weekly|monthly|quarterly",
         "iv_consideration": "high|normal|low"
     }},
+    "context_assessment": {{
+        "previous_position_status": "MAINTAIN|MODIFY|CLOSE|REPLACE|NONE",
+        "previous_position_reasoning": "detailed explanation of how you addressed any existing position",
+        "fundamental_changes": "what changed since the last analysis (if any)",
+        "position_continuity": "explanation of position relationship to previous analysis"
+    }},
     "key_catalysts": [
         "list events or levels that could change the analysis"
     ],
@@ -314,6 +377,7 @@ CRITICAL: Respond ONLY with valid JSON in this exact format:
     ]
 }}
 
+CRITICAL: If historical context was provided in the prompt, you MUST fill out the context_assessment section.
 Be specific with exact price levels and realistic probability assessments.
 """
         
@@ -444,6 +508,9 @@ Be specific with exact price levels and realistic probability assessments.
             # Context data if provided
             "contextData": context_data or {},
             
+            # Context Assessment (NEW - Accountability Layer)
+            "context_assessment": self._format_context_assessment(trading),
+            
             # Chart image reference
             "chartImageUrl": None,  # Will be set by calling function
             
@@ -452,6 +519,42 @@ Be specific with exact price levels and realistic probability assessments.
         }
         
         return comprehensive
+    
+    def _format_context_assessment(self, trading: Dict) -> str:
+        """Format context assessment from trading analysis."""
+        try:
+            context_assessment = trading.get('context_assessment', {})
+            if not context_assessment:
+                return ""
+            
+            # Build a readable context assessment string
+            assessment_parts = []
+            
+            # Previous position status
+            status = context_assessment.get('previous_position_status', 'NONE')
+            if status != 'NONE':
+                assessment_parts.append(f"Previous Position Status: {status}")
+            
+            # Previous position reasoning
+            reasoning = context_assessment.get('previous_position_reasoning', '')
+            if reasoning:
+                assessment_parts.append(f"Position Assessment: {reasoning}")
+            
+            # Fundamental changes
+            changes = context_assessment.get('fundamental_changes', '')
+            if changes:
+                assessment_parts.append(f"Market Changes: {changes}")
+            
+            # Position continuity
+            continuity = context_assessment.get('position_continuity', '')
+            if continuity:
+                assessment_parts.append(f"Position Continuity: {continuity}")
+            
+            return " | ".join(assessment_parts) if assessment_parts else ""
+            
+        except Exception as e:
+            logger.error(f"Error formatting context assessment: {str(e)}")
+            return ""
     
     def _generate_comprehensive_summary(self, initial: Dict, technical: Dict, levels: Dict, trading: Dict) -> str:
         """Generate a comprehensive summary from all analysis stages."""
