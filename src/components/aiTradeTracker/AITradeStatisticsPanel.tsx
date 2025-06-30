@@ -19,7 +19,7 @@ import {
   Select,
   useColorModeValue
 } from '@chakra-ui/react';
-import { getAllActiveTradesForAITracker } from '../../services/productionActiveTradesService';
+import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
 import { AITradeStatistics, AIModelPerformance, AITokenPerformance } from '../../types/aiTradeTracker';
 
 interface AITradeStatisticsPanelProps {
@@ -46,8 +46,8 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
     try {
       setLoading(true);
       
-      // Get all trades from production
-      let trades = await getAllActiveTradesForAITracker();
+      // Get all trades from production (including closed ones for statistics)
+      let trades = await getAllTradesHistoryForAITracker();
       
       // Filter by timeframe if not 'all'
       if (timeframe !== 'all') {
@@ -80,7 +80,7 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
       const stats: AITradeStatistics = {
         totalRecommendations: totalTrades,
         activeTrades: trades.filter(t => t.status === 'open').length,
-        closedTrades: trades.filter(t => t.status === 'closed').length,
+        closedTrades: trades.filter(t => ['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed'].includes(t.status)).length,
         winningTrades: profitableTrades,
         losingTrades: totalTrades - profitableTrades,
         winRate,

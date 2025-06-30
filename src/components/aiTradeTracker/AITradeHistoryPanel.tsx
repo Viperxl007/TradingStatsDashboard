@@ -58,7 +58,7 @@ import {
 } from 'react-icons/fi';
 import { format } from 'date-fns';
 import { AITradeEntry, AITradeFilterOptions, AITradeStatus } from '../../types/aiTradeTracker';
-import { getAllActiveTradesForAITracker } from '../../services/productionActiveTradesService';
+import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
 
 interface AITradeHistoryPanelProps {
   onError: (error: string) => void;
@@ -85,9 +85,8 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
   const loadTrades = async () => {
     try {
       setLoading(true);
-      // For now, we'll show active trades in history as well
-      // In the future, we can add a separate API endpoint for historical trades
-      const allTrades = await getAllActiveTradesForAITracker();
+      // Load all trades including closed ones for history
+      const allTrades = await getAllTradesHistoryForAITracker();
       setTrades(allTrades);
     } catch (error) {
       console.error('Error loading trades:', error);
@@ -166,11 +165,14 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
    * Calculate summary statistics for filtered trades
    */
   const summaryStats = useMemo(() => {
-    const closedTrades = filteredAndSortedTrades.filter(trade => 
-      trade.status === 'closed' && trade.profitLoss !== undefined
+    const closedTrades = filteredAndSortedTrades.filter(trade =>
+      ['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed'].includes(trade.status) &&
+      trade.profitLoss !== undefined
     );
     
-    const winningTrades = closedTrades.filter(trade => trade.profitLoss! > 0);
+    const winningTrades = closedTrades.filter(trade =>
+      trade.profitLoss! > 0 || trade.status === 'profit_hit'
+    );
     const totalReturn = closedTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
     const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
     const avgReturn = closedTrades.length > 0 ? totalReturn / closedTrades.length : 0;
@@ -192,8 +194,12 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
       case 'waiting': return 'yellow';
       case 'open': return 'green';
       case 'closed': return 'gray';
+      case 'profit_hit': return 'green';
+      case 'stop_hit': return 'red';
       case 'cancelled': return 'red';
       case 'expired': return 'orange';
+      case 'ai_closed': return 'blue';
+      case 'user_closed': return 'purple';
       default: return 'gray';
     }
   };
@@ -266,9 +272,13 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
                 <option value="all">All Status</option>
                 <option value="waiting">Waiting</option>
                 <option value="open">Open</option>
-                <option value="closed">Closed</option>
+                <option value="closed">Closed (Generic)</option>
+                <option value="profit_hit">Profit Hit (WIN)</option>
+                <option value="stop_hit">Stop Hit (LOSS)</option>
                 <option value="cancelled">Cancelled</option>
                 <option value="expired">Expired</option>
+                <option value="ai_closed">AI Closed</option>
+                <option value="user_closed">User Closed</option>
               </Select>
             </Box>
             <Box>
@@ -493,7 +503,7 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
             {selectedTrade && (
               <VStack spacing={4} align="stretch">
                 {/* Performance Summary */}
-                {selectedTrade.status === 'closed' && (
+                {['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed'].includes(selectedTrade.status) && (
                   <Card bg={useColorModeValue('gray.50', 'gray.700')} p={4}>
                     <SimpleGrid columns={3} spacing={4}>
                       <Stat textAlign="center">

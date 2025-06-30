@@ -296,6 +296,29 @@ const ChartAnalysis: React.FC = () => {
             console.log(`🔒 [ChartAnalysis] Deactivated old recommendations for ${tradeActionResult.ticker}`);
           }
           
+          // Refresh active trade overlays after trade actions (critical for invalidation scenarios)
+          if (tradeActionResult.closedTrades?.length || tradeActionResult.newTrades?.length) {
+            console.log(`🔄 [ChartAnalysis] Refreshing active trade overlays after trade actions for ${selectedTicker}`);
+            
+            // Clear old active trade overlays for this ticker
+            const updatedOverlays = new Map(activeTradeOverlays);
+            const keysToRemove = Array.from(updatedOverlays.keys()).filter(key => key.startsWith(`${selectedTicker}-`));
+            keysToRemove.forEach(key => updatedOverlays.delete(key));
+            
+            // Fetch fresh active trade overlays
+            setTimeout(async () => {
+              try {
+                await fetchActiveTradesForTicker(selectedTicker);
+                console.log(`✅ [ChartAnalysis] Active trade overlays refreshed for ${selectedTicker}`);
+              } catch (error) {
+                console.error(`❌ [ChartAnalysis] Error refreshing active trade overlays:`, error);
+              }
+            }, 1000); // Small delay to ensure database updates are complete
+            
+            // Update overlays immediately to clear old ones
+            setActiveTradeOverlays(updatedOverlays);
+          }
+          
           // Show success message for trade actions
           if (tradeActionResult.closedTrades?.length || tradeActionResult.newTrades?.length) {
             let actionMessage = '';

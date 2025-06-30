@@ -227,7 +227,10 @@ If you choose MAINTAIN, use the EXACT SAME entry price in your recommendations.
         target_price = context.get('target_price')
         stop_loss = context.get('stop_loss')
         current_price = context.get('current_price', 0)
-        unrealized_pnl = context.get('unrealized_pnl', 0)
+        # Safe handling of potentially None values
+        unrealized_pnl = context.get('unrealized_pnl')
+        if unrealized_pnl is None:
+            unrealized_pnl = 0
         time_since_creation = context.get('time_since_creation_hours', 0)
         time_since_trigger = context.get('time_since_trigger_hours')
         
@@ -262,8 +265,12 @@ The trade was created {time_since_creation:.1f} hours ago and is still waiting f
             """.strip()
             
         elif trade_status == 'active':
-            pnl_text = f"${unrealized_pnl:.2f}" if unrealized_pnl != 0 else "$0.00"
-            pnl_status = "profit" if unrealized_pnl > 0 else "loss" if unrealized_pnl < 0 else "breakeven"
+            # Safe PnL formatting - handle None values
+            pnl_text = f"${unrealized_pnl:.2f}" if unrealized_pnl is not None and unrealized_pnl != 0 else "$0.00"
+            pnl_status = "profit" if unrealized_pnl and unrealized_pnl > 0 else "loss" if unrealized_pnl and unrealized_pnl < 0 else "breakeven"
+            
+            # Safe time formatting - handle None values
+            time_text = f"{time_since_trigger:.1f} hours" if time_since_trigger is not None else "Unknown"
             
             return f"""
 🎯 ACTIVE TRADE MONITORING - TRADE IS OPEN:
@@ -272,7 +279,7 @@ The trade was created {time_since_creation:.1f} hours ago and is still waiting f
 - Current Price: ${current_price}
 - Target: ${target_price} | Stop: ${stop_loss}
 - Unrealized P&L: {pnl_text} ({pnl_status})
-- Time Since Entry: {time_since_trigger:.1f} hours
+- Time Since Entry: {time_text}
 - Max Favorable: ${context.get('max_favorable_price', entry_price)}
 - Max Adverse: ${context.get('max_adverse_price', entry_price)}
 - Status: ACTIVE TRADE IN PROGRESS

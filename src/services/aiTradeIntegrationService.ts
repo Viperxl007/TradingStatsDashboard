@@ -21,7 +21,7 @@ export interface TradeActionResult {
   shouldDeactivateRecommendations?: boolean;
   shouldPreserveExistingTargets?: boolean; // NEW: Flag for MAINTAIN status
   ticker?: string;
-  actionType?: 'close_and_create' | 'maintain' | 'create_new' | 'no_action'; // NEW: Action classification
+  actionType?: 'close_and_create' | 'close_only' | 'maintain' | 'create_new' | 'no_action'; // NEW: Action classification
 }
 
 /**
@@ -81,6 +81,7 @@ export const processAnalysisForTradeActions = async (
 
     if (shouldClosePosition) {
       console.log(`🔒 [AITradeIntegration] AI recommends closing position for ${analysis.ticker}`);
+      console.log(`📋 [AITradeIntegration] Context assessment: ${analysis.context_assessment?.substring(0, 200)}...`);
       
       // Close existing position
       const closeResult = await closeExistingPosition(analysis.ticker, analysis.currentPrice);
@@ -91,14 +92,20 @@ export const processAnalysisForTradeActions = async (
         
         if (hasNewRecommendation) {
           result.actionType = 'close_and_create';
+          console.log(`🔄 [AITradeIntegration] Invalidation scenario detected - will close old position and create new one`);
+        } else {
+          result.actionType = 'close_only';
+          console.log(`🔒 [AITradeIntegration] Position closure only - no new recommendation`);
         }
       } else {
         result.errors?.push(`Failed to close position: ${closeResult.message}`);
+        console.error(`❌ [AITradeIntegration] Position closure failed for ${analysis.ticker}: ${closeResult.message}`);
       }
     }
 
     if (hasNewRecommendation && !shouldMaintainPosition) {
       console.log(`📈 [AITradeIntegration] Creating new AI trade recommendation for ${analysis.ticker}`);
+      console.log(`📊 [AITradeIntegration] New recommendation: ${analysis.recommendations.action} at $${analysis.recommendations.entryPrice || analysis.currentPrice}`);
       
       // Create new AI trade entry
       const newTradeResult = await createAITradeFromAnalysis(analysis);
@@ -109,8 +116,11 @@ export const processAnalysisForTradeActions = async (
         if (result.actionType === 'no_action') {
           result.actionType = 'create_new';
         }
+        
+        console.log(`✅ [AITradeIntegration] New trade created successfully: ${newTradeResult.newTrades?.join(', ')}`);
       } else {
         result.errors?.push(`Failed to create new trade: ${newTradeResult.message}`);
+        console.error(`❌ [AITradeIntegration] New trade creation failed for ${analysis.ticker}: ${newTradeResult.message}`);
       }
     }
 
@@ -206,10 +216,41 @@ const checkForClosureRecommendation = (analysis: ChartAnalysisResult): boolean =
     'close the position',
     'exit the position',
     'previous bullish position should be closed',
-    'previous bearish position should be closed'
+    'previous bearish position should be closed',
+    'position should be closed',
+    'close position',
+    'exit position',
+    'invalidated',
+    'failed breakout',
+    'breakdown',
+    'reversal',
+    'completely reversing'
   ];
 
-  return closureIndicators.some(indicator => contextAssessment.includes(indicator));
+  // Enhanced detection for invalidation scenarios
+  const invalidationIndicators = [
+    'bullish thesis has been invalidated',
+    'bearish thesis has been invalidated',
+    'thesis has been invalidated',
+    'invalidated by the failed',
+    'technical setup has fundamentally changed',
+    'market structure has shifted',
+    'completely reversing from previous',
+    'position continuity: completely reversing'
+  ];
+
+  const hasClosureIndicator = closureIndicators.some(indicator => contextAssessment.includes(indicator));
+  const hasInvalidationIndicator = invalidationIndicators.some(indicator => contextAssessment.includes(indicator));
+
+  if (hasClosureIndicator || hasInvalidationIndicator) {
+    console.log(`🔒 [AITradeIntegration] Closure recommendation detected for ${analysis.ticker}:`);
+    console.log(`   - Closure indicators: ${hasClosureIndicator}`);
+    console.log(`   - Invalidation indicators: ${hasInvalidationIndicator}`);
+    console.log(`   - Context: ${contextAssessment.substring(0, 200)}...`);
+    return true;
+  }
+
+  return false;
 };
 
 /**
@@ -250,45 +291,55 @@ const determineRecommendationValidity = (contextText: string): 'preserve' | 'upd
  * Close existing position in both production and AI Trade Tracker
  */
 const closeExistingPosition = async (
-  ticker: string, 
+  ticker: string,
   currentPrice: number
 ): Promise<{ success: boolean; message: string; closedTrades?: string[] }> => {
   const closedTrades: string[] = [];
   const errors: string[] = [];
 
   try {
+    console.log(`🔒 [AITradeIntegration] Starting position closure for ${ticker} at price $${currentPrice}`);
+
     // 1. Close production active trade
     const productionCloseResult = await closeActiveTradeInProduction(
-      ticker, 
-      currentPrice, 
-      'Closed due to AI recommendation - market conditions changed'
+      ticker,
+      currentPrice,
+      'Closed due to AI invalidation - market conditions changed'
     );
 
     if (productionCloseResult) {
       console.log(`✅ [AITradeIntegration] Closed production trade for ${ticker}`);
       closedTrades.push(`production-${ticker}`);
     } else {
-      console.warn(`⚠️ [AITradeIntegration] Failed to close production trade for ${ticker}`);
-      errors.push(`Failed to close production trade for ${ticker}`);
+      console.warn(`⚠️ [AITradeIntegration] No production trade found to close for ${ticker}`);
+      // Don't treat this as an error - there might not be a production trade
     }
 
     // 2. Close AI Trade Tracker entries
     const aiTrades = await aiTradeTrackerDB.getTradesByTicker(ticker);
     const activeTrades = aiTrades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
 
+    console.log(`🔍 [AITradeIntegration] Found ${activeTrades.length} active AI trades for ${ticker}`);
+
     for (const trade of activeTrades) {
       try {
+        // Calculate PnL for historical tracking
+        const entryPrice = trade.entryPrice;
+        const pnlPercentage = trade.action === 'buy'
+          ? ((currentPrice - entryPrice) / entryPrice) * 100
+          : ((entryPrice - currentPrice) / entryPrice) * 100;
+
         const updateRequest: UpdateAITradeRequest = {
           id: trade.id,
           status: 'closed',
           exitDate: Date.now(),
           exitPrice: currentPrice,
-          closeReason: 'ai_recommendation',
-          notes: 'Closed due to AI recommendation - market conditions changed'
+          closeReason: 'ai_invalidation',
+          notes: `Closed due to AI invalidation - market conditions changed. PnL: ${pnlPercentage.toFixed(2)}%`
         };
 
         await aiTradeTrackerDB.updateTrade(updateRequest);
-        console.log(`✅ [AITradeIntegration] Closed AI trade ${trade.id} for ${ticker}`);
+        console.log(`✅ [AITradeIntegration] Closed AI trade ${trade.id} for ${ticker} - PnL: ${pnlPercentage.toFixed(2)}%`);
         closedTrades.push(trade.id);
       } catch (error) {
         console.error(`❌ [AITradeIntegration] Failed to close AI trade ${trade.id}:`, error);
@@ -296,9 +347,15 @@ const closeExistingPosition = async (
       }
     }
 
+    const successMessage = closedTrades.length > 0
+      ? `Successfully closed ${closedTrades.length} trades for ${ticker}`
+      : `No active trades found to close for ${ticker}`;
+
+    console.log(`🏁 [AITradeIntegration] Position closure complete for ${ticker}: ${successMessage}`);
+
     return {
       success: errors.length === 0,
-      message: errors.length > 0 ? errors.join('; ') : `Successfully closed ${closedTrades.length} trades`,
+      message: errors.length > 0 ? errors.join('; ') : successMessage,
       closedTrades
     };
 

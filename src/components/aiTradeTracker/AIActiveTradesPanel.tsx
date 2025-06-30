@@ -90,8 +90,12 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
       case 'waiting': return 'yellow';
       case 'open': return 'green';
       case 'closed': return 'gray';
+      case 'profit_hit': return 'green';
+      case 'stop_hit': return 'red';
       case 'cancelled': return 'red';
       case 'expired': return 'orange';
+      case 'ai_closed': return 'blue';
+      case 'user_closed': return 'purple';
       default: return 'gray';
     }
   };
@@ -235,7 +239,7 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
   return (
     <Box>
       {/* Summary Stats */}
-      <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4} mb={6}>
+      <SimpleGrid columns={{ base: 2, md: 3, lg: 6 }} spacing={4} mb={6}>
         <Stat>
           <StatLabel>Active Trades</StatLabel>
           <StatNumber>{trades.length}</StatNumber>
@@ -261,9 +265,25 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
           </StatHelpText>
         </Stat>
         <Stat>
+          <StatLabel>Profitable Exits</StatLabel>
+          <StatNumber>{trades.filter(t => t.status === 'profit_hit').length}</StatNumber>
+          <StatHelpText>
+            <Icon as={FiTarget} mr={1} />
+            Target hit
+          </StatHelpText>
+        </Stat>
+        <Stat>
+          <StatLabel>Stop Losses</StatLabel>
+          <StatNumber>{trades.filter(t => t.status === 'stop_hit').length}</StatNumber>
+          <StatHelpText>
+            <Icon as={FiShield} mr={1} />
+            Risk managed
+          </StatHelpText>
+        </Stat>
+        <Stat>
           <StatLabel>Avg Confidence</StatLabel>
           <StatNumber>
-            {trades.length > 0 
+            {trades.length > 0
               ? `${(trades.reduce((sum, t) => sum + t.confidence, 0) / trades.length * 100).toFixed(0)}%`
               : '0%'
             }

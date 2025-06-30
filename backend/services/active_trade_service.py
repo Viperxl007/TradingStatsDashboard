@@ -37,6 +37,7 @@ class TradeCloseReason(Enum):
     TREND_INVALIDATION = "trend_invalidation"
     EXPIRATION = "expiration"
 
+
 class ActiveTradeService:
     """Service for managing active trade lifecycle and state"""
     
@@ -46,11 +47,469 @@ class ActiveTradeService:
         self.db_lock = Lock()
         self._ensure_active_trades_table()
     
-    def _ensure_active_trades_table(self):
-        """Ensure the active_trades table exists with proper schema"""
+    def _safe_parse_datetime(self, datetime_str):
+        """Safely parse datetime string with validation"""
+        if not datetime_str or not isinstance(datetime_str, str):
+            return None
+        try:
+            return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Invalid datetime format: {datetime_str}, error: {e}")
+            return None
+
+    def _check_historical_exit_conditions(self, ticker: str, trade: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Check historical candles for profit target or stop loss hits since last analysis.
+        Implements 'first hit wins' logic for precise exit timing.
+        
+        Args:
+            ticker: Stock ticker symbol
+            trade: Active trade data
+            
+        Returns:
+            Exit result dict if exit condition found, None otherwise
+        """
+        try:
+            # CRITICAL: Get the LAST chart analysis record timestamp for this ticker
+            # This ensures we only check candles since the last chart read
+            last_analysis_dt = self._get_last_chart_analysis_time(ticker)
+            if not last_analysis_dt:
+                logger.debug(f"No chart analysis records found for {ticker}, skipping historical check")
+                return None
+            
+            logger.info(f"🔍 Checking historical data since last chart analysis: {last_analysis_dt}")
+            
+            # Use the existing market data infrastructure to get historical candles
+            historical_candles = self._fetch_historical_candles_since_analysis(ticker, last_analysis_dt)
+            
+            if not historical_candles:
+                logger.debug(f"No historical candles found for {ticker} since {last_analysis_dt}")
+                return None
+            
+            # Extract trade parameters
+            entry_price = float(trade['entry_price'])
+            target_price = trade.get('target_price')
+            stop_loss = trade.get('stop_loss')
+            action = trade['action'].upper()
+            
+            if not target_price and not stop_loss:
+                logger.debug(f"Trade {trade['id']} has no target_price or stop_loss to check")
+                return None
+            
+            target_price = float(target_price) if target_price else None
+            stop_loss = float(stop_loss) if stop_loss else None
+            
+            logger.info(f"🔍 Checking {len(historical_candles)} historical candles for {ticker} trade {trade['id']}")
+            logger.info(f"🔍 Entry: ${entry_price}, Target: ${target_price}, Stop: ${stop_loss}, Action: {action}")
+            
+            # Check each candle chronologically for first hit (FIRST HIT WINS)
+            for candle in sorted(historical_candles, key=lambda x: x['timestamp']):
+                candle_time = candle['timestamp']
+                high_price = float(candle['high'])
+                low_price = float(candle['low'])
+                
+                # Check for exit conditions based on trade direction
+                if action == 'BUY':
+                    # For BUY trades: profit target hit when price goes UP, stop loss when price goes DOWN
+                    target_hit = target_price and high_price >= target_price
+                    stop_hit = stop_loss and low_price <= stop_loss
+                    
+                    if target_hit and stop_hit:
+                        # Both hit in same candle - stop loss takes precedence for risk management
+                        logger.warning(f"🚨 Both target and stop hit in same candle for {ticker} at {candle_time}")
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    elif target_hit:
+                        exit_price = target_price
+                        exit_reason = "PROFIT_TARGET_HIT"
+                        exit_type = "WIN"
+                    elif stop_hit:
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    else:
+                        continue  # No exit condition in this candle
+                        
+                elif action == 'SELL':
+                    # For SELL trades: profit target hit when price goes DOWN, stop loss when price goes UP
+                    target_hit = target_price and low_price <= target_price
+                    stop_hit = stop_loss and high_price >= stop_loss
+                    
+                    if target_hit and stop_hit:
+                        # Both hit in same candle - stop loss takes precedence
+                        logger.warning(f"🚨 Both target and stop hit in same candle for {ticker} at {candle_time}")
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    elif target_hit:
+                        exit_price = target_price
+                        exit_reason = "PROFIT_TARGET_HIT"
+                        exit_type = "WIN"
+                    elif stop_hit:
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    else:
+                        continue  # No exit condition in this candle
+                
+                # Exit condition found - close the trade
+                logger.info(f"🎯 Historical exit detected for {ticker} trade {trade['id']}")
+                logger.info(f"🎯 Exit: {exit_reason} at ${exit_price} on {candle_time}")
+                
+                # Close the trade with historical timing
+                self._close_trade_with_exit(
+                    trade_id=trade['id'],
+                    exit_price=exit_price,
+                    exit_reason=exit_reason,
+                    exit_type=exit_type,
+                    exit_time=candle_time.isoformat()
+                )
+                
+                return {
+                    'exit_triggered': True,
+                    'exit_reason': exit_reason,
+                    'exit_price': exit_price,
+                    'exit_time': candle_time,
+                    'exit_type': exit_type
+                }
+            
+            # No exit conditions found in historical data
+            logger.debug(f"No historical exit conditions found for {ticker} trade {trade['id']}")
+            return None
+            
+            if not candles:
+                logger.debug(f"No historical candles found for {ticker} since {last_analysis_time}")
+                return None
+            
+            # Extract trade parameters
+            entry_price = float(trade['entry_price'])
+            target_price = trade.get('target_price')
+            stop_loss = trade.get('stop_loss')
+            action = trade['action'].upper()
+            
+            if not target_price and not stop_loss:
+                logger.debug(f"Trade {trade['id']} has no target_price or stop_loss to check")
+                return None
+            
+            target_price = float(target_price) if target_price else None
+            stop_loss = float(stop_loss) if stop_loss else None
+            
+            logger.info(f"🔍 Checking {len(candles)} historical candles for {ticker} trade {trade['id']}")
+            logger.info(f"🔍 Entry: ${entry_price}, Target: ${target_price}, Stop: ${stop_loss}, Action: {action}")
+            
+            # Check each candle chronologically for first hit
+            for candle in sorted(candles, key=lambda x: x['timestamp']):
+                candle_time = candle['timestamp']
+                high_price = float(candle['high'])
+                low_price = float(candle['low'])
+                
+                # Check for exit conditions based on trade direction
+                if action == 'BUY':
+                    # For BUY trades: profit target hit when price goes UP, stop loss when price goes DOWN
+                    target_hit = target_price and high_price >= target_price
+                    stop_hit = stop_loss and low_price <= stop_loss
+                    
+                    if target_hit and stop_hit:
+                        # Both hit in same candle - determine which happened first
+                        # In practice, we assume stop loss takes precedence for risk management
+                        logger.warning(f"🚨 Both target and stop hit in same candle for {ticker} at {candle_time}")
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    elif target_hit:
+                        exit_price = target_price
+                        exit_reason = "PROFIT_TARGET_HIT"
+                        exit_type = "WIN"
+                    elif stop_hit:
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    else:
+                        continue  # No exit condition in this candle
+                        
+                elif action == 'SELL':
+                    # For SELL trades: profit target hit when price goes DOWN, stop loss when price goes UP
+                    target_hit = target_price and low_price <= target_price
+                    stop_hit = stop_loss and high_price >= stop_loss
+                    
+                    if target_hit and stop_hit:
+                        # Both hit in same candle - stop loss takes precedence
+                        logger.warning(f"🚨 Both target and stop hit in same candle for {ticker} at {candle_time}")
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    elif target_hit:
+                        exit_price = target_price
+                        exit_reason = "PROFIT_TARGET_HIT"
+                        exit_type = "WIN"
+                    elif stop_hit:
+                        exit_price = stop_loss
+                        exit_reason = "STOP_LOSS_HIT"
+                        exit_type = "LOSS"
+                    else:
+                        continue  # No exit condition in this candle
+                
+                # Exit condition found - close the trade
+                logger.info(f"🎯 Historical exit detected for {ticker} trade {trade['id']}")
+                logger.info(f"🎯 Exit: {exit_reason} at ${exit_price} on {candle_time}")
+                
+                # Close the trade with historical timing
+                self._close_trade_with_exit(
+                    trade_id=trade['id'],
+                    exit_price=exit_price,
+                    exit_reason=exit_reason,
+                    exit_type=exit_type,
+                    exit_time=candle_time
+                )
+                
+                return {
+                    'exit_triggered': True,
+                    'exit_reason': exit_reason,
+                    'exit_price': exit_price,
+                    'exit_time': candle_time,
+                    'exit_type': exit_type
+                }
+            
+            # No exit conditions found in historical data
+            logger.debug(f"No historical exit conditions found for {ticker} trade {trade['id']}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error checking historical exit conditions for {ticker}: {str(e)}")
+            return None
+
+    def _close_trade_with_exit(self, trade_id: int, exit_price: float, exit_reason: str,
+                              exit_type: str, exit_time: str) -> bool:
+        """
+        Close a trade with specific exit conditions and timing.
+        
+        Args:
+            trade_id: Trade ID to close
+            exit_price: Price at which trade was closed
+            exit_reason: Reason for closure (PROFIT_TARGET_HIT, STOP_LOSS_HIT)
+            exit_type: Type of exit (WIN, LOSS)
+            exit_time: Timestamp when exit occurred
+            
+        Returns:
+            True if trade was closed successfully, False otherwise
+        """
+        try:
+            with self.db_lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    
+                    # Get current trade data
+                    cursor.execute('SELECT * FROM active_trades WHERE id = ?', (trade_id,))
+                    trade_row = cursor.fetchone()
+                    if not trade_row:
+                        logger.warning(f"Trade {trade_id} not found for exit closure")
+                        return False
+                    
+                    # Convert to dict for easier access
+                    columns = [desc[0] for desc in cursor.description]
+                    trade = dict(zip(columns, trade_row))
+                    
+                    # Calculate realized P&L
+                    entry_price = float(trade['entry_price'])
+                    action = trade['action'].lower()
+                    
+                    if action == 'buy':
+                        realized_pnl = exit_price - entry_price
+                    else:  # sell
+                        realized_pnl = entry_price - exit_price
+                    
+                    # Determine trade status based on exit type
+                    if exit_type == "WIN":
+                        status = TradeStatus.PROFIT_HIT.value
+                        close_reason = TradeCloseReason.PROFIT_TARGET.value
+                    else:  # LOSS
+                        status = TradeStatus.STOP_HIT.value
+                        close_reason = TradeCloseReason.STOP_LOSS.value
+                    
+                    # Update trade with exit information
+                    cursor.execute('''
+                        UPDATE active_trades
+                        SET status = ?, close_time = ?, close_price = ?, close_reason = ?,
+                            close_details = ?, realized_pnl = ?, current_price = ?, updated_at = ?
+                        WHERE id = ?
+                    ''', (
+                        status,
+                        exit_time,
+                        exit_price,
+                        close_reason,
+                        json.dumps({
+                            'exit_reason': exit_reason,
+                            'exit_type': exit_type,
+                            'historical_exit': True
+                        }),
+                        realized_pnl,
+                        exit_price,
+                        datetime.now(),
+                        trade_id
+                    ))
+                    
+                    # Add trade update for historical record
+                    self._add_trade_update(cursor, trade_id, exit_price, exit_reason.lower(), {
+                        'exit_type': exit_type,
+                        'pnl': realized_pnl,
+                        'historical_exit': True,
+                        'exit_time': exit_time
+                    })
+                    
+                    conn.commit()
+                    
+                    logger.info(f"🎯 Trade {trade_id} closed: {exit_reason} at ${exit_price} (P&L: ${realized_pnl:.2f})")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Error closing trade {trade_id} with exit: {str(e)}")
+            return False
+
+    def _get_last_chart_analysis_time(self, ticker: str) -> Optional[datetime]:
+        """
+        Get the timestamp of the most recent chart analysis record for this ticker.
+        This ensures we only check historical data since the last chart read.
+        
+        Args:
+            ticker: Stock ticker symbol
+            
+        Returns:
+            Datetime of last chart analysis or None if no records found
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
+                
+                # Get the most recent chart analysis timestamp for this ticker
+                cursor.execute('''
+                    SELECT timestamp FROM chart_analysis
+                    WHERE ticker = ?
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                ''', (ticker,))
+                
+                result = cursor.fetchone()
+                if not result:
+                    logger.debug(f"No chart analysis records found for {ticker}")
+                    return None
+                
+                # Parse the timestamp
+                timestamp_str = result[0]
+                last_analysis_dt = self._safe_parse_datetime(timestamp_str)
+                
+                if last_analysis_dt:
+                    logger.debug(f"Last chart analysis for {ticker}: {last_analysis_dt}")
+                    return last_analysis_dt
+                else:
+                    logger.warning(f"Invalid timestamp in chart analysis for {ticker}: {timestamp_str}")
+                    return None
+                    
+        except Exception as e:
+            logger.error(f"Error getting last chart analysis time for {ticker}: {str(e)}")
+            return None
+
+    def _fetch_historical_candles_since_analysis(self, ticker: str, last_analysis_dt: datetime) -> Optional[List[Dict[str, Any]]]:
+        """
+        Fetch historical candles since last analysis using the existing market data infrastructure.
+        Uses the same routing system: AlphaVantage → YFinance → Hyperliquid for crypto.
+        
+        Args:
+            ticker: Stock ticker symbol
+            last_analysis_dt: Datetime of last chart analysis
+            
+        Returns:
+            List of candle data or None if no data available
+        """
+        try:
+            # Import the market data functions from the existing infrastructure
+            import sys
+            import os
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'app'))
+            
+            from market_data_routes import fetch_hyperliquid_data, is_crypto_symbol, fetch_yfinance_data
+            
+            # Calculate time range since last analysis
+            now = datetime.now()
+            time_diff = now - last_analysis_dt
+            
+            # For very recent analysis (< 5 minutes), skip historical check
+            if time_diff.total_seconds() < 300:  # 5 minutes
+                logger.debug(f"Last analysis was {time_diff.total_seconds():.0f}s ago, skipping historical check")
+                return None
+            
+            logger.info(f"🔍 Fetching historical data for {ticker} since {last_analysis_dt} ({time_diff})")
+            
+            # Use 1-minute timeframe for precise exit detection
+            timeframe = '1m'
+            
+            # Determine appropriate period based on time difference
+            if time_diff.days > 0:
+                period = f"{min(time_diff.days + 1, 7)}d"  # Max 7 days for minute data
+            else:
+                hours = max(1, int(time_diff.total_seconds() / 3600) + 1)
+                period = f"{min(hours, 24)}h"  # Max 24 hours
+            
+            logger.info(f"🔍 Using timeframe: {timeframe}, period: {period}")
+            
+            # Try the same routing as the main market data system
+            candles = None
+            
+            # For crypto tokens (like SOLUSD), use Hyperliquid
+            if is_crypto_symbol(ticker):
+                logger.info(f"🔍 Detected crypto symbol {ticker}, using Hyperliquid")
+                candles = fetch_hyperliquid_data(ticker, timeframe, period)
+                
+            # Fallback to YFinance for stocks or if Hyperliquid fails
+            if not candles:
+                logger.info(f"🔍 Using YFinance for {ticker}")
+                candles = fetch_yfinance_data(ticker, timeframe, period)
+            
+            if candles and len(candles) > 0:
+                # Filter candles to only include those since last analysis
+                filtered_candles = []
+                last_analysis_timestamp = int(last_analysis_dt.timestamp() * 1000)
+                
+                for candle in candles:
+                    candle_time = candle.get('time', 0)
+                    if candle_time > last_analysis_timestamp:
+                        # Convert to our expected format
+                        filtered_candles.append({
+                            'timestamp': datetime.fromtimestamp(candle_time / 1000),
+                            'high': float(candle.get('high', 0)),
+                            'low': float(candle.get('low', 0)),
+                            'open': float(candle.get('open', 0)),
+                            'close': float(candle.get('close', 0))
+                        })
+                
+                logger.info(f"🔍 Found {len(filtered_candles)} candles since last analysis")
+                return filtered_candles if filtered_candles else None
+            
+            logger.debug(f"No historical candles available for {ticker}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error fetching historical candles for {ticker}: {str(e)}")
+            return None
+    
+    def _ensure_active_trades_table(self):
+        """Ensure the active_trades table and chart_analysis table exist with proper schema"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Create chart_analysis table for tracking analysis timestamps
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS chart_analysis (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ticker TEXT NOT NULL,
+                        timeframe TEXT NOT NULL,
+                        timestamp TEXT NOT NULL,
+                        analysis_data TEXT,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                        UNIQUE(ticker, timestamp)
+                    )
+                ''')
                 
                 # Create active_trades table
                 cursor.execute('''
@@ -422,23 +881,33 @@ class ActiveTradeService:
                 max_favorable = min(max_favorable or entry_price, current_price)
                 max_adverse = max(max_adverse or entry_price, current_price)
             
-            # Check for exit conditions
+            # Check for exit conditions with detailed logging
             exit_triggered = False
             exit_reason = None
             exit_details = {}
             
             if trade['status'] == TradeStatus.ACTIVE.value:
-                if target_price and ((action == 'buy' and current_price >= target_price) or 
+                logger.info(f"🎯 Checking current price exit conditions for {ticker} trade {trade['id']}")
+                logger.info(f"🎯 Current: ${current_price}, Entry: ${entry_price}, Target: ${target_price}, Stop: ${stop_loss}, Action: {action}")
+                
+                # Check profit target
+                if target_price and ((action == 'buy' and current_price >= target_price) or
                                    (action == 'sell' and current_price <= target_price)):
                     exit_triggered = True
                     exit_reason = TradeCloseReason.PROFIT_TARGET.value
                     exit_details = {'target_price': target_price, 'achieved_price': current_price}
+                    logger.info(f"🎯 PROFIT TARGET HIT: {ticker} trade {trade['id']} - Target: ${target_price}, Current: ${current_price}")
                     
-                elif stop_loss and ((action == 'buy' and current_price <= stop_loss) or 
+                # Check stop loss
+                elif stop_loss and ((action == 'buy' and current_price <= stop_loss) or
                                   (action == 'sell' and current_price >= stop_loss)):
                     exit_triggered = True
                     exit_reason = TradeCloseReason.STOP_LOSS.value
                     exit_details = {'stop_loss': stop_loss, 'hit_price': current_price}
+                    logger.info(f"🎯 STOP LOSS HIT: {ticker} trade {trade['id']} - Stop: ${stop_loss}, Current: ${current_price}")
+                
+                else:
+                    logger.debug(f"🎯 No exit conditions met for {ticker} trade {trade['id']} at current price ${current_price}")
             
             with self.db_lock:
                 with sqlite3.connect(self.db_path) as conn:
@@ -648,23 +1117,42 @@ class ActiveTradeService:
             if not trade:
                 return None
             
-            # Update trade progress with current price
+            # CRITICAL: Check for profit target and stop loss hits
+            # First check current price, then historical candles if needed
+            logger.info(f"🎯 Checking exit conditions for {trade['status']} trade {trade['id']} ({ticker})")
+            
             progress = self.update_trade_progress(ticker, current_price)
             
-            # Refresh trade data after update
+            # If trade was closed by current price check, return None
+            if progress and progress.get('exit_triggered'):
+                logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by current price: {progress.get('exit_reason')}")
+                return None
+            
+            # For active trades, also check historical candles since last update for precise exit detection
+            if trade['status'] == TradeStatus.ACTIVE.value:
+                historical_exit = self._check_historical_exit_conditions(ticker, trade)
+                if historical_exit:
+                    logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data: {historical_exit.get('exit_reason')}")
+                    return None
+            
+            # Refresh trade data after potential updates
             trade = self.get_active_trade(ticker)
             if not trade:
                 return None
             
             # Calculate time since trade creation and trigger
-            created_time = datetime.fromisoformat(trade['created_at'])
+            created_time = self._safe_parse_datetime(trade['created_at'])
+            if not created_time:
+                logger.warning(f"Invalid created_at timestamp for trade {trade.get('id')}")
+                return None
             time_since_creation = (datetime.now() - created_time).total_seconds() / 3600
             
             trigger_time = None
             time_since_trigger = None
             if trade.get('trigger_hit_time'):
-                trigger_time = datetime.fromisoformat(trade['trigger_hit_time'])
-                time_since_trigger = (datetime.now() - trigger_time).total_seconds() / 3600
+                trigger_time = self._safe_parse_datetime(trade['trigger_hit_time'])
+                if trigger_time:
+                    time_since_trigger = (datetime.now() - trigger_time).total_seconds() / 3600
             
             # Build comprehensive context
             context = {
@@ -695,7 +1183,8 @@ class ActiveTradeService:
                 
             elif trade['status'] == TradeStatus.ACTIVE.value:
                 pnl_text = f"${trade.get('unrealized_pnl', 0):.2f}" if trade.get('unrealized_pnl') else "N/A"
-                context['trade_message'] = f"ACTIVE TRADE: {trade['action'].upper()} at ${trade['entry_price']} (triggered {time_since_trigger:.1f}h ago, P&L: {pnl_text})"
+                trigger_text = f"{time_since_trigger:.1f}h ago" if time_since_trigger is not None else "recently"
+                context['trade_message'] = f"ACTIVE TRADE: {trade['action'].upper()} at ${trade['entry_price']} (triggered {trigger_text}, P&L: {pnl_text})"
                 context['ai_instruction'] = "ACKNOWLEDGE ACTIVE TRADE: You must acknowledge this active trade and assess its current status. You may suggest early closure ONLY for overwhelming technical reasons."
             
             return context

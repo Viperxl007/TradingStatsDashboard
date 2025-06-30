@@ -1817,6 +1817,65 @@ def get_active_trade_service():
         active_trade_service = ActiveTradeService(chart_context_manager.db_path)
     return active_trade_service
 
+@api_bp.route('/active-trades/history-all', methods=['GET'])
+def get_all_trades_history():
+    """
+    Get all trades including closed ones for AI Trade Tracker history.
+    
+    Returns:
+        JSON: List of all trades (active and closed)
+    """
+    try:
+        trade_service = get_active_trade_service()
+        
+        # Query all trades from database (including closed ones)
+        import sqlite3
+        with sqlite3.connect(trade_service.db_path) as conn:
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+                SELECT ticker, timeframe, status, action, entry_price, target_price,
+                       stop_loss, current_price, unrealized_pnl, created_at, updated_at,
+                       close_time, close_price, close_reason, realized_pnl
+                FROM active_trades
+                ORDER BY updated_at DESC
+                LIMIT 1000
+            ''')
+            
+            all_trades = []
+            for row in cursor.fetchall():
+                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
+                all_trades.append({
+                    'ticker': ticker,
+                    'timeframe': timeframe,
+                    'status': status,
+                    'action': action,
+                    'entry_price': entry_price,
+                    'target_price': target_price,
+                    'stop_loss': stop_loss,
+                    'current_price': current_price,
+                    'unrealized_pnl': unrealized_pnl,
+                    'created_at': created_at,
+                    'updated_at': updated_at,
+                    'close_time': close_time,
+                    'close_price': close_price,
+                    'close_reason': close_reason,
+                    'realized_pnl': realized_pnl
+                })
+        
+        return jsonify({
+            "all_trades": all_trades,
+            "count": len(all_trades),
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting all trades history: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
 @api_bp.route('/active-trades/<ticker>', methods=['GET'])
 def get_active_trade(ticker):
     """
@@ -1961,7 +2020,8 @@ def get_all_active_trades():
             
             cursor.execute('''
                 SELECT ticker, timeframe, status, action, entry_price, target_price,
-                       stop_loss, current_price, unrealized_pnl, created_at, updated_at
+                       stop_loss, current_price, unrealized_pnl, created_at, updated_at,
+                       close_time, close_price, close_reason, realized_pnl
                 FROM active_trades
                 WHERE status IN ('waiting', 'active')
                 ORDER BY updated_at DESC
@@ -1969,7 +2029,7 @@ def get_all_active_trades():
             
             active_trades = []
             for row in cursor.fetchall():
-                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at = row
+                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
                 active_trades.append({
                     'ticker': ticker,
                     'timeframe': timeframe,
@@ -1981,7 +2041,11 @@ def get_all_active_trades():
                     'current_price': current_price,
                     'unrealized_pnl': unrealized_pnl,
                     'created_at': created_at,
-                    'updated_at': updated_at
+                    'updated_at': updated_at,
+                    'close_time': close_time,
+                    'close_price': close_price,
+                    'close_reason': close_reason,
+                    'realized_pnl': realized_pnl
                 })
         
         return jsonify({
