@@ -40,8 +40,11 @@ export const prepareContextSync = async (
 ): Promise<ContextSyncRequest> => {
   try {
     // Check for active trades that might be transitioning from WAITING to ACTIVE
-    const activeTradeResponse = await fetch(`/api/active-trades/${ticker}`);
+    const activeTradeUrl = `http://localhost:5000/api/active-trades/${ticker}`;
+    console.log(`🔍 [ContextSync] Fetching active trade from: ${activeTradeUrl}`);
+    const activeTradeResponse = await fetch(activeTradeUrl);
     
+    console.log(`📡 [ContextSync] Response status: ${activeTradeResponse.status}`);
     if (activeTradeResponse.ok) {
       const activeTradeData = await activeTradeResponse.json();
       

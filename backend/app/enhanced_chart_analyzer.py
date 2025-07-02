@@ -795,6 +795,22 @@ Be specific with exact price levels and realistic probability assessments.
             profit_targets = trading.get('profit_targets', [])
             risk_management = trading.get('risk_management', {})
             
+            # CRITICAL FIX: Sort entry strategies by probability (highest first)
+            if entry_strategies:
+                def probability_sort_key(strategy):
+                    prob = strategy.get('probability', 'low').lower()
+                    if prob == 'high':
+                        return 3
+                    elif prob == 'medium':
+                        return 2
+                    else:  # low or any other value
+                        return 1
+                
+                entry_strategies = sorted(entry_strategies, key=probability_sort_key, reverse=True)
+                logger.info(f"🎯 [PROBABILITY FIX] Sorted {len(entry_strategies)} strategies by probability:")
+                for i, strategy in enumerate(entry_strategies):
+                    logger.info(f"   {i+1}. {strategy.get('strategy_type', 'unknown')} - {strategy.get('probability', 'unknown')} probability")
+            
             # Determine action
             action = 'hold'
             if trading_bias.get('direction') == 'bullish':
@@ -802,10 +818,13 @@ Be specific with exact price levels and realistic probability assessments.
             elif trading_bias.get('direction') == 'bearish':
                 action = 'sell'
             
-            # Get entry price
+            # Get entry price from HIGHEST PROBABILITY strategy (now first after sorting)
             entry_price = None
+            selected_strategy = None
             if entry_strategies:
-                entry_price = entry_strategies[0].get('entry_price')
+                selected_strategy = entry_strategies[0]
+                entry_price = selected_strategy.get('entry_price')
+                logger.info(f"🎯 [PROBABILITY FIX] Selected strategy: {selected_strategy.get('strategy_type', 'unknown')} with {selected_strategy.get('probability', 'unknown')} probability")
             
             # Get target price
             target_price = None
@@ -826,13 +845,21 @@ Be specific with exact price levels and realistic probability assessments.
                 if risk > 0:
                     risk_reward = reward / risk
             
+            # Enhanced reasoning that includes strategy selection info
+            base_reasoning = trading_bias.get('reasoning', 'Based on technical analysis')
+            if selected_strategy and len(entry_strategies) > 1:
+                strategy_info = f" Selected highest probability strategy: {selected_strategy.get('strategy_type', 'unknown')} ({selected_strategy.get('probability', 'unknown')} probability) from {len(entry_strategies)} available strategies."
+                reasoning = base_reasoning + strategy_info
+            else:
+                reasoning = base_reasoning
+
             return {
                 "action": action,
                 "entryPrice": entry_price,
                 "targetPrice": target_price,
                 "stopLoss": stop_loss,
                 "riskReward": risk_reward,
-                "reasoning": trading_bias.get('reasoning', 'Based on technical analysis')
+                "reasoning": reasoning
             }
             
         except Exception as e:

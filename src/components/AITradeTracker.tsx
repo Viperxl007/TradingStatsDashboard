@@ -39,6 +39,8 @@ import AIActiveTradesPanel from './aiTradeTracker/AIActiveTradesPanel';
 import AITradeHistoryPanel from './aiTradeTracker/AITradeHistoryPanel';
 import AITradeStatisticsPanel from './aiTradeTracker/AITradeStatisticsPanel';
 import AIPerformanceAnalysisPanel from './aiTradeTracker/AIPerformanceAnalysisPanel';
+import DeletionManager from './deletion/DeletionManager';
+import { DeletionResult } from '../services/universalDeletionService';
 
 /**
  * AI Trade Tracker Component
@@ -185,6 +187,46 @@ const AITradeTracker: React.FC = () => {
   };
 
   /**
+   * Handle enhanced deletion completion
+   */
+  const handleDeletionComplete = (result: DeletionResult) => {
+    if (result.success) {
+      // Reload data after successful deletion
+      loadAITrades();
+      
+      toast({
+        title: 'Deletion Completed',
+        description: `Successfully processed ${result.deletedItems.length} items with enhanced safety checks`,
+        status: 'success',
+        duration: 5000,
+        isClosable: true,
+      });
+    } else {
+      toast({
+        title: 'Deletion Issues',
+        description: `Deletion completed with ${result.errors.length} issues. Check console for details.`,
+        status: 'warning',
+        duration: 7000,
+        isClosable: true,
+      });
+    }
+  };
+
+  /**
+   * Get selected trades for deletion (example - would be implemented based on selection logic)
+   */
+  const getSelectedTradesForDeletion = () => {
+    // This would be implemented based on your selection logic
+    // For now, return closed trades as an example
+    const closedTrades = aiTrades.filter(trade => trade.status === 'closed' || trade.status === 'user_closed');
+    return closedTrades.slice(0, 5).map(trade => ({
+      id: trade.id,
+      type: 'ai_trade' as const,
+      displayName: `${trade.ticker} - ${trade.action} (${new Date(trade.entryDate).toLocaleDateString()})`
+    }));
+  };
+
+  /**
    * Handle tab change
    */
   const handleTabChange = (index: number) => {
@@ -286,6 +328,19 @@ const AITradeTracker: React.FC = () => {
             >
               Refresh
             </Button>
+            
+            {/* Enhanced Deletion Manager */}
+            <DeletionManager
+              items={getSelectedTradesForDeletion()}
+              onDeletionComplete={handleDeletionComplete}
+              buttonText="Smart Delete"
+              variant="outline"
+              size="sm"
+              showAsMenu={true}
+              dialogTitle="AI Trade Deletion"
+              dialogDescription="Review the impact of deleting selected AI trades with comprehensive dependency analysis"
+            />
+            
             <Button
               leftIcon={<FiTrash2 />}
               colorScheme="red"
@@ -353,6 +408,7 @@ const AITradeTracker: React.FC = () => {
                 <TabPanel>
                   <AITradeHistoryPanel
                     onError={(error: string) => setError(error)}
+                    onTradeDeleted={loadAITrades}
                   />
                 </TabPanel>
                 <TabPanel>

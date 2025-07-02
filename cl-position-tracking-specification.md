@@ -22,7 +22,7 @@ This document provides a comprehensive technical specification for adding a Conc
 
 ### Existing Trade Tracking Patterns
 - **Trade Types**: Comprehensive options trading support via [`tradeTracker.ts`](src/types/tradeTracker.ts)
-- **Database**: Client-side IndexedDB via [`tradeTrackerDB.ts`](src/services/tradeTrackerDB.ts)
+- **Database**: Client-side storage via [`tradeTrackerDB.ts`](src/services/tradeTrackerDB.ts)
 - **Components**: Modular component structure in [`src/components/tradeTracker/`](src/components/tradeTracker/)
 
 ## Target Requirements

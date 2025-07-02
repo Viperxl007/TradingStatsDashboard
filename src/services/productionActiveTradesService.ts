@@ -7,11 +7,13 @@
  */
 
 import { AITradeEntry, AITradeStatus } from '../types/aiTradeTracker';
+import { mapProductionStatusToAIStatus, ProductionTradeStatus } from '../utils/statusMapping';
 
 export interface ProductionActiveTrade {
+  id: number;
   ticker: string;
   timeframe: string;
-  status: 'waiting' | 'active';
+  status: 'waiting' | 'active' | 'profit_hit' | 'stop_hit' | 'ai_closed' | 'user_closed';
   action: 'buy' | 'sell';
   entry_price: number;
   target_price?: number;
@@ -20,6 +22,10 @@ export interface ProductionActiveTrade {
   unrealized_pnl?: number;
   created_at: string;
   updated_at: string;
+  close_time?: string;
+  close_price?: number;
+  close_reason?: string;
+  realized_pnl?: number;
 }
 
 export interface ProductionActiveTradesResponse {
@@ -91,25 +97,13 @@ export const fetchActiveTradeFromProduction = async (ticker: string): Promise<Pr
  * Convert production active trade to AI Trade Tracker format
  */
 export const convertProductionTradeToAITrade = (productionTrade: ProductionActiveTrade): AITradeEntry => {
-  // Map production status to AI Trade Tracker status
-  const mapStatus = (status: string): AITradeStatus => {
-    switch (status) {
-      case 'waiting':
-        return 'waiting';
-      case 'active':
-        return 'open';
-      default:
-        return 'waiting';
-    }
-  };
-
   // Calculate profit/loss percentage if we have the data
   const profitLossPercentage = productionTrade.unrealized_pnl && productionTrade.entry_price
     ? (productionTrade.unrealized_pnl / productionTrade.entry_price) * 100
     : undefined;
 
   const aiTrade: AITradeEntry = {
-    id: `production-${productionTrade.ticker}-${new Date(productionTrade.created_at).getTime()}`,
+    id: `backend-${productionTrade.id}`,
     analysisId: `chart-analysis-${productionTrade.ticker}`,
     ticker: productionTrade.ticker,
     timeframe: productionTrade.timeframe,
@@ -128,12 +122,14 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
     reasoning: `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
     
     // Trade Execution
-    status: mapStatus(productionTrade.status),
+    status: mapProductionStatusToAIStatus(productionTrade.status),
     entryDate: new Date(productionTrade.created_at).getTime(),
     actualEntryPrice: productionTrade.entry_price,
+    exitDate: productionTrade.close_time ? new Date(productionTrade.close_time).getTime() : undefined,
+    exitPrice: productionTrade.close_price,
     
     // Performance Metrics
-    profitLoss: productionTrade.unrealized_pnl || 0,
+    profitLoss: productionTrade.realized_pnl || productionTrade.unrealized_pnl || 0,
     profitLossPercentage: profitLossPercentage || 0,
     
     // Metadata
@@ -145,6 +141,34 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
   };
 
   return aiTrade;
+};
+
+/**
+ * Fetch all trades (including closed ones) from the production API for AI Trade Tracker history
+ */
+export const fetchAllTradesHistoryFromProduction = async (): Promise<ProductionActiveTrade[]> => {
+  try {
+    console.log('🔍 [ProductionActiveTradesService] Fetching all trades history from production API');
+    
+    const response = await fetch('http://localhost:5000/api/active-trades/history-all');
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        console.log('📭 [ProductionActiveTradesService] No trades found in history');
+        return [];
+      }
+      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+    }
+    
+    const data = await response.json();
+    
+    console.log(`✅ [ProductionActiveTradesService] Found ${data.count} trades in history`);
+    return data.all_trades || [];
+    
+  } catch (error) {
+    console.error('❌ [ProductionActiveTradesService] Error fetching trades history:', error);
+    return [];
+  }
 };
 
 /**
@@ -160,6 +184,23 @@ export const getAllActiveTradesForAITracker = async (): Promise<AITradeEntry[]> 
     
   } catch (error) {
     console.error('❌ [ProductionActiveTradesService] Error converting trades:', error);
+    return [];
+  }
+};
+
+/**
+ * Get all trades (including closed ones) in AI Trade Tracker format for history panel
+ */
+export const getAllTradesHistoryForAITracker = async (): Promise<AITradeEntry[]> => {
+  try {
+    const productionTrades = await fetchAllTradesHistoryFromProduction();
+    const aiTrades = productionTrades.map(convertProductionTradeToAITrade);
+    
+    console.log(`🔄 [ProductionActiveTradesService] Converted ${productionTrades.length} production trades history to AI format`);
+    return aiTrades;
+    
+  } catch (error) {
+    console.error('❌ [ProductionActiveTradesService] Error converting trades history:', error);
     return [];
   }
 };

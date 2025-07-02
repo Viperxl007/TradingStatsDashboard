@@ -46,6 +46,7 @@ import {
 import { format } from 'date-fns';
 import { AITradeEntry, AITradeStatus } from '../../types/aiTradeTracker';
 import { getAllActiveTradesForAITracker, closeActiveTradeInProduction } from '../../services/productionActiveTradesService';
+import { getStatusColorScheme, getStatusDisplayText } from '../../utils/statusMapping';
 
 interface AIActiveTradesPanelProps {
   onError: (error: string) => void;
@@ -83,17 +84,10 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
   const textColor = useColorModeValue('gray.600', 'gray.400');
 
   /**
-   * Get status color scheme
+   * Get status color scheme (using standardized utility)
    */
-  const getStatusColorScheme = (status: AITradeStatus) => {
-    switch (status) {
-      case 'waiting': return 'yellow';
-      case 'open': return 'green';
-      case 'closed': return 'gray';
-      case 'cancelled': return 'red';
-      case 'expired': return 'orange';
-      default: return 'gray';
-    }
+  const getTradeStatusColorScheme = (status: AITradeStatus) => {
+    return getStatusColorScheme(status);
   };
 
   /**
@@ -235,7 +229,7 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
   return (
     <Box>
       {/* Summary Stats */}
-      <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4} mb={6}>
+      <SimpleGrid columns={{ base: 2, md: 3, lg: 6 }} spacing={4} mb={6}>
         <Stat>
           <StatLabel>Active Trades</StatLabel>
           <StatNumber>{trades.length}</StatNumber>
@@ -261,9 +255,25 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
           </StatHelpText>
         </Stat>
         <Stat>
+          <StatLabel>Profitable Exits</StatLabel>
+          <StatNumber>{trades.filter(t => t.status === 'profit_hit').length}</StatNumber>
+          <StatHelpText>
+            <Icon as={FiTarget} mr={1} />
+            Target hit
+          </StatHelpText>
+        </Stat>
+        <Stat>
+          <StatLabel>Stop Losses</StatLabel>
+          <StatNumber>{trades.filter(t => t.status === 'stop_hit').length}</StatNumber>
+          <StatHelpText>
+            <Icon as={FiShield} mr={1} />
+            Risk managed
+          </StatHelpText>
+        </Stat>
+        <Stat>
           <StatLabel>Avg Confidence</StatLabel>
           <StatNumber>
-            {trades.length > 0 
+            {trades.length > 0
               ? `${(trades.reduce((sum, t) => sum + t.confidence, 0) / trades.length * 100).toFixed(0)}%`
               : '0%'
             }
@@ -301,11 +311,11 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
                     <Badge colorScheme="blue" variant="outline">
                       {trade.timeframe}
                     </Badge>
-                    <Badge 
-                      colorScheme={getStatusColorScheme(trade.status)} 
+                    <Badge
+                      colorScheme={getTradeStatusColorScheme(trade.status)}
                       variant="subtle"
                     >
-                      {trade.status.toUpperCase()}
+                      {getStatusDisplayText(trade.status)}
                     </Badge>
                   </HStack>
                   

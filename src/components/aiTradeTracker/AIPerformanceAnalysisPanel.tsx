@@ -20,7 +20,7 @@ import {
   useColorModeValue,
   SimpleGrid
 } from '@chakra-ui/react';
-import { getAllActiveTradesForAITracker } from '../../services/productionActiveTradesService';
+import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
 import { AITradeEntry, AITradeStatistics } from '../../types/aiTradeTracker';
 
 interface AIPerformanceAnalysisPanelProps {
@@ -45,7 +45,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
   const loadData = async () => {
     try {
       setLoading(true);
-      const allTrades = await getAllActiveTradesForAITracker();
+      const allTrades = await getAllTradesHistoryForAITracker();
       
       // Calculate basic statistics from trades
       const totalTrades = allTrades.length;

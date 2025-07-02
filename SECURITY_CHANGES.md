@@ -46,7 +46,7 @@ This document summarizes the security improvements made to protect sensitive dat
 |-----------|--------|-------------------|
 | API Keys | 🔒 **SECURED** | Environment variables + local config |
 | Database Files | 🔒 **PROTECTED** | Enhanced .gitignore patterns |
-| Trade Data | 🔒 **SAFE** | Browser-local IndexedDB storage |
+| Trade Data | 🔒 **SAFE** | Backend database with secure API access |
 | Configuration | 🔒 **SECURED** | Excluded from version control |
 | Backup Files | 🔒 **PROTECTED** | .gitignore patterns |
 | Log Files | 🔒 **PROTECTED** | .gitignore patterns |

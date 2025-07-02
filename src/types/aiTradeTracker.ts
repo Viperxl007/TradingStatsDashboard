@@ -7,14 +7,31 @@
 import { TradingRecommendationOverlay } from './chartAnalysis';
 
 /**
- * AI Trade status
+ * AI Trade status - Industry standard trade statuses
  */
-export type AITradeStatus = 'waiting' | 'open' | 'closed' | 'cancelled' | 'expired';
+export type AITradeStatus =
+  | 'waiting'      // Waiting for entry trigger
+  | 'open'         // Trade is active/open
+  | 'closed'       // Trade closed (generic)
+  | 'profit_hit'   // Closed via profit target (WIN)
+  | 'stop_hit'     // Closed via stop loss (LOSS)
+  | 'cancelled'    // Trade cancelled before entry
+  | 'expired'      // Trade expired without entry
+  | 'ai_closed'    // Closed by AI recommendation
+  | 'user_closed'; // Closed manually by user
 
 /**
- * AI Trade close reason
+ * AI Trade close reason - Industry standard close reasons
  */
-export type AITradeCloseReason = 'manual' | 'stop_loss' | 'take_profit' | 'ai_recommendation' | 'expiration';
+export type AITradeCloseReason =
+  | 'manual'           // Manual close by user
+  | 'stop_loss'        // Stop loss triggered
+  | 'take_profit'      // Take profit/target hit
+  | 'ai_recommendation' // AI recommended close
+  | 'ai_invalidation'  // AI invalidated the trade
+  | 'expiration'       // Trade expired
+  | 'profit_target'    // Profit target hit (alias for take_profit)
+  | 'user_close';      // User manually closed
 
 /**
  * AI Trade confidence level

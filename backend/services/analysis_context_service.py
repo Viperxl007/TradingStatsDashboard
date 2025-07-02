@@ -24,6 +24,20 @@ class AnalysisContextService:
         self.db_path = db_path or os.path.join(os.path.dirname(__file__), '..', 'instance', 'chart_analysis.db')
         self.active_trade_service = ActiveTradeService(self.db_path)
     
+    def _safe_parse_datetime(self, datetime_str):
+        """Safely parse datetime string with validation"""
+        if not datetime_str or not isinstance(datetime_str, str):
+            return None
+        try:
+            return datetime.fromisoformat(datetime_str.replace('Z', '+00:00'))
+        except (ValueError, TypeError):
+            try:
+                # Try parsing as SQLite datetime format
+                return datetime.strptime(datetime_str, '%Y-%m-%d %H:%M:%S.%f')
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid datetime format: {datetime_str}, error: {e}")
+                return None
+    
     @staticmethod
     def get_contextual_timeframe_hours(chart_timeframe: str) -> int:
         """Determine how far back to look based on chart timeframe"""
@@ -171,12 +185,10 @@ class AnalysisContextService:
         try:
             # Calculate time difference
             if isinstance(analysis_timestamp, str):
-                # Handle different timestamp formats
-                try:
-                    analysis_time = datetime.fromisoformat(analysis_timestamp.replace('Z', '+00:00'))
-                except ValueError:
-                    # Try parsing as SQLite datetime format
-                    analysis_time = datetime.strptime(analysis_timestamp, '%Y-%m-%d %H:%M:%S.%f')
+                analysis_time = self._safe_parse_datetime(analysis_timestamp)
+                if not analysis_time:
+                    logger.warning(f"Could not parse analysis timestamp: {analysis_timestamp}")
+                    return None
             else:
                 analysis_time = analysis_timestamp
             
@@ -197,7 +209,21 @@ class AnalysisContextService:
             trading_analysis = detailed_analysis.get('tradingAnalysis', {})
             entry_strategies = trading_analysis.get('entry_strategies', [])
             
-            # Find the primary entry strategy (usually the first one or the one matching the main recommendation)
+            # CRITICAL FIX: Sort entry strategies by probability (highest first) - same as enhanced_chart_analyzer.py
+            if entry_strategies:
+                def probability_sort_key(strategy):
+                    prob = strategy.get('probability', 'low').lower()
+                    if prob == 'high':
+                        return 3
+                    elif prob == 'medium':
+                        return 2
+                    else:  # low or any other value
+                        return 1
+                
+                entry_strategies = sorted(entry_strategies, key=probability_sort_key, reverse=True)
+                logger.info(f"🎯 [CONTEXT PROBABILITY FIX] Sorted {len(entry_strategies)} strategies by probability for context analysis")
+            
+            # Find the primary entry strategy (now highest probability after sorting)
             primary_strategy = None
             if entry_strategies:
                 # Try to find strategy matching the main entry price
@@ -205,9 +231,10 @@ class AnalysisContextService:
                     if strategy.get('entry_price') == entry_price:
                         primary_strategy = strategy
                         break
-                # If no match, use the first strategy
+                # If no match, use the highest probability strategy (first after sorting)
                 if not primary_strategy:
                     primary_strategy = entry_strategies[0]
+                    logger.info(f"🎯 [CONTEXT PROBABILITY FIX] Using highest probability strategy: {primary_strategy.get('strategy_type', 'unknown')} ({primary_strategy.get('probability', 'unknown')} probability)")
             
             # Extract other key data
             sentiment = analysis_data.get('sentiment', 'neutral')
@@ -312,10 +339,10 @@ class AnalysisContextService:
             # Parse last analysis timestamp
             try:
                 if isinstance(last_analysis_timestamp, str):
-                    try:
-                        last_analysis_time = datetime.fromisoformat(last_analysis_timestamp.replace('Z', '+00:00'))
-                    except ValueError:
-                        last_analysis_time = datetime.strptime(last_analysis_timestamp, '%Y-%m-%d %H:%M:%S.%f')
+                    last_analysis_time = self._safe_parse_datetime(last_analysis_timestamp)
+                    if not last_analysis_time:
+                        logger.warning(f"Could not parse last analysis timestamp: {last_analysis_timestamp}")
+                        return default_response
                 else:
                     last_analysis_time = last_analysis_timestamp
             except Exception as e:
@@ -451,9 +478,10 @@ class AnalysisContextService:
                 
                 # Handle different time formats
                 if isinstance(candle_time, str):
-                    try:
-                        candle_timestamp = datetime.fromisoformat(candle_time.replace('Z', '+00:00')).timestamp()
-                    except:
+                    parsed_time = self._safe_parse_datetime(candle_time)
+                    if parsed_time:
+                        candle_timestamp = parsed_time.timestamp()
+                    else:
                         continue
                 else:
                     candle_timestamp = float(candle_time)
@@ -500,7 +528,7 @@ class AnalysisContextService:
                 
                 if active_trade_context.get('original_analysis_id'):
                     logger.info(f"📋 Retrieving original analysis for active trade: {active_trade_context['original_analysis_id']}")
-                    historical_context = self._get_analysis_by_id(active_trade_context['original_analysis_id'])
+                    historical_context = self._get_analysis_by_id(active_trade_context['original_analysis_id'], ticker, current_timeframe)
                 
                 # If original analysis not found or no ID, fall back to recent context
                 if not historical_context:
@@ -610,7 +638,10 @@ class AnalysisContextService:
             
             # Calculate time difference
             if isinstance(analysis_timestamp, str):
-                analysis_time = datetime.fromisoformat(analysis_timestamp.replace('Z', '+00:00'))
+                analysis_time = self._safe_parse_datetime(analysis_timestamp)
+                if not analysis_time:
+                    logger.warning(f"Could not parse analysis timestamp: {analysis_timestamp}")
+                    return None
             else:
                 analysis_time = analysis_timestamp
             
@@ -637,7 +668,7 @@ class AnalysisContextService:
             logger.error(f"Error in expanded window search for {ticker}: {str(e)}")
             return None
     
-    def _get_analysis_by_id(self, analysis_id: int) -> Optional[Dict[str, Any]]:
+    def _get_analysis_by_id(self, analysis_id: int, ticker: str, current_timeframe: str) -> Optional[Dict[str, Any]]:
         """
         Retrieve a specific analysis by ID, bypassing time window restrictions.
         Used for active trades to ensure we always have the original context.
@@ -673,7 +704,8 @@ class AnalysisContextService:
                 
                 # Extract context using the same method as recent analysis
                 context = self._extract_context_safely(
-                    analysis_data, analysis_id, analysis_timestamp, None, None
+                    analysis_data, analysis_id, analysis_timestamp, None, None,
+                    ticker, current_timeframe
                 )
                 
                 logger.info(f"📋 Retrieved original analysis context for ID {analysis_id}")

@@ -12,6 +12,7 @@ import {
 import { keyframes } from '@emotion/react';
 import { FiActivity, FiClock, FiTrendingUp } from 'react-icons/fi';
 import { fetchActiveTrade, ActiveTrade } from '../services/activeTradeService';
+import { isActiveTradeStatus, isWaitingTradeStatus, getStatusDisplayText } from '../utils/statusMapping';
 
 interface ActiveTradeAlertProps {
   ticker: string;
@@ -86,31 +87,46 @@ const ActiveTradeAlert: React.FC<ActiveTradeAlertProps> = ({ ticker }) => {
 
   // Determine alert styling based on trade status
   const getAlertConfig = () => {
-    if (activeTrade.status === 'active') {
+    console.log(`🎨 [ActiveTradeAlert] Determining alert config for ${ticker} with status: "${activeTrade.status}"`);
+    if (isActiveTradeStatus(activeTrade.status)) {
       return {
         icon: FiTrendingUp,
         iconColor: 'green.400',
         badgeColorScheme: 'green',
-        badgeText: 'TAKEN & OPEN',
+        badgeText: getStatusDisplayText(activeTrade.status),
         alertText: 'ACTIVE TRADE ALERT',
         animation: pulseAnimation,
-        bgGradient: colorMode === 'dark' 
-          ? 'linear(to-r, green.900, green.800)' 
+        bgGradient: colorMode === 'dark'
+          ? 'linear(to-r, green.900, green.800)'
           : 'linear(to-r, green.50, green.100)',
         borderColor: 'green.400'
       };
-    } else {
+    } else if (isWaitingTradeStatus(activeTrade.status)) {
       return {
         icon: FiClock,
         iconColor: 'orange.400',
         badgeColorScheme: 'orange',
-        badgeText: 'WAITING',
+        badgeText: getStatusDisplayText(activeTrade.status),
         alertText: 'ACTIVE TRADE ALERT',
         animation: glowAnimation,
-        bgGradient: colorMode === 'dark' 
-          ? 'linear(to-r, orange.900, orange.800)' 
+        bgGradient: colorMode === 'dark'
+          ? 'linear(to-r, orange.900, orange.800)'
           : 'linear(to-r, orange.50, orange.100)',
         borderColor: 'orange.400'
+      };
+    } else {
+      // Fallback for other statuses
+      return {
+        icon: FiActivity,
+        iconColor: 'gray.400',
+        badgeColorScheme: 'gray',
+        badgeText: getStatusDisplayText(activeTrade.status),
+        alertText: 'TRADE ALERT',
+        animation: undefined,
+        bgGradient: colorMode === 'dark'
+          ? 'linear(to-r, gray.900, gray.800)'
+          : 'linear(to-r, gray.50, gray.100)',
+        borderColor: 'gray.400'
       };
     }
   };

@@ -1,12 +1,18 @@
-export const formatDate = (date: Date): string => {
-    return date.toLocaleDateString('en-US');
-};
+/**
+ * Utilities Index
+ * 
+ * Central export point for all utility functions and services
+ */
 
-export const calculatePercentage = (part: number, total: number): number => {
-    if (total === 0) return 0;
-    return ((part / total) * 100);
-};
+// Export existing utilities
+export * from './dateUtils';
+export * from './percentageUtils';
+export * from './statusMapping';
+export * from './technicalIndicators';
 
-export const roundToTwoDecimals = (num: number): number => {
-    return Math.round(num * 100) / 100;
-};
+// Export AI Trade Cleanup utilities (Backend-Only Architecture)
+export * from './aiTradeCleanupIntegration';
+export { AITradeCleanupManager, initializeCleanupTools } from './aiTradeCleanupIntegration';
+
+// Note: Legacy IndexedDB cleanup functions removed as part of backend-only migration
+// Available functions: AITradeCleanupManager.getTradeStatus(), AITradeCleanupManager.deleteTradesByStatus()

@@ -1119,15 +1119,15 @@ interface DataProviderProps {
 export const DataProvider: React.FC<DataProviderProps> = ({ children }) => {
   const [state, dispatch] = React.useReducer(dataReducer, initialState);
   
-  // Initialize AI Trade Tracker database on app start
+  // Initialize AI Trade Tracker service on app start
   React.useEffect(() => {
     const initializeAITradeTracker = async () => {
       try {
-        const { aiTradeTrackerDB } = await import('../services/aiTradeTrackerDB');
-        await aiTradeTrackerDB.init();
-        console.log('✅ [DataProvider] AI Trade Tracker database initialized');
+        const { aiTradeService } = await import('../services/aiTradeService');
+        await aiTradeService.init();
+        console.log('✅ [DataProvider] AI Trade Tracker service initialized');
       } catch (error) {
-        console.error('❌ [DataProvider] Failed to initialize AI Trade Tracker database:', error);
+        console.error('❌ [DataProvider] Failed to initialize AI Trade Tracker service:', error);
       }
     };
     
