@@ -209,7 +209,21 @@ class AnalysisContextService:
             trading_analysis = detailed_analysis.get('tradingAnalysis', {})
             entry_strategies = trading_analysis.get('entry_strategies', [])
             
-            # Find the primary entry strategy (usually the first one or the one matching the main recommendation)
+            # CRITICAL FIX: Sort entry strategies by probability (highest first) - same as enhanced_chart_analyzer.py
+            if entry_strategies:
+                def probability_sort_key(strategy):
+                    prob = strategy.get('probability', 'low').lower()
+                    if prob == 'high':
+                        return 3
+                    elif prob == 'medium':
+                        return 2
+                    else:  # low or any other value
+                        return 1
+                
+                entry_strategies = sorted(entry_strategies, key=probability_sort_key, reverse=True)
+                logger.info(f"🎯 [CONTEXT PROBABILITY FIX] Sorted {len(entry_strategies)} strategies by probability for context analysis")
+            
+            # Find the primary entry strategy (now highest probability after sorting)
             primary_strategy = None
             if entry_strategies:
                 # Try to find strategy matching the main entry price
@@ -217,9 +231,10 @@ class AnalysisContextService:
                     if strategy.get('entry_price') == entry_price:
                         primary_strategy = strategy
                         break
-                # If no match, use the first strategy
+                # If no match, use the highest probability strategy (first after sorting)
                 if not primary_strategy:
                     primary_strategy = entry_strategies[0]
+                    logger.info(f"🎯 [CONTEXT PROBABILITY FIX] Using highest probability strategy: {primary_strategy.get('strategy_type', 'unknown')} ({primary_strategy.get('probability', 'unknown')} probability)")
             
             # Extract other key data
             sentiment = analysis_data.get('sentiment', 'neutral')

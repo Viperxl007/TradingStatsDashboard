@@ -147,37 +147,42 @@ export const periodToDataPoints = (period: string, timeframe: string): number =>
   switch (timeframe) {
     case '1m':
       switch (unit) {
-        case 'd': return value * 390; // trading minutes per day
-        case 'w': return value * 1950; // trading minutes per week
-        case 'mo': return value * 8190; // trading minutes per month
+        case 'd': return value * 1440; // 24 * 60 minutes per day (crypto 24/7)
+        case 'w': return value * 10080; // 1440 * 7 minutes per week
+        case 'mo': return value * 43200; // 1440 * 30 minutes per month (approx)
+        case 'y': return value * 525600; // 1440 * 365 minutes per year
         default: return config.dataPoints;
       }
     case '5m':
       switch (unit) {
-        case 'd': return value * 78; // 5-min intervals per day
-        case 'w': return value * 390; // 5-min intervals per week
-        case 'mo': return value * 1638; // 5-min intervals per month
+        case 'd': return value * 288; // 24 * 12 intervals per day (crypto 24/7)
+        case 'w': return value * 2016; // 288 * 7 intervals per week
+        case 'mo': return value * 8640; // 288 * 30 intervals per month (approx)
+        case 'y': return value * 105120; // 288 * 365 intervals per year
         default: return config.dataPoints;
       }
     case '15m':
       switch (unit) {
-        case 'd': return value * 26; // 15-min intervals per day
-        case 'w': return value * 130; // 15-min intervals per week
-        case 'mo': return value * 546; // 15-min intervals per month
+        case 'd': return value * 96; // 24 * 4 intervals per day (crypto 24/7)
+        case 'w': return value * 672; // 96 * 7 intervals per week
+        case 'mo': return value * 2880; // 96 * 30 intervals per month (approx)
+        case 'y': return value * 35040; // 96 * 365 intervals per year
         default: return config.dataPoints;
       }
     case '1h':
       switch (unit) {
-        case 'd': return Math.round(value * 6.5); // trading hours per day
-        case 'w': return Math.round(value * 32.5); // trading hours per week
-        case 'mo': return Math.round(value * 136.5); // trading hours per month
+        case 'd': return value * 24; // 24 hours per day (crypto trades 24/7)
+        case 'w': return value * 168; // 24 * 7 hours per week
+        case 'mo': return value * 720; // 24 * 30 hours per month (approx)
+        case 'y': return value * 8760; // 24 * 365 hours per year
         default: return config.dataPoints;
       }
     case '4h':
       switch (unit) {
-        case 'd': return Math.ceil(value * 1.625); // 4-hour intervals per day
-        case 'w': return Math.ceil(value * 8.125); // 4-hour intervals per week
-        case 'mo': return Math.ceil(value * 34.125); // 4-hour intervals per month
+        case 'd': return value * 6; // 24/4 = 6 intervals per day (crypto 24/7)
+        case 'w': return value * 42; // 6 * 7 intervals per week
+        case 'mo': return value * 180; // 6 * 30 intervals per month (approx)
+        case 'y': return value * 2190; // 6 * 365 intervals per year
         default: return config.dataPoints;
       }
     case '1D':

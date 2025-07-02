@@ -12,6 +12,12 @@ import {
   AnalysisContext,
   AvailableModelsResponse
 } from '../types/chartAnalysis';
+import {
+  prepareContextSync,
+  enhanceAnalysisRequest,
+  validateContextResponse,
+  ContextSyncRequest
+} from './contextSynchronizationService';
 
 // API base URL
 const API_BASE_URL = 'http://localhost:5000/api/chart-analysis';
@@ -94,17 +100,38 @@ async function fetchWithRetry(url: string, options: RequestInit = {}, retries = 
 }
 
 /**
- * Analyze a chart image using AI
- * 
+ * Analyze a chart image using AI with context synchronization validation
+ *
  * @param request Chart analysis request payload
  * @returns Promise with analysis result
  */
 export const analyzeChart = async (request: ChartAnalysisRequest): Promise<ChartAnalysisResult> => {
   try {
-    console.log(`Analyzing chart for ticker: ${request.ticker}`);
+    console.log(`🔍 [ChartAnalysisService] Analyzing chart for ticker: ${request.ticker}`);
+    
+    // Step 1: Prepare context synchronization if not already present
+    let contextSync: ContextSyncRequest | undefined;
+    if (!(request as any).contextSync && request.currentPrice) {
+      console.log(`🔄 [ChartAnalysisService] Preparing context sync for ${request.ticker}`);
+      contextSync = await prepareContextSync(
+        request.ticker,
+        request.timeframe || '1D',
+        request.currentPrice
+      );
+      console.log(`✅ [ChartAnalysisService] Context sync prepared:`, contextSync);
+    } else {
+      contextSync = (request as any).contextSync;
+    }
+    
+    // Step 2: Enhance request with context synchronization data
+    let enhancedRequest = request;
+    if (contextSync) {
+      enhancedRequest = enhanceAnalysisRequest(request, contextSync);
+      console.log(`🔄 [ChartAnalysisService] Enhanced request with context sync for ${request.ticker}`);
+    }
     
     // Convert base64 image to blob
-    const base64Data = request.chartImage;
+    const base64Data = enhancedRequest.chartImage;
     const byteCharacters = atob(base64Data);
     const byteNumbers = new Array(byteCharacters.length);
     for (let i = 0; i < byteCharacters.length; i++) {
@@ -116,34 +143,36 @@ export const analyzeChart = async (request: ChartAnalysisRequest): Promise<Chart
     // Create FormData for multipart/form-data request
     const formData = new FormData();
     formData.append('image', imageBlob, 'chart.png');
-    formData.append('ticker', request.ticker);
-    console.log(`🔍 [ChartAnalysisService] Sending timeframe to backend: ${request.timeframe || '1D'}`);
-    formData.append('timeframe', request.timeframe || '1D');
+    formData.append('ticker', enhancedRequest.ticker);
+    console.log(`🔍 [ChartAnalysisService] Sending timeframe to backend: ${enhancedRequest.timeframe || '1D'}`);
+    formData.append('timeframe', enhancedRequest.timeframe || '1D');
     
     // Add current price for forward-looking validation
-    if (request.currentPrice) {
-      formData.append('currentPrice', request.currentPrice.toString());
-      console.log(`💰 Current price: $${request.currentPrice}`);
+    if (enhancedRequest.currentPrice) {
+      formData.append('currentPrice', enhancedRequest.currentPrice.toString());
+      console.log(`💰 Current price: $${enhancedRequest.currentPrice}`);
     }
     
     // Add selected model if provided
-    if (request.model) {
-      formData.append('model', request.model);
+    if (enhancedRequest.model) {
+      formData.append('model', enhancedRequest.model);
     }
     
     // Prepare context data including synchronization information
     const contextData: any = {
-      timeframe: request.timeframe
+      timeframe: enhancedRequest.timeframe
     };
     
-    if (request.additionalContext) {
-      contextData.additionalContext = request.additionalContext;
+    if (enhancedRequest.additionalContext) {
+      contextData.additionalContext = enhancedRequest.additionalContext;
     }
     
     // Include context synchronization data if present
-    if ((request as any).contextSync) {
-      contextData.contextSync = (request as any).contextSync;
-      console.log(`🔄 [ChartAnalysisService] Including context sync data:`, (request as any).contextSync);
+    if ((enhancedRequest as any).contextSync) {
+      contextData.contextSync = (enhancedRequest as any).contextSync;
+      console.log(`🔄 [ChartAnalysisService] Including context sync data:`, (enhancedRequest as any).contextSync);
+    } else {
+      console.log(`⚠️ [ChartAnalysisService] No context sync data found in request for ${enhancedRequest.ticker}`);
     }
     
     formData.append('context', JSON.stringify(contextData));
@@ -166,9 +195,26 @@ export const analyzeChart = async (request: ChartAnalysisRequest): Promise<Chart
       }
     }
     
-    return await response.json();
+    const analysisResult = await response.json();
+    
+    // Step 3: Validate context response if we have context sync expectations
+    if (contextSync) {
+      console.log(`🔍 [ChartAnalysisService] Validating context response for ${request.ticker}`);
+      const contextValidation = validateContextResponse(analysisResult, contextSync);
+      
+      if (!contextValidation.success) {
+        console.warn(`⚠️ [ChartAnalysisService] Context validation failed for ${request.ticker}:`, contextValidation.error);
+        // Add validation warning to the analysis result
+        analysisResult.contextValidationWarning = contextValidation.error;
+      } else {
+        console.log(`✅ [ChartAnalysisService] Context validation successful for ${request.ticker}`);
+        analysisResult.contextValidationSuccess = true;
+      }
+    }
+    
+    return analysisResult;
   } catch (error) {
-    console.error('Error analyzing chart:', error);
+    console.error('❌ [ChartAnalysisService] Error analyzing chart:', error);
     if (error instanceof TypeError && error.message.includes('Failed to fetch')) {
       throw new Error('Failed to connect to the backend server. Please make sure the backend server is running on http://localhost:5000');
     }
@@ -314,11 +360,16 @@ export const getAnalysisHistory = async (ticker: string, limit: number = 50): Pr
  * Delete a specific chart analysis
  *
  * @param analysisId Analysis ID to delete
+ * @param force Force deletion even if active trades exist
  * @returns Promise with success confirmation
  */
-export const deleteAnalysis = async (analysisId: string): Promise<{ success: boolean }> => {
+export const deleteAnalysis = async (analysisId: string, force: boolean = false): Promise<{ success: boolean }> => {
   try {
-    const response = await fetchWithRetry(`${API_BASE_URL}/delete/${analysisId}`, {
+    const url = force
+      ? `${API_BASE_URL}/delete/${analysisId}?force=true`
+      : `${API_BASE_URL}/delete/${analysisId}`;
+      
+    const response = await fetchWithRetry(url, {
       method: 'DELETE',
       headers: {
         'Accept': 'application/json'
@@ -328,8 +379,21 @@ export const deleteAnalysis = async (analysisId: string): Promise<{ success: boo
     if (!response.ok) {
       try {
         const errorData = await response.json();
+        
+        // Handle 409 Conflict (active trades) specially
+        if (response.status === 409 && errorData.reason === 'active_trades') {
+          const error = new Error(errorData.error || 'Analysis has active trades') as any;
+          error.status = 409;
+          error.reason = 'active_trades';
+          error.canForce = errorData.can_force;
+          throw error;
+        }
+        
         throw new Error(errorData.error || 'Failed to delete analysis');
       } catch (jsonError) {
+        if (jsonError instanceof Error && (jsonError as any).status === 409) {
+          throw jsonError; // Re-throw 409 errors with metadata
+        }
         throw new Error(`Failed to delete analysis: ${response.status} ${response.statusText}`);
       }
     }

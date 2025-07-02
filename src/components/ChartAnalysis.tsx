@@ -34,7 +34,13 @@ import {
   PopoverBody,
   PopoverCloseButton,
   Tooltip,
-  useDisclosure
+  useDisclosure,
+  AlertDialog,
+  AlertDialogBody,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogContent,
+  AlertDialogOverlay
 } from '@chakra-ui/react';
 import { FiSearch, FiCamera, FiTrendingUp, FiBarChart, FiClock, FiAlertTriangle, FiSettings, FiMessageSquare, FiInfo, FiPlay, FiRefreshCw, FiX } from 'react-icons/fi';
 import { getTimeframeConfig, getTimeframesByCategory, periodToDataPoints } from '../utils/timeframeConfig';
@@ -362,6 +368,40 @@ const ChartAnalysis: React.FC = () => {
         });
       }
       
+      // CRITICAL: Check if trade closure was detected and clear overlays first
+      if ((result as any).trade_closure_detected || (result as any).clear_chart_overlays) {
+        console.log(`🧹 [ChartAnalysis] Trade closure detected for ${selectedTicker} - clearing all chart overlays and forcing chart refresh`);
+        
+        // Import and use the chart overlay utility
+        const { clearAllChartOverlays, forceChartRefresh } = await import('../utils/chartOverlayUtils');
+        
+        // Step 1: Clear all overlays immediately
+        await clearAllChartOverlays();
+        
+        // Step 2: Clear all trading recommendation overlays
+        const clearedRecommendations = new Map();
+        dispatch({
+          type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
+          payload: clearedRecommendations
+        });
+        
+        // Step 3: Clear active trade overlays
+        setActiveTradeOverlays(new Map());
+        
+        // Step 4: Clear any existing analysis data to ensure clean state
+        dispatch(clearChartAnalysisData());
+        
+        // Step 5: Force chart refresh to ensure clean rendering
+        await forceChartRefresh();
+        
+        console.log(`✅ [ChartAnalysis] Chart overlays cleared and chart refreshed for ${selectedTicker} due to trade closure`);
+        
+        // Step 6: Wait longer for chart to fully refresh and render clean
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        console.log(`🎯 [ChartAnalysis] Chart should now be clean for fresh AI analysis of ${selectedTicker}`);
+      }
+      
       // Create trading recommendation overlay if we have recommendations
       if (result.recommendations && result.recommendations.action !== 'hold') {
         const tradingOverlay = createTradingRecommendationOverlay(result);
@@ -554,18 +594,39 @@ const ChartAnalysis: React.FC = () => {
     }
   };
 
+  // State for force deletion confirmation dialog
+  const { isOpen: isDeleteDialogOpen, onOpen: onDeleteDialogOpen, onClose: onDeleteDialogClose } = useDisclosure();
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const cancelRef = React.useRef<HTMLButtonElement>(null);
+
   // Handle deleting a single analysis
-  const handleDeleteAnalysis = async (analysisId: string) => {
+  const handleDeleteAnalysis = async (analysisId: string, force: boolean = false) => {
     try {
-      await deleteAnalysis(analysisId);
+      await deleteAnalysis(analysisId, force);
       toast({
         title: 'Analysis Deleted',
-        description: 'Analysis deleted successfully',
+        description: `Analysis deleted successfully${force ? ' (forced)' : ''}`,
         status: 'success',
         duration: 3000,
         isClosable: true,
       });
-    } catch (error) {
+      
+      // Close dialog if it was open
+      if (isDeleteDialogOpen) {
+        onDeleteDialogClose();
+        setPendingDeleteId(null);
+        setDeleteError(null);
+      }
+    } catch (error: any) {
+      // Handle 409 Conflict (active trades) specially
+      if (error.status === 409 && error.reason === 'active_trades' && !force) {
+        setPendingDeleteId(analysisId);
+        setDeleteError(error.message);
+        onDeleteDialogOpen();
+        return; // Don't show error toast, show confirmation dialog instead
+      }
+      
       const errorMessage = error instanceof Error ? error.message : 'Failed to delete analysis';
       toast({
         title: 'Delete Failed',
@@ -576,6 +637,20 @@ const ChartAnalysis: React.FC = () => {
       });
       throw error; // Re-throw so the component can handle it
     }
+  };
+
+  // Handle force deletion confirmation
+  const handleForceDelete = async () => {
+    if (pendingDeleteId) {
+      await handleDeleteAnalysis(pendingDeleteId, true);
+    }
+  };
+
+  // Handle canceling force deletion
+  const handleCancelDelete = () => {
+    onDeleteDialogClose();
+    setPendingDeleteId(null);
+    setDeleteError(null);
   };
 
   // Handle bulk deleting analyses
@@ -1272,6 +1347,56 @@ const ChartAnalysis: React.FC = () => {
           </Box>
         )}
       </VStack>
+
+      {/* Force Deletion Confirmation Dialog */}
+      <AlertDialog
+        isOpen={isDeleteDialogOpen}
+        leastDestructiveRef={cancelRef}
+        onClose={handleCancelDelete}
+      >
+        <AlertDialogOverlay>
+          <AlertDialogContent>
+            <AlertDialogHeader fontSize="lg" fontWeight="bold">
+              <HStack>
+                <Icon as={FiAlertTriangle} color="orange.500" />
+                <Text>Analysis Has Active Trades</Text>
+              </HStack>
+            </AlertDialogHeader>
+
+            <AlertDialogBody>
+              <VStack align="start" spacing={3}>
+                <Text>
+                  {deleteError}
+                </Text>
+                <Text fontSize="sm" color="gray.600">
+                  Force deleting this analysis will automatically close all associated active trades.
+                  This action cannot be undone.
+                </Text>
+                <Alert status="warning" size="sm">
+                  <AlertIcon />
+                  <Text fontSize="sm">
+                    All active trades for this analysis will be closed at their current entry price.
+                  </Text>
+                </Alert>
+              </VStack>
+            </AlertDialogBody>
+
+            <AlertDialogFooter>
+              <Button ref={cancelRef} onClick={handleCancelDelete}>
+                Cancel
+              </Button>
+              <Button
+                colorScheme="red"
+                onClick={handleForceDelete}
+                ml={3}
+                leftIcon={<Icon as={FiAlertTriangle} />}
+              >
+                Force Delete
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialogOverlay>
+      </AlertDialog>
     </Box>
   );
 };

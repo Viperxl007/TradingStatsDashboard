@@ -225,6 +225,20 @@ const TradingRecommendationOverlay: React.FC<TradingRecommendationOverlayProps> 
     };
   }, [chart, recommendation, currentTimeframe]);
 
+  // Listen for global clear overlay events (e.g., when trades are closed)
+  useEffect(() => {
+    const handleClearOverlays = (event: CustomEvent) => {
+      console.log('🧹 [TradingOverlay] Received clear overlays event:', event.detail);
+      clearOverlays();
+    };
+
+    window.addEventListener('clearChartOverlays', handleClearOverlays as EventListener);
+    
+    return () => {
+      window.removeEventListener('clearChartOverlays', handleClearOverlays as EventListener);
+    };
+  }, [chart]);
+
   // This component doesn't render anything visible - it just manages chart overlays
   return null;
 };

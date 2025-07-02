@@ -60,9 +60,9 @@ The following files are automatically excluded from version control:
 ## 🗄️ Database Security
 
 ### Trade Data Storage
-- **Frontend**: Uses IndexedDB (browser-local storage)
-- **No server-side database**: Trade data stays on your local machine
-- **No cloud sync**: Data is not transmitted to external servers
+- **Frontend**: Uses browser-local storage for caching
+- **Backend**: Secure server-side database for persistent data
+- **No cloud sync**: Data is not transmitted to external third-party servers
 
 ### Data Privacy
 - All trading data remains local to your browser

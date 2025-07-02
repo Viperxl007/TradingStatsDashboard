@@ -91,6 +91,73 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
     }
   }, [isCapturing, onCapturingStateChange]);
 
+  // Listen for chart overlay clearing events (triggered when trades are closed)
+  useEffect(() => {
+    const handleClearOverlays = (event: CustomEvent) => {
+      console.log('🧹 [ModernChart] Received clear overlays event:', event.detail);
+      
+      // Force chart to refresh by triggering recreation
+      if (chartRef.current && symbol) {
+        console.log('🔄 [ModernChart] Clearing chart overlays by forcing recreation...');
+        
+        // Clear the chart first
+        if (chartRef.current) {
+          try {
+            chartRef.current.remove();
+          } catch (e) {
+            console.warn('⚠️ [ModernChart] Error removing chart during overlay clear:', e);
+          }
+          chartRef.current = null;
+          seriesRef.current = null;
+        }
+        
+        // Trigger recreation by setting loading state
+        setIsLoading(true);
+        setError(null);
+      }
+    };
+
+    const handleForceRefresh = (event: CustomEvent) => {
+      console.log('🔄 [ModernChart] Received force refresh event:', event.detail);
+      
+      // Force complete chart recreation
+      if (containerRef.current && symbol) {
+        console.log('🔄 [ModernChart] Force recreating chart...');
+        
+        // Clear the chart first
+        if (chartRef.current) {
+          try {
+            chartRef.current.remove();
+          } catch (e) {
+            console.warn('⚠️ [ModernChart] Error removing chart during force refresh:', e);
+          }
+          chartRef.current = null;
+          seriesRef.current = null;
+        }
+        
+        // Trigger recreation by setting loading state
+        setIsLoading(true);
+        setError(null);
+        
+        // Small delay to ensure DOM is clean
+        setTimeout(() => {
+          // The main useEffect will handle recreation when dependencies change
+          console.log('🎯 [ModernChart] Chart recreation triggered');
+        }, 100);
+      }
+    };
+
+    // Add event listeners
+    window.addEventListener('clearChartOverlays', handleClearOverlays as EventListener);
+    window.addEventListener('forceChartRefresh', handleForceRefresh as EventListener);
+
+    // Cleanup
+    return () => {
+      window.removeEventListener('clearChartOverlays', handleClearOverlays as EventListener);
+      window.removeEventListener('forceChartRefresh', handleForceRefresh as EventListener);
+    };
+  }, [symbol, timeframe, period]);
+
   // Expose capturing control methods
   const startCapturing = useCallback(() => {
     console.log('🎯 [ModernChart] Starting capture mode');

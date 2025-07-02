@@ -58,13 +58,15 @@ import {
 } from 'react-icons/fi';
 import { format } from 'date-fns';
 import { AITradeEntry, AITradeFilterOptions, AITradeStatus } from '../../types/aiTradeTracker';
-import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
+import { aiTradeService } from '../../services/aiTradeService';
+import { getStatusDisplayText } from '../../utils/statusMapping';
 
 interface AITradeHistoryPanelProps {
   onError: (error: string) => void;
+  onTradeDeleted?: () => void; // Callback to notify parent of deletion
 }
 
-const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) => {
+const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError, onTradeDeleted }) => {
   const toast = useToast();
   const [trades, setTrades] = useState<AITradeEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,9 +87,11 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
   const loadTrades = async () => {
     try {
       setLoading(true);
-      // Load all trades including closed ones for history
-      const allTrades = await getAllTradesHistoryForAITracker();
+      // Initialize the backend service and load all trades
+      await aiTradeService.init();
+      const allTrades = await aiTradeService.getAllTrades();
       setTrades(allTrades);
+      console.log(`✅ [AITradeHistoryPanel] Loaded ${allTrades.length} trades from backend`);
     } catch (error) {
       console.error('Error loading trades:', error);
       onError('Failed to load trade history');
@@ -221,18 +225,41 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
   };
 
   /**
-   * Handle deleting a trade
+   * Handle deleting a trade using the backend service
    */
   const handleDeleteTrade = async (trade: AITradeEntry) => {
-    // Note: We don't delete production trades from AI Trade Tracker
-    // This would need to be handled through the Chart Analysis system
-    toast({
-      title: 'Cannot Delete',
-      description: 'Production trades must be managed through Chart Analysis',
-      status: 'warning',
-      duration: 5000,
-      isClosable: true,
-    });
+    try {
+      console.log(`🗑️ [AITradeHistoryPanel] Deleting trade: ${trade.ticker} (${trade.id})`);
+      
+      // Use the backend service to delete the trade
+      await aiTradeService.deleteTrade(trade.id);
+      
+      toast({
+        title: 'Trade Deleted Successfully',
+        description: `Trade ${trade.ticker} has been removed from the backend.`,
+        status: 'success',
+        duration: 5000,
+        isClosable: true,
+      });
+      
+      // Reload trades to reflect changes
+      await loadTrades();
+      
+      // Notify parent component of the deletion
+      if (onTradeDeleted) {
+        onTradeDeleted();
+      }
+      
+    } catch (error) {
+      console.error('Error deleting trade:', error);
+      toast({
+        title: 'Deletion Error',
+        description: `Failed to delete trade: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        status: 'error',
+        duration: 8000,
+        isClosable: true,
+      });
+    }
   };
 
   /**
@@ -452,7 +479,7 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError }) =>
                           colorScheme={getStatusColorScheme(trade.status)}
                           variant="subtle"
                         >
-                          {trade.status.toUpperCase()}
+                          {getStatusDisplayText(trade.status)}
                         </Badge>
                       </Td>
                       <Td>

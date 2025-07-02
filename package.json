@@ -45,6 +45,8 @@
     "@types/uuid": "^10.0.0",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
+    "fake-indexeddb": "^6.0.1",
+    "jsdom": "^26.1.0",
     "typescript": "^4.9.5"
   },
   "keywords": [

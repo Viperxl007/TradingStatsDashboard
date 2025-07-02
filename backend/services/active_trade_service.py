@@ -639,7 +639,21 @@ class ActiveTradeService:
             trading_analysis = detailed_analysis.get('tradingAnalysis', {})
             entry_strategies = trading_analysis.get('entry_strategies', [])
             
-            # Find primary entry strategy
+            # CRITICAL FIX: Sort entry strategies by probability (highest first) - consistent with other services
+            if entry_strategies:
+                def probability_sort_key(strategy):
+                    prob = strategy.get('probability', 'low').lower()
+                    if prob == 'high':
+                        return 3
+                    elif prob == 'medium':
+                        return 2
+                    else:  # low or any other value
+                        return 1
+                
+                entry_strategies = sorted(entry_strategies, key=probability_sort_key, reverse=True)
+                logger.info(f"🎯 [ACTIVE TRADE PROBABILITY FIX] Sorted {len(entry_strategies)} strategies by probability for active trade creation")
+            
+            # Find primary entry strategy (now highest probability after sorting)
             primary_strategy = None
             if entry_strategies:
                 for strategy in entry_strategies:
@@ -648,6 +662,7 @@ class ActiveTradeService:
                         break
                 if not primary_strategy:
                     primary_strategy = entry_strategies[0]
+                    logger.info(f"🎯 [ACTIVE TRADE PROBABILITY FIX] Using highest probability strategy: {primary_strategy.get('strategy_type', 'unknown')} ({primary_strategy.get('probability', 'unknown')} probability)")
             
             entry_strategy = primary_strategy.get('strategy_type', 'unknown') if primary_strategy else 'unknown'
             entry_condition = primary_strategy.get('entry_condition', 'No condition specified') if primary_strategy else 'No condition specified'
@@ -1101,6 +1116,44 @@ class ActiveTradeService:
             logger.error(f"Error closing trade by user for {ticker}: {str(e)}")
             return False
     
+    def _get_recent_trade_closures(self, ticker: str, minutes: int = 5) -> List[Dict[str, Any]]:
+        """
+        Get trades that were closed recently for the given ticker.
+        Used to detect if chart overlays should be cleared.
+        
+        Args:
+            ticker: Stock ticker symbol
+            minutes: How many minutes back to look for closures
+            
+        Returns:
+            List of recently closed trades
+        """
+        try:
+            self._ensure_active_trades_table()
+            cutoff_time = datetime.now() - timedelta(minutes=minutes)
+            
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                cursor.execute('''
+                    SELECT * FROM active_trades
+                    WHERE ticker = ?
+                    AND status IN ('closed_profit', 'closed_loss', 'closed_user')
+                    AND updated_at >= ?
+                    ORDER BY updated_at DESC
+                ''', (ticker.upper(), cutoff_time))
+                
+                trades = []
+                for row in cursor.fetchall():
+                    trades.append(dict(row))
+                
+                return trades
+                
+        except Exception as e:
+            logger.error(f"Error getting recent trade closures for {ticker}: {str(e)}")
+            return []
+    
     def get_trade_context_for_ai(self, ticker: str, current_price: float) -> Optional[Dict[str, Any]]:
         """
         Get comprehensive trade context for AI analysis.
@@ -1291,19 +1344,82 @@ class ActiveTradeService:
             bool: True if there are active trades referencing this analysis
         """
         try:
+            logger.info(f"🔍 [DEBUG] ActiveTradeService: Checking active trades for analysis {analysis_id} using db_path: {self.db_path}")
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    SELECT COUNT(*) FROM active_trades 
+                    SELECT COUNT(*) FROM active_trades
                     WHERE analysis_id = ? AND status IN ('waiting', 'active')
                 ''', (analysis_id,))
                 
                 count = cursor.fetchone()[0]
+                logger.info(f"🔍 [DEBUG] ActiveTradeService: Found {count} active trades for analysis {analysis_id}")
                 return count > 0
                 
         except Exception as e:
-            logger.error(f"Error checking active trades for analysis {analysis_id}: {str(e)}")
+            logger.error(f"🔍 [DEBUG] ActiveTradeService: Error checking active trades for analysis {analysis_id}: {str(e)}")
+            return False
+    
+    def force_close_trades_for_analysis(self, analysis_id: int, reason: str = "analysis_deleted") -> bool:
+        """
+        Force close all active trades for a specific analysis ID.
+        
+        Args:
+            analysis_id (int): The analysis ID whose trades should be closed
+            reason (str): Reason for force closure
+            
+        Returns:
+            bool: True if all trades were closed successfully
+        """
+        try:
+            logger.info(f"🔍 [DEBUG] ActiveTradeService: Force closing trades for analysis {analysis_id}, reason: {reason}")
+            with self.db_lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    
+                    # Get all active trades for this analysis
+                    cursor.execute('''
+                        SELECT id, ticker, action, entry_price FROM active_trades
+                        WHERE analysis_id = ? AND status IN ('waiting', 'active')
+                    ''', (analysis_id,))
+                    
+                    trades = cursor.fetchall()
+                    logger.info(f"🔍 [DEBUG] ActiveTradeService: Found {len(trades)} trades to force close for analysis {analysis_id}")
+                    
+                    if not trades:
+                        return True  # No trades to close
+                    
+                    # Close each trade
+                    for trade in trades:
+                        trade_id, ticker, action, entry_price = trade
+                        
+                        # Update trade status to closed
+                        cursor.execute('''
+                            UPDATE active_trades
+                            SET status = ?,
+                                close_reason = ?,
+                                close_price = ?,
+                                close_time = ?,
+                                updated_at = ?
+                            WHERE id = ?
+                        ''', (
+                            TradeStatus.USER_CLOSED.value,
+                            reason,
+                            entry_price,  # Use entry price as close price for forced closure
+                            datetime.now().isoformat(),
+                            datetime.now().isoformat(),
+                            trade_id
+                        ))
+                        
+                        logger.info(f"🔍 [DEBUG] ActiveTradeService: Force closed trade {trade_id} for {ticker}")
+                    
+                    conn.commit()
+                    logger.info(f"🔍 [DEBUG] ActiveTradeService: Successfully force closed {len(trades)} trades for analysis {analysis_id}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"🔍 [DEBUG] ActiveTradeService: Error force closing trades for analysis {analysis_id}: {str(e)}")
             return False
     
     def has_active_trades_for_analyses(self, analysis_ids: List[int]) -> Dict[int, bool]:
@@ -1354,3 +1470,43 @@ class ActiveTradeService:
         """
         active_trades_map = self.has_active_trades_for_analyses(analysis_ids)
         return [aid for aid, has_active in active_trades_map.items() if not has_active]
+
+    def delete_trade_by_id(self, trade_id: int, reason: str = "manual_deletion") -> bool:
+        """
+        Delete a trade by its database ID.
+        
+        Args:
+            trade_id (int): Database ID of the trade to delete
+            reason (str): Reason for deletion
+            
+        Returns:
+            bool: True if trade was deleted successfully, False otherwise
+        """
+        try:
+            with self.db_lock:
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    
+                    # Check if trade exists
+                    cursor.execute('SELECT ticker, status FROM active_trades WHERE id = ?', (trade_id,))
+                    trade_row = cursor.fetchone()
+                    if not trade_row:
+                        logger.warning(f"Trade {trade_id} not found for deletion")
+                        return False
+                    
+                    ticker, status = trade_row
+                    
+                    # Delete the trade
+                    cursor.execute('DELETE FROM active_trades WHERE id = ?', (trade_id,))
+                    
+                    # Also delete related trade updates
+                    cursor.execute('DELETE FROM trade_updates WHERE trade_id = ?', (trade_id,))
+                    
+                    conn.commit()
+                    
+                    logger.info(f"🗑️ Trade {trade_id} ({ticker}) deleted successfully. Reason: {reason}")
+                    return True
+                    
+        except Exception as e:
+            logger.error(f"Error deleting trade {trade_id}: {str(e)}")
+            return False

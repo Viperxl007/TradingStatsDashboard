@@ -9,7 +9,7 @@
 import { ChartAnalysisResult } from '../types/chartAnalysis';
 import { AITradeEntry, CreateAITradeRequest, UpdateAITradeRequest } from '../types/aiTradeTracker';
 import { closeActiveTradeInProduction, fetchActiveTradeFromProduction } from './productionActiveTradesService';
-import { aiTradeTrackerDB } from './aiTradeTrackerDB';
+import { aiTradeService } from './aiTradeService';
 import { deactivateRecommendationsForTicker } from './tradingRecommendationService';
 
 export interface TradeActionResult {
@@ -60,6 +60,7 @@ export const processAnalysisForTradeActions = async (
     // Enhanced context assessment
     const contextAssessment = analyzeContextAssessment(analysis);
     console.log(`🧠 [AITradeIntegration] Context assessment for ${analysis.ticker}:`, contextAssessment);
+    console.log(`📝 [AITradeIntegration] Raw context_assessment: "${analysis.context_assessment?.substring(0, 200)}..."`);
 
     // Check for closure recommendations
     const shouldClosePosition = checkForClosureRecommendation(analysis);
@@ -160,6 +161,7 @@ const analyzeContextAssessment = (analysis: ChartAnalysisResult): ContextAssessm
 
 /**
  * Check if the analysis recommends maintaining an existing position
+ * Fixed to properly distinguish between fresh analysis context and position management context
  */
 const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean => {
   if (!analysis.context_assessment) {
@@ -169,7 +171,36 @@ const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean 
   const contextAssessment = analysis.context_assessment.toLowerCase();
   const reasoning = analysis.recommendations?.reasoning?.toLowerCase() || '';
   
-  // Look for maintain indicators in context assessment and reasoning
+  // 🔍 CRITICAL FIX: Check for explicit indicators that there's an EXISTING position to maintain
+  const existingPositionIndicators = [
+    'previous position',
+    'existing position',
+    'current position',
+    'open position',
+    'active position',
+    'position context was provided',
+    'previous trade',
+    'existing trade'
+  ];
+
+  // Only proceed if there's evidence of an existing position
+  const hasExistingPosition = existingPositionIndicators.some(indicator =>
+    contextAssessment.includes(indicator)
+  );
+
+  // 🚫 CRITICAL: If AI explicitly says "no previous position context" or "fresh analysis",
+  // this is NOT a maintain scenario
+  const isFreshAnalysis = contextAssessment.includes('no previous position context') ||
+    contextAssessment.includes('fresh analysis') ||
+    contextAssessment.includes('initial analysis') ||
+    contextAssessment.includes('no position context');
+
+  if (isFreshAnalysis || !hasExistingPosition) {
+    console.log(`🆕 [AITradeIntegration] Fresh analysis detected for ${analysis.ticker} - not a maintain scenario`);
+    return false;
+  }
+  
+  // Look for explicit maintain indicators in context assessment and reasoning
   const maintainIndicators = [
     'maintain',
     'hold current position',
@@ -182,20 +213,27 @@ const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean 
     'maintain current'
   ];
 
-  // Check if AI explicitly says to maintain or if there's no major market structure change
+  // Check if AI explicitly says to maintain
   const hasMaintainKeyword = maintainIndicators.some(indicator =>
     contextAssessment.includes(indicator) || reasoning.includes(indicator)
   );
 
-  // Also check if there's context but no closure recommendation and no major market shift
-  const hasContextButNoMajorChange = !!analysis.context_assessment &&
-    !checkForClosureRecommendation(analysis) &&
-    !contextAssessment.includes('major') &&
-    !contextAssessment.includes('significant change') &&
-    !contextAssessment.includes('breakdown') &&
-    !contextAssessment.includes('failed');
+  // 🔧 FIXED LOGIC: Only check for maintain if there's an existing position AND explicit maintain keywords
+  // OR if there's an existing position with no closure recommendation and no major market shift
+  const shouldMaintainExistingPosition = hasExistingPosition && (
+    hasMaintainKeyword ||
+    (!checkForClosureRecommendation(analysis) &&
+     !contextAssessment.includes('major') &&
+     !contextAssessment.includes('significant change') &&
+     !contextAssessment.includes('breakdown') &&
+     !contextAssessment.includes('failed'))
+  );
 
-  return hasMaintainKeyword || hasContextButNoMajorChange;
+  if (shouldMaintainExistingPosition) {
+    console.log(`🔄 [AITradeIntegration] Maintain recommendation detected for existing position on ${analysis.ticker}`);
+  }
+
+  return shouldMaintainExistingPosition;
 };
 
 /**
@@ -316,7 +354,8 @@ const closeExistingPosition = async (
     }
 
     // 2. Close AI Trade Tracker entries
-    const aiTrades = await aiTradeTrackerDB.getTradesByTicker(ticker);
+    await aiTradeService.init();
+    const aiTrades = await aiTradeService.getTradesByTicker(ticker);
     const activeTrades = aiTrades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
 
     console.log(`🔍 [AITradeIntegration] Found ${activeTrades.length} active AI trades for ${ticker}`);
@@ -338,7 +377,7 @@ const closeExistingPosition = async (
           notes: `Closed due to AI invalidation - market conditions changed. PnL: ${pnlPercentage.toFixed(2)}%`
         };
 
-        await aiTradeTrackerDB.updateTrade(updateRequest);
+        await aiTradeService.updateTrade(updateRequest);
         console.log(`✅ [AITradeIntegration] Closed AI trade ${trade.id} for ${ticker} - PnL: ${pnlPercentage.toFixed(2)}%`);
         closedTrades.push(trade.id);
       } catch (error) {
@@ -426,7 +465,7 @@ const createAITradeFromAnalysis = async (
       priceAtRecommendation: analysis.currentPrice
     };
 
-    const newTrade = await aiTradeTrackerDB.createTrade(createRequest);
+    const newTrade = await aiTradeService.createTrade(createRequest);
     
     console.log(`✅ [AITradeIntegration] Created new AI trade ${newTrade.id} for ${analysis.ticker}`);
     
@@ -514,7 +553,8 @@ export const getActiveTradesSummary = async (ticker: string): Promise<{
     const productionTrade = await fetchActiveTradeFromProduction(ticker);
     
     // Get AI trades
-    const aiTrades = await aiTradeTrackerDB.getTradesByTicker(ticker);
+    await aiTradeService.init();
+    const aiTrades = await aiTradeService.getTradesByTicker(ticker);
     const activeAITrades = aiTrades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
     
     return {

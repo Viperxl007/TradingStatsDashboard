@@ -566,44 +566,92 @@ class ChartContextManager:
             logger.error(f"Error cleaning up old data: {str(e)}")
             return False
     
-    def delete_analysis(self, analysis_id: int) -> bool:
+    def delete_analysis(self, analysis_id: int, force: bool = False) -> dict:
         """
         Delete a specific chart analysis.
         
         Args:
             analysis_id (int): Analysis ID to delete
+            force (bool): Force deletion even if active trades exist
             
         Returns:
-            bool: Success status
+            dict: Detailed status with success, reason, and message
         """
         try:
+            logger.info(f"🔍 [DEBUG] Starting delete_analysis for ID {analysis_id}, force={force}")
             with self.db_lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     
                     # Check if analysis exists
                     cursor.execute('SELECT id FROM chart_analyses WHERE id = ?', (analysis_id,))
-                    if not cursor.fetchone():
-                        return False
+                    analysis_exists = cursor.fetchone()
+                    if not analysis_exists:
+                        logger.warning(f"🔍 [DEBUG] Analysis {analysis_id} not found in database")
+                        return {
+                            "success": False,
+                            "reason": "not_found",
+                            "message": f"Analysis {analysis_id} not found"
+                        }
+                    
+                    logger.info(f"🔍 [DEBUG] Analysis {analysis_id} exists, checking for active trades")
                     
                     # Check for active trades before deletion
                     from services.active_trade_service import ActiveTradeService
-                    active_trade_service = ActiveTradeService()
+                    active_trade_service = ActiveTradeService(self.db_path)
                     
-                    if active_trade_service.has_active_trades_for_analysis(analysis_id):
-                        logger.warning(f"Cannot delete analysis {analysis_id} - it has active trades")
-                        return False
+                    has_active_trades = active_trade_service.has_active_trades_for_analysis(analysis_id)
+                    logger.info(f"🔍 [DEBUG] Analysis {analysis_id} has_active_trades: {has_active_trades}")
                     
-                    # Delete the analysis (safe - no active trades)
+                    if has_active_trades and not force:
+                        logger.warning(f"🔍 [DEBUG] Cannot delete analysis {analysis_id} - it has active trades")
+                        return {
+                            "success": False,
+                            "reason": "active_trades",
+                            "message": f"Analysis {analysis_id} has active trades. Use force deletion to override."
+                        }
+                    
+                    # If force deletion and has active trades, clean up dependencies
+                    if force and has_active_trades:
+                        logger.info(f"🔍 [DEBUG] Force deleting analysis {analysis_id} - cleaning up active trades")
+                        try:
+                            # Close all active trades for this analysis
+                            cleanup_success = active_trade_service.force_close_trades_for_analysis(analysis_id, "analysis_deleted")
+                            if not cleanup_success:
+                                logger.error(f"🔍 [DEBUG] Failed to close active trades for analysis {analysis_id} - cleanup returned False")
+                                return {
+                                    "success": False,
+                                    "reason": "cleanup_failed",
+                                    "message": f"Failed to clean up active trades for analysis {analysis_id}"
+                                }
+                            logger.info(f"🔍 [DEBUG] Successfully closed active trades for analysis {analysis_id}")
+                        except Exception as cleanup_error:
+                            logger.error(f"🔍 [DEBUG] Error cleaning up active trades for analysis {analysis_id}: {str(cleanup_error)}")
+                            return {
+                                "success": False,
+                                "reason": "cleanup_failed",
+                                "message": f"Failed to clean up dependencies: {str(cleanup_error)}"
+                            }
+                    
+                    # Delete the analysis
+                    logger.info(f"🔍 [DEBUG] Proceeding with deletion of analysis {analysis_id}")
                     cursor.execute('DELETE FROM chart_analyses WHERE id = ?', (analysis_id,))
                     conn.commit()
                     
-                    logger.info(f"Deleted analysis with ID {analysis_id}")
-                    return True
+                    logger.info(f"🔍 [DEBUG] Successfully deleted analysis with ID {analysis_id}")
+                    return {
+                        "success": True,
+                        "reason": "deleted",
+                        "message": f"Analysis {analysis_id} deleted successfully" + (" (forced)" if force else "")
+                    }
                     
         except Exception as e:
-            logger.error(f"Error deleting analysis {analysis_id}: {str(e)}")
-            return False
+            logger.error(f"🔍 [DEBUG] Error deleting analysis {analysis_id}: {str(e)}")
+            return {
+                "success": False,
+                "reason": "error",
+                "message": f"Error deleting analysis: {str(e)}"
+            }
     
     def delete_analyses_bulk(self, analysis_ids: List[int]) -> int:
         """

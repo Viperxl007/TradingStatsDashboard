@@ -7,8 +7,10 @@
  */
 
 import { AITradeEntry, AITradeStatus } from '../types/aiTradeTracker';
+import { mapProductionStatusToAIStatus, ProductionTradeStatus } from '../utils/statusMapping';
 
 export interface ProductionActiveTrade {
+  id: number;
   ticker: string;
   timeframe: string;
   status: 'waiting' | 'active' | 'profit_hit' | 'stop_hit' | 'ai_closed' | 'user_closed';
@@ -95,33 +97,13 @@ export const fetchActiveTradeFromProduction = async (ticker: string): Promise<Pr
  * Convert production active trade to AI Trade Tracker format
  */
 export const convertProductionTradeToAITrade = (productionTrade: ProductionActiveTrade): AITradeEntry => {
-  // Map production status to AI Trade Tracker status
-  const mapStatus = (status: string): AITradeStatus => {
-    switch (status) {
-      case 'waiting':
-        return 'waiting';
-      case 'active':
-        return 'open';
-      case 'profit_hit':
-        return 'profit_hit';
-      case 'stop_hit':
-        return 'stop_hit';
-      case 'ai_closed':
-        return 'ai_closed';
-      case 'user_closed':
-        return 'user_closed';
-      default:
-        return 'closed'; // fallback for any unknown status
-    }
-  };
-
   // Calculate profit/loss percentage if we have the data
   const profitLossPercentage = productionTrade.unrealized_pnl && productionTrade.entry_price
     ? (productionTrade.unrealized_pnl / productionTrade.entry_price) * 100
     : undefined;
 
   const aiTrade: AITradeEntry = {
-    id: `production-${productionTrade.ticker}-${new Date(productionTrade.created_at).getTime()}`,
+    id: `backend-${productionTrade.id}`,
     analysisId: `chart-analysis-${productionTrade.ticker}`,
     ticker: productionTrade.ticker,
     timeframe: productionTrade.timeframe,
@@ -140,7 +122,7 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
     reasoning: `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
     
     // Trade Execution
-    status: mapStatus(productionTrade.status),
+    status: mapProductionStatusToAIStatus(productionTrade.status),
     entryDate: new Date(productionTrade.created_at).getTime(),
     actualEntryPrice: productionTrade.entry_price,
     exitDate: productionTrade.close_time ? new Date(productionTrade.close_time).getTime() : undefined,

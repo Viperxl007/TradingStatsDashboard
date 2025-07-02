@@ -1298,9 +1298,47 @@ def analyze_chart():
             if context_sync.get('previousAnalysisId'):
                 logger.info(f"📋 Previous analysis ID provided: {context_sync['previousAnalysisId']}")
         
+        # CRITICAL: Check if any trades were closed during context retrieval
+        # This happens when profit/stop loss is hit during the analysis request
+        trade_closure_detected = False
+        
+        # First, check if there are any active trades before context retrieval
+        try:
+            from services.active_trade_service import ActiveTradeService
+            trade_service = ActiveTradeService(chart_context_manager.db_path)
+            
+            # Get active trade before context retrieval
+            active_trade_before = trade_service.get_active_trade(ticker)
+            logger.info(f"🔍 Active trade before context retrieval: {'Found' if active_trade_before else 'None'}")
+            
+        except Exception as e:
+            logger.warning(f"Could not check for active trades before context retrieval: {e}")
+            active_trade_before = None
+        
         historical_context = context_service.get_comprehensive_context(
             ticker, timeframe, current_price
         )
+        
+        # Check if a trade was closed during context retrieval by comparing before/after states
+        if historical_context is None:
+            # No active trade found - check if this is because a trade was just closed
+            # Look for recent trade closures in the last few minutes
+            try:
+                recent_closures = trade_service._get_recent_trade_closures(ticker, minutes=5)
+                if recent_closures:
+                    trade_closure_detected = True
+                    logger.info(f"🎯 Trade closure detected for {ticker} - chart overlays should be cleared")
+                    # Log details of the closure
+                    for closure in recent_closures:
+                        logger.info(f"📊 Recent closure: {closure['status']} at ${closure.get('close_price', 'N/A')} (updated: {closure['updated_at']})")
+                        
+                # Also check if we had an active trade before but none now
+                elif active_trade_before and not trade_service.get_active_trade(ticker):
+                    trade_closure_detected = True
+                    logger.info(f"🎯 Trade closure detected during analysis for {ticker} - active trade disappeared")
+                    
+            except Exception as e:
+                logger.warning(f"Could not check for recent trade closures: {e}")
         
         if historical_context:
             if historical_context.get('context_type') == 'active_trade':
@@ -1352,6 +1390,12 @@ def analyze_chart():
             'processed_size': processing_result['processed_size'],
             'optimizations_applied': processing_result['optimizations_applied']
         }
+        
+        # CRITICAL: Add trade closure flag to signal frontend to clear chart overlays
+        if trade_closure_detected:
+            analysis_result['trade_closure_detected'] = True
+            analysis_result['clear_chart_overlays'] = True
+            logger.info(f"🧹 Flagging response for {ticker} to clear chart overlays due to recent trade closure")
         
         logger.info(f"Successfully completed enhanced analysis for {ticker}")
         
@@ -1647,28 +1691,57 @@ def delete_analysis(analysis_id):
     Args:
         analysis_id (int): Analysis ID to delete
         
+    Query Parameters:
+        force (bool): Force deletion even if active trades exist
+        
     Returns:
-        JSON: Success confirmation
+        JSON: Success confirmation or detailed error
     """
     try:
+        logger.info(f"🔍 [DEBUG] Route handler: DELETE request for analysis {analysis_id}")
         from app.chart_context import chart_context_manager
+        from flask import request
         
-        success = chart_context_manager.delete_analysis(analysis_id)
+        # Check for force parameter
+        force = request.args.get('force', 'false').lower() == 'true'
+        logger.info(f"🔍 [DEBUG] Route handler: Force deletion = {force}")
         
-        if success:
+        result = chart_context_manager.delete_analysis(analysis_id, force=force)
+        logger.info(f"🔍 [DEBUG] Route handler: chart_context_manager.delete_analysis({analysis_id}, force={force}) returned: {result}")
+        
+        if result["success"]:
+            logger.info(f"🔍 [DEBUG] Route handler: Returning success response for analysis {analysis_id}")
             return jsonify({
                 "success": True,
-                "message": f"Analysis {analysis_id} deleted successfully",
+                "message": result["message"],
                 "timestamp": datetime.now().timestamp()
             })
         else:
-            return jsonify({
-                "error": f"Analysis {analysis_id} not found",
-                "timestamp": datetime.now().timestamp()
-            }), 404
+            # Distinguish between different failure types
+            if result["reason"] == "not_found":
+                logger.warning(f"🔍 [DEBUG] Route handler: Analysis {analysis_id} not found - returning 404")
+                return jsonify({
+                    "error": result["message"],
+                    "timestamp": datetime.now().timestamp()
+                }), 404
+            elif result["reason"] == "active_trades":
+                logger.warning(f"🔍 [DEBUG] Route handler: Analysis {analysis_id} has active trades - returning 409 Conflict")
+                return jsonify({
+                    "error": result["message"],
+                    "reason": "active_trades",
+                    "can_force": True,
+                    "timestamp": datetime.now().timestamp()
+                }), 409
+            else:
+                logger.error(f"🔍 [DEBUG] Route handler: Other error for analysis {analysis_id}: {result['message']}")
+                return jsonify({
+                    "error": result["message"],
+                    "reason": result["reason"],
+                    "timestamp": datetime.now().timestamp()
+                }), 500
             
     except Exception as e:
-        logger.error(f"Error deleting analysis {analysis_id}: {str(e)}")
+        logger.error(f"🔍 [DEBUG] Route handler: Exception deleting analysis {analysis_id}: {str(e)}")
         return jsonify({
             "error": str(e),
             "timestamp": datetime.now().timestamp()
@@ -1834,7 +1907,7 @@ def get_all_trades_history():
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT ticker, timeframe, status, action, entry_price, target_price,
+                SELECT id, ticker, timeframe, status, action, entry_price, target_price,
                        stop_loss, current_price, unrealized_pnl, created_at, updated_at,
                        close_time, close_price, close_reason, realized_pnl
                 FROM active_trades
@@ -1844,8 +1917,9 @@ def get_all_trades_history():
             
             all_trades = []
             for row in cursor.fetchall():
-                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
+                id, ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
                 all_trades.append({
+                    'id': id,
                     'ticker': ticker,
                     'timeframe': timeframe,
                     'status': status,
@@ -2056,6 +2130,46 @@ def get_all_active_trades():
         
     except Exception as e:
         logger.error(f"Error getting all active trades: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/active-trades/id/<int:trade_id>', methods=['DELETE'])
+def delete_active_trade_by_id(trade_id):
+    """
+    Delete an active trade by its database ID.
+    
+    Args:
+        trade_id (int): Database ID of the trade to delete
+        
+    Returns:
+        JSON: Success/error response
+    """
+    try:
+        trade_service = get_active_trade_service()
+        
+        # Get request data for reason
+        data = request.get_json() or {}
+        reason = data.get('reason', 'AI Trade Tracker deletion')
+        
+        # Delete the trade
+        success = trade_service.delete_trade_by_id(trade_id, reason)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Trade {trade_id} deleted successfully",
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": f"Trade {trade_id} not found or could not be deleted",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+            
+    except Exception as e:
+        logger.error(f"Error deleting trade {trade_id}: {str(e)}")
         return jsonify({
             "error": str(e),
             "timestamp": datetime.now().timestamp()

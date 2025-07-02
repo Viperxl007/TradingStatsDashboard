@@ -46,6 +46,7 @@ import {
 import { format } from 'date-fns';
 import { AITradeEntry, AITradeStatus } from '../../types/aiTradeTracker';
 import { getAllActiveTradesForAITracker, closeActiveTradeInProduction } from '../../services/productionActiveTradesService';
+import { getStatusColorScheme, getStatusDisplayText } from '../../utils/statusMapping';
 
 interface AIActiveTradesPanelProps {
   onError: (error: string) => void;
@@ -83,21 +84,10 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
   const textColor = useColorModeValue('gray.600', 'gray.400');
 
   /**
-   * Get status color scheme
+   * Get status color scheme (using standardized utility)
    */
-  const getStatusColorScheme = (status: AITradeStatus) => {
-    switch (status) {
-      case 'waiting': return 'yellow';
-      case 'open': return 'green';
-      case 'closed': return 'gray';
-      case 'profit_hit': return 'green';
-      case 'stop_hit': return 'red';
-      case 'cancelled': return 'red';
-      case 'expired': return 'orange';
-      case 'ai_closed': return 'blue';
-      case 'user_closed': return 'purple';
-      default: return 'gray';
-    }
+  const getTradeStatusColorScheme = (status: AITradeStatus) => {
+    return getStatusColorScheme(status);
   };
 
   /**
@@ -321,11 +311,11 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
                     <Badge colorScheme="blue" variant="outline">
                       {trade.timeframe}
                     </Badge>
-                    <Badge 
-                      colorScheme={getStatusColorScheme(trade.status)} 
+                    <Badge
+                      colorScheme={getTradeStatusColorScheme(trade.status)}
                       variant="subtle"
                     >
-                      {trade.status.toUpperCase()}
+                      {getStatusDisplayText(trade.status)}
                     </Badge>
                   </HStack>
                   

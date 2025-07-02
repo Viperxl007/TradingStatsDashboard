@@ -5,6 +5,10 @@ import { DataProvider, useData, importDataStart, importDataSuccess, importDataEr
 import { loadExampleData } from './services/loadExampleData';
 import theme from './theme';
 
+// Import testing and cleanup utilities to ensure they're included in the bundle
+import { initializeCleanupTools } from './utils/aiTradeCleanupIntegration';
+import { initializeBrowserConsoleTest } from './utils/browserConsoleTest';
+
 const App: React.FC = () => {
   return (
     <ChakraProvider theme={theme}>
@@ -20,7 +24,7 @@ const AppContent: React.FC = () => {
   const { state, dispatch } = useData();
   const toast = useToast();
   
-  // Load example data on component mount
+  // Load example data and initialize utilities on component mount
   React.useEffect(() => {
     const loadData = async () => {
       try {
@@ -53,7 +57,20 @@ const AppContent: React.FC = () => {
       }
     };
     
+    // Initialize testing and cleanup utilities for browser console access
+    const initializeUtilities = () => {
+      try {
+        initializeCleanupTools();
+        initializeBrowserConsoleTest();
+        console.log('🚀 [App] Browser console utilities initialized successfully');
+        console.log('💡 [App] Type showBrowserConsoleHelp() in console for usage instructions');
+      } catch (error) {
+        console.error('❌ [App] Failed to initialize browser console utilities:', error);
+      }
+    };
+    
     loadData();
+    initializeUtilities();
   }, [dispatch, state.rawData.length, toast]);
   
   return (
