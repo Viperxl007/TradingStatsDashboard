@@ -10,6 +10,7 @@ import EnhancedTradingOverlay from './EnhancedTradingOverlay';
 import TradingLegend from './TradingLegend';
 import ChartIndicatorLegend from './ChartIndicatorLegend';
 import ActiveTradeAlert from './ActiveTradeAlert';
+import ManualTradeCloseButtons from './ManualTradeCloseButtons';
 import './ModernChart.css';
 
 interface ModernCandlestickChartProps {
@@ -34,6 +35,8 @@ interface ModernCandlestickChartProps {
   onDataLoaded?: (data: CandlestickData[]) => void;
   onCapturingStateChange?: (isCapturing: boolean) => void;
   onCurrentPriceUpdate?: (currentPrice: number) => void;
+  onTradeClose?: () => void;
+  onClearOverlays?: () => void;
 }
 
 /**
@@ -47,7 +50,7 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   symbol,
   timeframe = '1D',
   period,
-  height = '700px',
+  height = '1200px',
   width = '100%',
   onChartReady,
   onTimeframeChange,
@@ -64,7 +67,9 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   showVWAP = false,
   onDataLoaded,
   onCapturingStateChange,
-  onCurrentPriceUpdate
+  onCurrentPriceUpdate,
+  onTradeClose,
+  onClearOverlays
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -487,9 +492,12 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         console.log('🎨 [ModernChart] Creating modern chart instance...');
         
         // Create chart with high-resolution settings
+        // Always reserve space for technical indicators legend to prevent dynamic layout shifts
+        const indicatorLegendHeight = 30; // Permanent space for indicator legend
+        
         const chart = createChart(containerRef.current!, {
           width: containerRef.current!.clientWidth,
-          height: parseInt(height.replace('px', '')) - (showHeader ? 80 : 0),
+          height: parseInt(height.replace('px', '')) - (showHeader ? 100 + indicatorLegendHeight : 20), // Account for header + indicators + bottom spacing
           layout: {
             background: { color: currentColors.background },
             textColor: currentColors.text,
@@ -826,21 +834,30 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
                 <ActiveTradeAlert ticker={symbol} />
               </HStack>
               
-              {priceChange && (
-                <HStack spacing={2}>
-                  <Icon
-                    as={priceChange.value >= 0 ? FiTrendingUp : FiTrendingDown}
-                    color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
-                  />
-                  <Text
-                    fontWeight="semibold"
-                    color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
-                    fontSize="sm"
-                  >
-                    {priceChange.value >= 0 ? '+' : ''}{priceChange.percentage.toFixed(2)}%
-                  </Text>
-                </HStack>
-              )}
+              <HStack spacing={2}>
+                {/* Manual Trade Close Buttons - Moved to right side */}
+                <ManualTradeCloseButtons
+                  ticker={symbol}
+                  onTradeClose={onTradeClose}
+                  onClearOverlays={onClearOverlays}
+                />
+                
+                {priceChange && (
+                  <>
+                    <Icon
+                      as={priceChange.value >= 0 ? FiTrendingUp : FiTrendingDown}
+                      color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
+                    />
+                    <Text
+                      fontWeight="semibold"
+                      color={priceChange.value >= 0 ? currentColors.upColor : currentColors.downColor}
+                      fontSize="sm"
+                    >
+                      {priceChange.value >= 0 ? '+' : ''}{priceChange.percentage.toFixed(2)}%
+                    </Text>
+                  </>
+                )}
+              </HStack>
             </HStack>
             
             {/* Indicator Legend */}

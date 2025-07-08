@@ -734,6 +734,34 @@ const ChartAnalysis: React.FC = () => {
     setChartInstance(chart);
   };
 
+  // Handle trade close callback - refresh data and overlays
+  const handleTradeClose = async () => {
+    console.log('🔄 [ChartAnalysis] Trade closed, refreshing data...');
+    
+    // Show success toast
+    toast({
+      title: 'Trade Closed',
+      description: 'Trade has been successfully closed',
+      status: 'success',
+      duration: 3000,
+      isClosable: true,
+    });
+
+    // Refresh analysis history to reflect the closed trade
+    if (selectedTicker) {
+      await handleRefreshHistory();
+    }
+
+    // Clear chart overlays to remove any active trade indicators
+    dispatch(clearChartOverlays());
+  };
+
+  // Handle clear overlays callback
+  const handleClearOverlays = () => {
+    console.log('🧹 [ChartAnalysis] Clearing chart overlays...');
+    dispatch(clearChartOverlays());
+  };
+
   // Handle chart analysis from the main "Analyze Chart" button
   const handleAnalyzeFromButton = async () => {
     if (!selectedTicker) {
@@ -1252,12 +1280,12 @@ const ChartAnalysis: React.FC = () => {
                   </Box>
                   
                   {/* Chart Only - No duplicate Analysis Chart panel */}
-                  <Box position="relative">
+                  <Box position="relative" pt={4}>
                     <ModernCandlestickChart
                       symbol={selectedTicker}
                       timeframe={timeframe}
                       period={customPeriod}
-                      height="700px"
+                      height="850px"
                       width="100%"
                       keyLevels={currentAnalysis?.keyLevels || []}
                       showHeader={true}
@@ -1273,6 +1301,8 @@ const ChartAnalysis: React.FC = () => {
                       showSMA200={showSMA200}
                       showVWAP={showVWAP}
                       onDataLoaded={setChartData}
+                      onTradeClose={handleTradeClose}
+                      onClearOverlays={handleClearOverlays}
                     />
                   </Box>
                   

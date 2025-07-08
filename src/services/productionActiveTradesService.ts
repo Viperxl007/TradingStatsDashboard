@@ -209,22 +209,30 @@ export const getAllTradesHistoryForAITracker = async (): Promise<AITradeEntry[]>
  * Close an active trade via the production API
  */
 export const closeActiveTradeInProduction = async (
-  ticker: string, 
-  currentPrice: number, 
-  notes?: string
+  ticker: string,
+  currentPrice: number,
+  notes?: string,
+  closeReason?: string
 ): Promise<boolean> => {
   try {
-    console.log(`🔒 [ProductionActiveTradesService] Closing active trade for ${ticker} at $${currentPrice}`);
+    console.log(`🔒 [ProductionActiveTradesService] Closing active trade for ${ticker} at $${currentPrice} (reason: ${closeReason || 'user_closed'})`);
+    
+    const requestBody: any = {
+      current_price: currentPrice,
+      notes: notes || 'Closed via AI Trade Tracker'
+    };
+    
+    // Add close reason if provided
+    if (closeReason) {
+      requestBody.close_reason = closeReason;
+    }
     
     const response = await fetch(`http://localhost:5000/api/active-trades/${ticker}/close`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        current_price: currentPrice,
-        notes: notes || 'Closed via AI Trade Tracker'
-      }),
+      body: JSON.stringify(requestBody),
     });
     
     if (!response.ok) {

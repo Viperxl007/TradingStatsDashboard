@@ -158,7 +158,7 @@ const Dashboard: React.FC = () => {
       </Flex>
 
       {/* Main content */}
-      <Box p={6}>
+      <Box p={4}>
         {state.isLoading ? (
           <Flex justify="center" align="center" h="50vh">
             <VStack spacing={4}>
