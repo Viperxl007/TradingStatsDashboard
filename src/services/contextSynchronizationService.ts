@@ -48,29 +48,37 @@ export const prepareContextSync = async (
     if (activeTradeResponse.ok) {
       const activeTradeData = await activeTradeResponse.json();
       
-      if (activeTradeData && activeTradeData.status === 'waiting') {
-        // This is a waiting trade that might have triggered
-        return {
-          ticker,
-          timeframe,
-          currentPrice,
-          analysisType: 'trigger_activation',
-          triggerInfo: {
-            originalEntryPrice: activeTradeData.entry_price,
-            triggerPrice: activeTradeData.entry_price,
-            waitingDuration: calculateWaitingDuration(activeTradeData.created_at)
-          }
-        };
-      } else if (activeTradeData && activeTradeData.status === 'open') {
-        // This is an active trade - continuation analysis
-        return {
-          ticker,
-          timeframe,
-          currentPrice,
-          analysisType: 'continuation',
-          previousAnalysisId: activeTradeData.analysis_id
-        };
+      // Check if we have an active trade
+      if (activeTradeData && activeTradeData.active_trade) {
+        const trade = activeTradeData.active_trade;
+        
+        if (trade.status === 'waiting') {
+          // This is a waiting trade that might have triggered
+          return {
+            ticker,
+            timeframe,
+            currentPrice,
+            analysisType: 'trigger_activation',
+            triggerInfo: {
+              originalEntryPrice: trade.entry_price,
+              triggerPrice: trade.entry_price,
+              waitingDuration: calculateWaitingDuration(trade.created_at)
+            }
+          };
+        } else if (trade.status === 'active') {
+          // This is an active trade - continuation analysis
+          return {
+            ticker,
+            timeframe,
+            currentPrice,
+            analysisType: 'continuation',
+            previousAnalysisId: trade.analysis_id
+          };
+        }
       }
+    } else if (activeTradeResponse.status === 404) {
+      // No active trade found - this is expected for fresh analysis
+      console.log(`📭 [ContextSync] No active trade found for ${ticker} - proceeding with fresh analysis`);
     }
 
     // No active trade found - fresh analysis

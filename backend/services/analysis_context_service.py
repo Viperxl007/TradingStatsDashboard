@@ -154,7 +154,8 @@ class AnalysisContextService:
                 ticker, current_timeframe, analysis_timestamp,
                 analysis_data.get('recommendations', {}).get('entryPrice'),
                 analysis_data.get('recommendations', {}).get('action', 'unknown'),
-                'entry condition check'  # Will be refined in context extraction
+                'entry condition check',  # Will be refined in context extraction
+                is_active_trade=False  # Historical analysis - apply age limit
             )
             
             # Extract key information with safe fallbacks, including trigger status
@@ -246,7 +247,8 @@ class AnalysisContextService:
             # Check if trigger was hit by calling the trigger check method
             trigger_status = self._check_entry_trigger_hit(
                 ticker, current_timeframe, analysis_timestamp, entry_price, action,
-                primary_strategy.get('entry_condition') if primary_strategy else 'No condition specified'
+                primary_strategy.get('entry_condition') if primary_strategy else 'No condition specified',
+                is_active_trade=False  # Historical analysis - apply age limit
             )
             trigger_hit = trigger_status.get('trigger_hit', False)
             
@@ -308,7 +310,8 @@ class AnalysisContextService:
             }
     
     def _check_entry_trigger_hit(self, ticker: str, timeframe: str, last_analysis_timestamp: str,
-                                entry_price: Optional[float], action: str, entry_condition: str) -> Dict[str, Any]:
+                                entry_price: Optional[float], action: str, entry_condition: str,
+                                is_active_trade: bool = False) -> Dict[str, Any]:
         """
         Check if entry trigger was hit in candlestick data since last analysis.
         
@@ -319,6 +322,7 @@ class AnalysisContextService:
             entry_price: Entry price from previous analysis
             action: Trading action (buy/sell/hold)
             entry_condition: Entry condition description
+            is_active_trade: If True, skip age limit check (for active trades)
             
         Returns:
             Dict with trigger status information
@@ -354,9 +358,12 @@ class AnalysisContextService:
             time_diff_hours = (current_time - last_analysis_time).total_seconds() / 3600
             
             # Only check if analysis is recent (within 48 hours) to avoid excessive API calls
-            if time_diff_hours > 48:
+            # CRITICAL: Skip age limit for active trades - they MUST always be checked!
+            if not is_active_trade and time_diff_hours > 48:
                 logger.info(f"🔍 Skipping trigger check for {ticker}: analysis too old ({time_diff_hours:.1f}h ago)")
                 return default_response
+            elif is_active_trade:
+                logger.info(f"🎯 Active trade trigger check for {ticker}: analysis {time_diff_hours:.1f}h ago (age limit bypassed)")
             
             logger.info(f"🎯 Checking trigger for {ticker}: entry_price=${entry_price}, action={action}, time_window={time_diff_hours:.1f}h")
             
@@ -556,7 +563,8 @@ class AnalysisContextService:
                         active_trade_context.get('trigger_hit_time') or datetime.now() - timedelta(hours=24),
                         active_trade_context['entry_price'],
                         active_trade_context['action'],
-                        active_trade_context['entry_condition']
+                        active_trade_context['entry_condition'],
+                        is_active_trade=True  # CRITICAL: Always check triggers for active trades
                     )
                     
                     if trigger_status.get('trigger_hit'):

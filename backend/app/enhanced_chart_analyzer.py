@@ -806,6 +806,8 @@ Be specific with exact price levels and realistic probability assessments.
                     else:  # low or any other value
                         return 1
                 
+                # Keep original order for stop loss matching
+                original_entry_strategies = entry_strategies.copy()
                 entry_strategies = sorted(entry_strategies, key=probability_sort_key, reverse=True)
                 logger.info(f"🎯 [PROBABILITY FIX] Sorted {len(entry_strategies)} strategies by probability:")
                 for i, strategy in enumerate(entry_strategies):
@@ -823,7 +825,8 @@ Be specific with exact price levels and realistic probability assessments.
             selected_strategy = None
             if entry_strategies:
                 selected_strategy = entry_strategies[0]
-                entry_price = selected_strategy.get('entry_price')
+                # Try both camelCase and snake_case for compatibility
+                entry_price = selected_strategy.get('entryPrice') or selected_strategy.get('entry_price')
                 logger.info(f"🎯 [PROBABILITY FIX] Selected strategy: {selected_strategy.get('strategy_type', 'unknown')} with {selected_strategy.get('probability', 'unknown')} probability")
             
             # Get target price
@@ -831,11 +834,33 @@ Be specific with exact price levels and realistic probability assessments.
             if profit_targets:
                 target_price = profit_targets[0].get('target_price')
             
-            # Get stop loss
+            # Get stop loss - prioritize strategy-specific stop loss if available
             stop_loss = None
-            stop_loss_levels = risk_management.get('stop_loss_levels', [])
-            if stop_loss_levels:
+            stop_loss_levels = risk_management.get('stop_loss_levels', []) or risk_management.get('stopLoss_levels', [])
+            
+            # First, check if the selected strategy has a corresponding stop loss
+            # If we have multiple strategies and multiple stop losses, try to match them
+            if selected_strategy and stop_loss_levels and len(original_entry_strategies) > 1 and len(stop_loss_levels) > 1:
+                # Find the index of the selected strategy in the ORIGINAL (unsorted) entry_strategies list by strategy_type
+                selected_strategy_type = selected_strategy.get('strategy_type', '')
+                selected_strategy_index = 0
+                for i, strategy in enumerate(original_entry_strategies):
+                    strategy_type = strategy.get('strategy_type', '')
+                    if strategy_type == selected_strategy_type:
+                        selected_strategy_index = i
+                        break
+                
+                # Use the corresponding stop loss if available, otherwise fall back to first
+                if selected_strategy_index < len(stop_loss_levels):
+                    stop_loss = stop_loss_levels[selected_strategy_index].get('price')
+                    logger.info(f"🎯 [STOP LOSS FIX] Using strategy-specific stop loss: ${stop_loss} for {selected_strategy_type} strategy (index {selected_strategy_index})")
+                else:
+                    stop_loss = stop_loss_levels[0].get('price')
+                    logger.warning(f"🎯 [STOP LOSS FIX] Strategy index {selected_strategy_index} exceeds stop loss array, using first stop loss: ${stop_loss}")
+            elif stop_loss_levels:
+                # Fallback to first stop loss for backward compatibility
                 stop_loss = stop_loss_levels[0].get('price')
+                logger.info(f"🎯 [STOP LOSS FIX] Using default first stop loss: ${stop_loss} (single strategy or single stop loss)")
             
             # Calculate risk/reward
             risk_reward = None

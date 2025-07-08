@@ -110,6 +110,14 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
     try {
       dispatch(scanEarningsStart());
       setScanProgress(null);
+      
+      // Close any existing EventSource connection to prevent conflicts
+      if (eventSourceRef.current) {
+        console.log('🔄 Closing existing EventSource connection before starting new scan');
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      
       // Reset simulation caches for new scan
       setCompletedSimulations(new Set());
       setSimulationsInProgress(new Set());
@@ -119,6 +127,25 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       
       // Use EventSource for server-sent events
       const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
+      eventSourceRef.current = eventSource;
+      
+      // Add a failsafe timeout to ensure loading state is cleared
+      const failsafeTimeout = setTimeout(() => {
+        console.warn('⚠️ FAILSAFE: Scan timeout reached, clearing loading state');
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        dispatch(scanEarningsSuccess([]));
+        setScanProgress(null);
+        toast({
+          title: 'Scan Timeout',
+          description: 'The scan took too long and was cancelled. Please try again.',
+          status: 'warning',
+          duration: 5000,
+          isClosable: true,
+        });
+      }, 120000); // 2 minute timeout
       
       eventSource.onmessage = async (event) => {
         try {
@@ -138,26 +165,37 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
               dispatch(scanEarningsSuccess(processedResults));
             }
           } else if (data.status === 'complete') {
+            // Clear the failsafe timeout
+            clearTimeout(failsafeTimeout);
+            
             // Close the event source first
             eventSource.close();
+            eventSourceRef.current = null;
             
             console.log(`🏁 STREAMING MODE: Scan complete! Final results displayed.`);
             
-            // IMPORTANT: Always dispatch final results to clear loading state, even if empty
-            if (data.results && data.results.length > 0) {
-              // Process final results if any
-              const processedResults = await processStreamingResults(data.results);
-              dispatch(scanEarningsSuccess(processedResults));
-            } else {
-              // No results - dispatch empty array to clear loading state
-              console.log(`📊 STREAMING MODE: No results found, clearing loading state`);
+            // IMPORTANT: Always dispatch success to clear loading state, regardless of results
+            try {
+              if (data.results && data.results.length > 0) {
+                // Process final results if any
+                const processedResults = await processStreamingResults(data.results);
+                dispatch(scanEarningsSuccess(processedResults));
+                console.log(`✅ STREAMING MODE: Dispatched ${processedResults.length} final results`);
+              } else {
+                // No results - dispatch empty array to clear loading state
+                console.log(`📊 STREAMING MODE: No results found, clearing loading state`);
+                dispatch(scanEarningsSuccess([]));
+                console.log(`✅ STREAMING MODE: Dispatched empty results to clear loading state`);
+              }
+            } catch (error) {
+              console.error(`❌ STREAMING MODE: Error processing final results:`, error);
+              // Even if processing fails, clear loading state
               dispatch(scanEarningsSuccess([]));
+              console.log(`✅ STREAMING MODE: Cleared loading state after error`);
             }
             
-            // Clear progress after a moment
-            setTimeout(() => {
-              setScanProgress(null);
-            }, 2000);
+            // Clear progress immediately
+            setScanProgress(null);
             
             // Show completion toast
             const resultCount = data.count || 0;
@@ -178,7 +216,12 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
+        
+        // Clear the failsafe timeout
+        clearTimeout(failsafeTimeout);
+        
         eventSource.close();
+        eventSourceRef.current = null;
         
         const errorMessage = 'Connection to server lost. Please try again.';
         dispatch(scanEarningsError(errorMessage));
@@ -250,6 +293,24 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
       eventSourceRef.current = eventSource;
       
+      // Add a failsafe timeout to ensure loading state is cleared
+      const failsafeTimeout = setTimeout(() => {
+        console.warn('⚠️ FAILSAFE: Custom date scan timeout reached, clearing loading state');
+        if (eventSourceRef.current) {
+          eventSourceRef.current.close();
+          eventSourceRef.current = null;
+        }
+        dispatch(scanEarningsSuccess([]));
+        setScanProgress(null);
+        toast({
+          title: 'Scan Timeout',
+          description: 'The scan took too long and was cancelled. Please try again.',
+          status: 'warning',
+          duration: 5000,
+          isClosable: true,
+        });
+      }, 120000); // 2 minute timeout
+      
       eventSource.onmessage = async (event) => {
         try {
           const data = JSON.parse(event.data);
@@ -291,16 +352,30 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
               }
             }
           } else if (data.status === 'complete') {
+            // Clear the failsafe timeout
+            clearTimeout(failsafeTimeout);
+            
             // Close the event source first
             eventSource.close();
             eventSourceRef.current = null;
             
             console.log(`🏁 STREAMING MODE: Scan complete! Final results displayed.`);
             
-            // Clear progress after a moment
-            setTimeout(() => {
-              setScanProgress(null);
-            }, 2000);
+            // IMPORTANT: Ensure loading state is cleared even if no new results
+            try {
+              // Get all processed results so far
+              const allResults = Array.from(processedResultsMap.values());
+              dispatch(scanEarningsSuccess(allResults));
+              console.log(`✅ STREAMING MODE: Dispatched ${allResults.length} final results for custom date`);
+            } catch (error) {
+              console.error(`❌ STREAMING MODE: Error dispatching final results:`, error);
+              // Even if processing fails, clear loading state
+              dispatch(scanEarningsSuccess([]));
+              console.log(`✅ STREAMING MODE: Cleared loading state after error`);
+            }
+            
+            // Clear progress immediately
+            setScanProgress(null);
             
             // Show completion toast
             const resultCount = data.count || 0;
@@ -321,6 +396,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
+        
+        // Clear the failsafe timeout
+        clearTimeout(failsafeTimeout);
+        
         eventSource.close();
         eventSourceRef.current = null;
         
