@@ -21,6 +21,7 @@ import {
 } from '@chakra-ui/react';
 import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
 import { AITradeStatistics, AIModelPerformance, AITokenPerformance } from '../../types/aiTradeTracker';
+import { AITradeStatisticsCalculator } from '../../services/aiTradeStatisticsCalculator';
 
 interface AITradeStatisticsPanelProps {
   onError: (error: string) => void;
@@ -71,44 +72,8 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
         trades = trades.filter(trade => trade.entryDate >= startDate.getTime());
       }
 
-      // Calculate basic statistics from filtered trades
-      const totalTrades = trades.length;
-      const profitableTrades = trades.filter(t => t.profitLoss && t.profitLoss > 0).length;
-      const totalReturn = trades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-      const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
-      
-      const stats: AITradeStatistics = {
-        totalRecommendations: totalTrades,
-        activeTrades: trades.filter(t => t.status === 'open').length,
-        closedTrades: trades.filter(t => ['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed'].includes(t.status)).length,
-        winningTrades: profitableTrades,
-        losingTrades: totalTrades - profitableTrades,
-        winRate,
-        totalReturn,
-        averageReturn: totalTrades > 0 ? totalReturn / totalTrades : 0,
-        bestTrade: trades.length > 0 ? Math.max(...trades.map(t => t.profitLoss || 0)) : 0,
-        worstTrade: trades.length > 0 ? Math.min(...trades.map(t => t.profitLoss || 0)) : 0,
-        averageHoldTime: 0,
-        averageConfidence: 0,
-        sharpeRatio: 0,
-        maxDrawdown: 0,
-        profitFactor: 1,
-        byModel: {},
-        byTicker: {},
-        byTimeframe: {},
-        byConfidence: {
-          low: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          medium: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          very_high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 }
-        },
-        monthlyPerformance: [],
-        recentTrends: {
-          last7Days: { trades: 0, winRate: 0, totalReturn: 0 },
-          last30Days: { trades: 0, winRate: 0, totalReturn: 0 },
-          last90Days: { trades: 0, winRate: 0, totalReturn: 0 }
-        }
-      };
+      // Use centralized statistics calculator for accurate percentage-based metrics
+      const stats = AITradeStatisticsCalculator.calculateStatistics(trades);
       
       // Extract model and token performance from statistics
       const modelPerf = Object.values(stats.byModel);
@@ -135,6 +100,10 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
   };
 
   const formatPercentage = (value: number) => {
+    return `${value.toFixed(2)}%`;
+  };
+
+  const formatPercentageFromDecimal = (value: number) => {
     return `${(value * 100).toFixed(2)}%`;
   };
 
@@ -178,17 +147,17 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
               <Stat>
                 <StatLabel>Total Return</StatLabel>
                 <StatNumber color={statistics.totalReturn >= 0 ? positiveColor : negativeColor}>
-                  {formatCurrency(statistics.totalReturn)}
+                  {formatPercentage(statistics.totalReturn)}
                 </StatNumber>
                 <StatHelpText>
                   <StatArrow type={statistics.totalReturn >= 0 ? 'increase' : 'decrease'} />
-                  {formatPercentage(statistics.averageReturn)}
+                  Cumulative percentage return
                 </StatHelpText>
               </Stat>
 
               <Stat>
                 <StatLabel>Win Rate</StatLabel>
-                <StatNumber>{formatPercentage(statistics.winRate / 100)}</StatNumber>
+                <StatNumber>{formatPercentage(statistics.winRate)}</StatNumber>
                 <StatHelpText>
                   {statistics.closedTrades} closed trades
                 </StatHelpText>
@@ -205,6 +174,16 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
               </Stat>
 
               <Stat>
+                <StatLabel>Average R/R</StatLabel>
+                <StatNumber color={statistics.averageRiskReward >= 1 ? positiveColor : negativeColor}>
+                  {statistics.averageRiskReward.toFixed(2)}
+                </StatNumber>
+                <StatHelpText>
+                  Setup quality (theoretical)
+                </StatHelpText>
+              </Stat>
+
+              <Stat>
                 <StatLabel>Sharpe Ratio</StatLabel>
                 <StatNumber color={statistics.sharpeRatio >= 1 ? positiveColor : negativeColor}>
                   {statistics.sharpeRatio.toFixed(2)}
@@ -217,7 +196,7 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
               <Stat>
                 <StatLabel>Average Return</StatLabel>
                 <StatNumber color={statistics.averageReturn >= 0 ? positiveColor : negativeColor}>
-                  {formatCurrency(statistics.averageReturn)}
+                  {formatPercentage(statistics.averageReturn)}
                 </StatNumber>
                 <StatHelpText>
                   Per trade average
@@ -247,14 +226,14 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
                   <HStack justify="space-between" mb={2}>
                     <Text fontWeight="medium">{model.modelName}</Text>
                     <Badge colorScheme={model.totalReturn >= 0 ? 'green' : 'red'}>
-                      {formatCurrency(model.totalReturn)}
+                      {formatPercentage(model.totalReturn)}
                     </Badge>
                   </HStack>
                   
                   <Grid templateColumns="repeat(auto-fit, minmax(150px, 1fr))" gap={3}>
                     <Box>
                       <Text fontSize="sm" color="gray.500">Win Rate</Text>
-                      <Text fontWeight="medium">{formatPercentage(model.winRate / 100)}</Text>
+                      <Text fontWeight="medium">{formatPercentage(model.winRate)}</Text>
                     </Box>
                     <Box>
                       <Text fontSize="sm" color="gray.500">Trades</Text>
@@ -262,11 +241,11 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
                     </Box>
                     <Box>
                       <Text fontSize="sm" color="gray.500">Avg Confidence</Text>
-                      <Text fontWeight="medium">{formatPercentage(model.averageConfidence)}</Text>
+                      <Text fontWeight="medium">{formatPercentageFromDecimal(model.averageConfidence)}</Text>
                     </Box>
                     <Box>
                       <Text fontSize="sm" color="gray.500">Avg Return</Text>
-                      <Text fontWeight="medium">{formatCurrency(model.averageReturn)}</Text>
+                      <Text fontWeight="medium">{formatPercentage(model.averageReturn)}</Text>
                     </Box>
                   </Grid>
                   
@@ -295,11 +274,11 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
                     <HStack>
                       <Text fontWeight="medium">{token.ticker}</Text>
                       <Badge colorScheme={getConfidenceColor(token.averageConfidence)}>
-                        {formatPercentage(token.averageConfidence)} confidence
+                        {formatPercentageFromDecimal(token.averageConfidence)} confidence
                       </Badge>
                     </HStack>
                     <Badge colorScheme={token.totalReturn >= 0 ? 'green' : 'red'}>
-                      {formatCurrency(token.totalReturn)}
+                      {formatPercentage(token.totalReturn)}
                     </Badge>
                   </HStack>
                   
@@ -319,15 +298,15 @@ const AITradeStatisticsPanel: React.FC<AITradeStatisticsPanelProps> = ({ onError
                       </Text>
                     </Box>
                     <Box>
-                      <Text fontSize="sm" color="gray.500">Best Trade</Text>
-                      <Text fontWeight="medium" color={positiveColor}>
-                        {formatCurrency(token.bestTrade)}
+                      <Text fontSize="sm" color="gray.500">Best Win</Text>
+                      <Text fontWeight="medium" color={token.bestTrade !== null ? positiveColor : 'gray.500'}>
+                        {token.bestTrade !== null ? formatPercentage(token.bestTrade) : 'No Wins'}
                       </Text>
                     </Box>
                     <Box>
-                      <Text fontSize="sm" color="gray.500">Worst Trade</Text>
-                      <Text fontWeight="medium" color={negativeColor}>
-                        {formatCurrency(token.worstTrade)}
+                      <Text fontSize="sm" color="gray.500">Worst Loss</Text>
+                      <Text fontWeight="medium" color={token.worstTrade !== null ? negativeColor : 'gray.500'}>
+                        {token.worstTrade !== null ? formatPercentage(token.worstTrade) : 'No Losses'}
                       </Text>
                     </Box>
                   </Grid>

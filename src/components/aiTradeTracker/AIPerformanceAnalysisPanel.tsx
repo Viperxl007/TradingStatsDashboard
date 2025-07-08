@@ -22,6 +22,7 @@ import {
 } from '@chakra-ui/react';
 import { getAllTradesHistoryForAITracker } from '../../services/productionActiveTradesService';
 import { AITradeEntry, AITradeStatistics } from '../../types/aiTradeTracker';
+import { AITradeStatisticsCalculator } from '../../services/aiTradeStatisticsCalculator';
 
 interface AIPerformanceAnalysisPanelProps {
   onError: (error: string) => void;
@@ -47,44 +48,8 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
       setLoading(true);
       const allTrades = await getAllTradesHistoryForAITracker();
       
-      // Calculate basic statistics from trades
-      const totalTrades = allTrades.length;
-      const profitableTrades = allTrades.filter(t => t.profitLoss && t.profitLoss > 0).length;
-      const totalReturn = allTrades.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
-      const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
-      
-      const stats: AITradeStatistics = {
-        totalRecommendations: totalTrades,
-        activeTrades: allTrades.filter(t => t.status === 'open').length,
-        closedTrades: allTrades.filter(t => t.status === 'closed').length,
-        winningTrades: profitableTrades,
-        losingTrades: totalTrades - profitableTrades,
-        winRate,
-        totalReturn,
-        averageReturn: totalTrades > 0 ? totalReturn / totalTrades : 0,
-        bestTrade: allTrades.length > 0 ? Math.max(...allTrades.map(t => t.profitLoss || 0)) : 0,
-        worstTrade: allTrades.length > 0 ? Math.min(...allTrades.map(t => t.profitLoss || 0)) : 0,
-        averageHoldTime: 0,
-        averageConfidence: 0,
-        sharpeRatio: 0,
-        maxDrawdown: 0,
-        profitFactor: 1,
-        byModel: {},
-        byTicker: {},
-        byTimeframe: {},
-        byConfidence: {
-          low: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          medium: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-          very_high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 }
-        },
-        monthlyPerformance: [],
-        recentTrends: {
-          last7Days: { trades: 0, winRate: 0, totalReturn: 0 },
-          last30Days: { trades: 0, winRate: 0, totalReturn: 0 },
-          last90Days: { trades: 0, winRate: 0, totalReturn: 0 }
-        }
-      };
+      // Use centralized statistics calculator for accurate percentage-based metrics
+      const stats = AITradeStatisticsCalculator.calculateStatistics(allTrades);
       
       setTrades(allTrades);
       setStatistics(stats);
@@ -395,6 +360,16 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                 <StatHelpText>
                   <StatArrow type={statistics.totalReturn >= 0 ? 'increase' : 'decrease'} />
                   {formatPercentage(statistics.averageReturn)}
+                </StatHelpText>
+              </Stat>
+              
+              <Stat>
+                <StatLabel>Average R/R</StatLabel>
+                <StatNumber color={statistics.averageRiskReward >= 1 ? positiveColor : negativeColor}>
+                  {statistics.averageRiskReward.toFixed(2)}
+                </StatNumber>
+                <StatHelpText>
+                  Setup quality (theoretical)
                 </StatHelpText>
               </Stat>
               

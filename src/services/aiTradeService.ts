@@ -26,6 +26,8 @@ import {
   ProductionActiveTrade
 } from './productionActiveTradesService';
 
+import { AITradeStatisticsCalculator } from './aiTradeStatisticsCalculator';
+
 /**
  * AI Trade Service Class - Backend Only Implementation
  * 
@@ -232,211 +234,19 @@ class AITradeService {
   }
 
   /**
-   * Calculate comprehensive AI trade statistics
+   * Calculate comprehensive AI trade statistics using centralized calculator
    */
   async calculateStatistics(trades?: AITradeEntry[]): Promise<AITradeStatistics> {
     if (!trades) {
       trades = await this.getAllTrades();
     }
 
-    console.log(`📊 [AITradeService] Calculating statistics for ${trades.length} trades`);
-
-    const closedTrades = trades.filter(trade => trade.status === 'closed' && trade.profitLoss !== undefined);
-    const activeTrades = trades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
-    const winningTrades = closedTrades.filter(trade => trade.profitLoss! > 0);
-    const losingTrades = closedTrades.filter(trade => trade.profitLoss! <= 0);
-
-    const totalReturn = closedTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-    const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
-    const averageReturn = closedTrades.length > 0 ? totalReturn / closedTrades.length : 0;
-
-    const bestTrade = closedTrades.length > 0 ? Math.max(...closedTrades.map(t => t.profitLoss || 0)) : 0;
-    const worstTrade = closedTrades.length > 0 ? Math.min(...closedTrades.map(t => t.profitLoss || 0)) : 0;
-
-    const averageHoldTime = closedTrades.length > 0 
-      ? closedTrades.reduce((sum, trade) => sum + (trade.holdTime || 0), 0) / closedTrades.length 
-      : 0;
-
-    const averageConfidence = trades.length > 0 
-      ? trades.reduce((sum, trade) => sum + trade.confidence, 0) / trades.length 
-      : 0;
-
-    // Calculate profit factor
-    const totalProfit = winningTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-    const totalLoss = Math.abs(losingTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0));
-    const profitFactor = totalLoss > 0 ? totalProfit / totalLoss : totalProfit > 0 ? Infinity : 0;
-
-    // Calculate Sharpe ratio (simplified)
-    const returns = closedTrades.map(trade => trade.profitLossPercentage || 0);
-    const avgReturn = returns.length > 0 ? returns.reduce((sum, ret) => sum + ret, 0) / returns.length : 0;
-    const variance = returns.length > 0 
-      ? returns.reduce((sum, ret) => sum + Math.pow(ret - avgReturn, 2), 0) / returns.length 
-      : 0;
-    const stdDev = Math.sqrt(variance);
-    const sharpeRatio = stdDev > 0 ? avgReturn / stdDev : 0;
-
-    // Calculate max drawdown
-    let maxDrawdown = 0;
-    let peak = 0;
-    let runningTotal = 0;
+    console.log(`📊 [AITradeService] Delegating statistics calculation to centralized calculator for ${trades.length} trades`);
     
-    for (const trade of closedTrades.sort((a, b) => a.exitDate! - b.exitDate!)) {
-      runningTotal += trade.profitLoss || 0;
-      if (runningTotal > peak) {
-        peak = runningTotal;
-      }
-      const drawdown = peak - runningTotal;
-      if (drawdown > maxDrawdown) {
-        maxDrawdown = drawdown;
-      }
-    }
-
-    // Performance by confidence level
-    const byConfidence: Record<AITradeConfidence, any> = {
-      low: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-      medium: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-      high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 },
-      very_high: { count: 0, winRate: 0, averageReturn: 0, totalReturn: 0 }
-    };
-
-    for (const confidence of Object.keys(byConfidence) as AITradeConfidence[]) {
-      const confidenceTrades = closedTrades.filter(trade => trade.confidenceLevel === confidence);
-      const confWinning = confidenceTrades.filter(trade => trade.profitLoss! > 0);
-      const confTotal = confidenceTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-
-      byConfidence[confidence] = {
-        count: confidenceTrades.length,
-        winRate: confidenceTrades.length > 0 ? (confWinning.length / confidenceTrades.length) * 100 : 0,
-        averageReturn: confidenceTrades.length > 0 ? confTotal / confidenceTrades.length : 0,
-        totalReturn: confTotal
-      };
-    }
-
-    // Performance by timeframe
-    const byTimeframe: Record<string, any> = {};
-    const timeframes = [...new Set(trades.map(trade => trade.timeframe))];
+    // Use the centralized statistics calculator
+    const statistics = AITradeStatisticsCalculator.calculateStatistics(trades);
     
-    for (const timeframe of timeframes) {
-      const timeframeTrades = closedTrades.filter(trade => trade.timeframe === timeframe);
-      const tfWinning = timeframeTrades.filter(trade => trade.profitLoss! > 0);
-      const tfTotal = timeframeTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-
-      byTimeframe[timeframe] = {
-        count: timeframeTrades.length,
-        winRate: timeframeTrades.length > 0 ? (tfWinning.length / timeframeTrades.length) * 100 : 0,
-        averageReturn: timeframeTrades.length > 0 ? tfTotal / timeframeTrades.length : 0,
-        totalReturn: tfTotal
-      };
-    }
-
-    // Performance by AI model
-    const byModel: Record<string, AIModelPerformance> = {};
-    const models = [...new Set(trades.map(trade => trade.aiModel))];
-    
-    for (const model of models) {
-      const modelTrades = trades.filter(trade => trade.aiModel === model);
-      const modelClosed = modelTrades.filter(trade => trade.status === 'closed' && trade.profitLoss !== undefined);
-      const modelWinning = modelClosed.filter(trade => trade.profitLoss! > 0);
-      const modelTotal = modelClosed.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-      const modelAvgReturn = modelClosed.length > 0 ? modelTotal / modelClosed.length : 0;
-      const modelAvgConfidence = modelTrades.length > 0 
-        ? modelTrades.reduce((sum, trade) => sum + trade.confidence, 0) / modelTrades.length 
-        : 0;
-      const modelAvgHoldTime = modelClosed.length > 0 
-        ? modelClosed.reduce((sum, trade) => sum + (trade.holdTime || 0), 0) / modelClosed.length 
-        : 0;
-
-      byModel[model] = {
-        modelId: model,
-        modelName: model,
-        totalRecommendations: modelTrades.length,
-        successfulTrades: modelWinning.length,
-        failedTrades: modelClosed.length - modelWinning.length,
-        winRate: modelClosed.length > 0 ? (modelWinning.length / modelClosed.length) * 100 : 0,
-        averageReturn: modelAvgReturn,
-        totalReturn: modelTotal,
-        averageConfidence: modelAvgConfidence,
-        averageHoldTime: modelAvgHoldTime,
-        bestTrade: modelClosed.length > 0 ? Math.max(...modelClosed.map(t => t.profitLoss || 0)) : 0,
-        worstTrade: modelClosed.length > 0 ? Math.min(...modelClosed.map(t => t.profitLoss || 0)) : 0,
-        sharpeRatio: 0, // Simplified for now
-        maxDrawdown: 0 // Simplified for now
-      };
-    }
-
-    // Performance by ticker
-    const byTicker: Record<string, AITokenPerformance> = {};
-    const tickers = [...new Set(trades.map(trade => trade.ticker))];
-    
-    for (const ticker of tickers) {
-      const tickerTrades = trades.filter(trade => trade.ticker === ticker);
-      const tickerClosed = tickerTrades.filter(trade => trade.status === 'closed' && trade.profitLoss !== undefined);
-      const tickerWinning = tickerClosed.filter(trade => trade.profitLoss! > 0);
-      const tickerTotal = tickerClosed.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-      const tickerAvgReturn = tickerClosed.length > 0 ? tickerTotal / tickerClosed.length : 0;
-      const tickerAvgConfidence = tickerTrades.length > 0 
-        ? tickerTrades.reduce((sum, trade) => sum + trade.confidence, 0) / tickerTrades.length 
-        : 0;
-      const tickerAvgHoldTime = tickerClosed.length > 0 
-        ? tickerClosed.reduce((sum, trade) => sum + (trade.holdTime || 0), 0) / tickerClosed.length 
-        : 0;
-      const tickerLastTrade = tickerTrades.length > 0 
-        ? Math.max(...tickerTrades.map(t => t.entryDate)) 
-        : 0;
-
-      // Calculate profit factor for ticker
-      const tickerProfit = tickerWinning.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
-      const tickerLoss = Math.abs(tickerClosed.filter(t => t.profitLoss! <= 0).reduce((sum, trade) => sum + (trade.profitLoss || 0), 0));
-      const tickerProfitFactor = tickerLoss > 0 ? tickerProfit / tickerLoss : tickerProfit > 0 ? Infinity : 0;
-
-      byTicker[ticker] = {
-        ticker,
-        totalTrades: tickerTrades.length,
-        winningTrades: tickerWinning.length,
-        losingTrades: tickerClosed.length - tickerWinning.length,
-        winRate: tickerClosed.length > 0 ? (tickerWinning.length / tickerClosed.length) * 100 : 0,
-        totalReturn: tickerTotal,
-        averageReturn: tickerAvgReturn,
-        bestTrade: tickerClosed.length > 0 ? Math.max(...tickerClosed.map(t => t.profitLoss || 0)) : 0,
-        worstTrade: tickerClosed.length > 0 ? Math.min(...tickerClosed.map(t => t.profitLoss || 0)) : 0,
-        averageConfidence: tickerAvgConfidence,
-        averageHoldTime: tickerAvgHoldTime,
-        lastTradeDate: tickerLastTrade,
-        profitFactor: tickerProfitFactor
-      };
-    }
-
-    // Monthly performance
-    const monthlyPerformance = this.calculateMonthlyPerformance(closedTrades);
-
-    // Recent trends
-    const recentTrends = this.calculatePeriodStats(closedTrades);
-
-    const statistics: AITradeStatistics = {
-      totalRecommendations: trades.length,
-      activeTrades: activeTrades.length,
-      closedTrades: closedTrades.length,
-      winningTrades: winningTrades.length,
-      losingTrades: losingTrades.length,
-      winRate,
-      totalReturn,
-      averageReturn,
-      bestTrade,
-      worstTrade,
-      averageHoldTime,
-      averageConfidence,
-      profitFactor,
-      sharpeRatio,
-      maxDrawdown,
-      byConfidence,
-      byTimeframe,
-      byModel,
-      byTicker,
-      monthlyPerformance,
-      recentTrends
-    };
-
-    console.log(`✅ [AITradeService] Statistics calculated - Win Rate: ${winRate.toFixed(1)}%, Total Return: $${totalReturn.toFixed(2)}`);
+    console.log(`✅ [AITradeService] Statistics calculated via centralized calculator - Win Rate: ${statistics.winRate.toFixed(1)}%, Total Return: ${statistics.totalReturn.toFixed(2)}%`);
     return statistics;
   }
 

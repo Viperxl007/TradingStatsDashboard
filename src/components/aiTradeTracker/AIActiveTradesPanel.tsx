@@ -271,16 +271,20 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
           </StatHelpText>
         </Stat>
         <Stat>
-          <StatLabel>Avg Confidence</StatLabel>
-          <StatNumber>
+          <StatLabel>Unrealized P&L</StatLabel>
+          <StatNumber color={
+            trades.reduce((sum, t) => sum + (t.profitLossPercentage || 0), 0) >= 0
+              ? 'green.500'
+              : 'red.500'
+          }>
             {trades.length > 0
-              ? `${(trades.reduce((sum, t) => sum + t.confidence, 0) / trades.length * 100).toFixed(0)}%`
-              : '0%'
+              ? `${trades.reduce((sum, t) => sum + (t.profitLossPercentage || 0), 0).toFixed(2)}%`
+              : '0.00%'
             }
           </StatNumber>
           <StatHelpText>
-            <Icon as={FiTarget} mr={1} />
-            AI confidence
+            <Icon as={FiDollarSign} mr={1} />
+            Total percentage return
           </StatHelpText>
         </Stat>
       </SimpleGrid>
