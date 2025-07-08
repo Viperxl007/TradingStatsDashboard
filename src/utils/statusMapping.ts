@@ -65,6 +65,21 @@ export const isClosedTradeStatus = (status: AITradeStatus | ProductionTradeStatu
   return ['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed', 'cancelled', 'expired'].includes(status);
 };
 
+// CRITICAL FIX: Check if a trade was actually executed (has actual entry data)
+export const isExecutedTrade = (trade: { actualEntryDate?: number; actualEntryPrice?: number; status: AITradeStatus | ProductionTradeStatus }): boolean => {
+  // A trade is considered executed if it has actual entry data
+  // This prevents invalidated waiting trades from counting toward performance
+  return trade.actualEntryDate !== undefined && trade.actualEntryPrice !== undefined;
+};
+
+// Check if a trade should count toward performance metrics
+export const shouldCountForPerformance = (trade: { actualEntryDate?: number; actualEntryPrice?: number; status: AITradeStatus | ProductionTradeStatus; profitLossPercentage?: number }): boolean => {
+  // Only executed trades with defined performance metrics should count
+  return isExecutedTrade(trade) &&
+         isClosedTradeStatus(trade.status) &&
+         trade.profitLossPercentage !== undefined;
+};
+
 // Get display text for status
 export const getStatusDisplayText = (status: AITradeStatus | ProductionTradeStatus): string => {
   switch (status) {

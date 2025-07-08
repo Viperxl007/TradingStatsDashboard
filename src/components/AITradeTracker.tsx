@@ -110,6 +110,7 @@ const AITradeTracker: React.FC = () => {
         averageConfidence: 0,
         sharpeRatio: 0,
         maxDrawdown: 0,
+        averageRiskReward: 0,
         profitFactor: 1,
         byModel: {},
         byTicker: {},

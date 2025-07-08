@@ -56,6 +56,7 @@ export interface AIModelPerformance {
   worstTrade: number;
   sharpeRatio: number;
   maxDrawdown: number;
+  averageRiskReward: number; // Average theoretical R/R from setup parameters
 }
 
 /**
@@ -69,12 +70,13 @@ export interface AITokenPerformance {
   winRate: number;
   totalReturn: number;
   averageReturn: number;
-  bestTrade: number;
-  worstTrade: number;
+  bestTrade: number | null; // Now can be null when no winning trades exist
+  worstTrade: number | null; // Now can be null when no losing trades exist
   averageConfidence: number;
   averageHoldTime: number;
   lastTradeDate: number;
   profitFactor: number;
+  averageRiskReward: number; // Average theoretical R/R from setup parameters
 }
 
 /**
@@ -110,8 +112,11 @@ export interface AITradeEntry {
   closeReason?: AITradeCloseReason;
   
   // Performance Metrics
-  profitLoss?: number; // Actual P&L
-  profitLossPercentage?: number; // P&L as percentage
+  profitLoss?: number; // Actual P&L in dollars (for reference)
+  profitLossPercentage?: number; // P&L as percentage (PRIMARY METRIC)
+  positionSizeUSD?: number; // Position size in USD for percentage calculations
+  entryPriceUSD?: number; // Entry price in USD for normalization
+  exitPriceUSD?: number; // Exit price in USD for normalization
   holdTime?: number; // Time held in hours
   maxDrawdown?: number; // Maximum drawdown during trade
   maxProfit?: number; // Maximum profit reached during trade
@@ -188,6 +193,7 @@ export interface AITradeStatistics {
   profitFactor: number;
   sharpeRatio: number;
   maxDrawdown: number;
+  averageRiskReward: number; // Average theoretical R/R from setup parameters
   
   // Performance by confidence level
   byConfidence: Record<AITradeConfidence, {

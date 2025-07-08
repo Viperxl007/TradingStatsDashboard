@@ -97,10 +97,53 @@ export const fetchActiveTradeFromProduction = async (ticker: string): Promise<Pr
  * Convert production active trade to AI Trade Tracker format
  */
 export const convertProductionTradeToAITrade = (productionTrade: ProductionActiveTrade): AITradeEntry => {
-  // Calculate profit/loss percentage if we have the data
-  const profitLossPercentage = productionTrade.unrealized_pnl && productionTrade.entry_price
-    ? (productionTrade.unrealized_pnl / productionTrade.entry_price) * 100
-    : undefined;
+  // Default position size for consistency (can be overridden if actual position size is available)
+  const defaultPositionSizeUSD = 1000;
+  
+  // CRITICAL FIX: Determine if trade was actually executed vs just waiting
+  // A trade that was 'waiting' and then closed should be treated as invalidated, not executed
+  const wasActuallyExecuted = productionTrade.status !== 'waiting' &&
+    (productionTrade.status === 'active' ||
+     productionTrade.status === 'profit_hit' ||
+     productionTrade.status === 'stop_hit' ||
+     productionTrade.status === 'ai_closed' ||
+     (productionTrade.status === 'user_closed' && productionTrade.close_price !== undefined));
+  
+  // Calculate percentage-based PnL (PRIMARY METRIC) - only for executed trades
+  let profitLossPercentage = 0;
+  let profitLossUSD = productionTrade.realized_pnl || productionTrade.unrealized_pnl || 0;
+  
+  // Only calculate performance metrics for trades that were actually executed
+  if (wasActuallyExecuted) {
+    if (productionTrade.entry_price && productionTrade.current_price) {
+      // For active trades, calculate percentage based on current price vs entry
+      if (productionTrade.action === 'buy') {
+        profitLossPercentage = ((productionTrade.current_price - productionTrade.entry_price) / productionTrade.entry_price) * 100;
+      } else {
+        // For sell trades, profit when price goes down
+        profitLossPercentage = ((productionTrade.entry_price - productionTrade.current_price) / productionTrade.entry_price) * 100;
+      }
+    } else if (productionTrade.entry_price && productionTrade.close_price) {
+      // For closed trades, calculate percentage based on close price vs entry
+      if (productionTrade.action === 'buy') {
+        profitLossPercentage = ((productionTrade.close_price - productionTrade.entry_price) / productionTrade.entry_price) * 100;
+      } else {
+        // For sell trades, profit when price goes down
+        profitLossPercentage = ((productionTrade.entry_price - productionTrade.close_price) / productionTrade.entry_price) * 100;
+      }
+    } else if (productionTrade.unrealized_pnl && productionTrade.entry_price) {
+      // Fallback: estimate percentage from unrealized PnL (assuming $1000 position)
+      profitLossPercentage = (productionTrade.unrealized_pnl / defaultPositionSizeUSD) * 100;
+    }
+  }
+
+  // Calculate hold time if we have the data
+  let holdTime: number | undefined;
+  if (productionTrade.close_time) {
+    const entryTime = new Date(productionTrade.created_at).getTime();
+    const exitTime = new Date(productionTrade.close_time).getTime();
+    holdTime = (exitTime - entryTime) / (1000 * 60 * 60); // Convert to hours
+  }
 
   const aiTrade: AITradeEntry = {
     id: `backend-${productionTrade.id}`,
@@ -121,16 +164,21 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
     stopLoss: productionTrade.stop_loss,
     reasoning: `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
     
-    // Trade Execution
+    // Trade Execution - CRITICAL FIX: Only set actual entry data for executed trades
     status: mapProductionStatusToAIStatus(productionTrade.status),
     entryDate: new Date(productionTrade.created_at).getTime(),
-    actualEntryPrice: productionTrade.entry_price,
+    actualEntryDate: wasActuallyExecuted ? new Date(productionTrade.created_at).getTime() : undefined,
+    actualEntryPrice: wasActuallyExecuted ? productionTrade.entry_price : undefined,
     exitDate: productionTrade.close_time ? new Date(productionTrade.close_time).getTime() : undefined,
     exitPrice: productionTrade.close_price,
     
-    // Performance Metrics
-    profitLoss: productionTrade.realized_pnl || productionTrade.unrealized_pnl || 0,
-    profitLossPercentage: profitLossPercentage || 0,
+    // Performance Metrics (PERCENTAGE-BASED PRIMARY) - only for executed trades
+    profitLoss: wasActuallyExecuted ? profitLossUSD : undefined,
+    profitLossPercentage: wasActuallyExecuted ? profitLossPercentage : undefined,
+    positionSizeUSD: wasActuallyExecuted ? defaultPositionSizeUSD : undefined,
+    entryPriceUSD: wasActuallyExecuted ? productionTrade.entry_price : undefined,
+    exitPriceUSD: wasActuallyExecuted ? productionTrade.close_price : undefined,
+    holdTime: wasActuallyExecuted ? holdTime : undefined,
     
     // Metadata
     createdAt: new Date(productionTrade.created_at).getTime(),

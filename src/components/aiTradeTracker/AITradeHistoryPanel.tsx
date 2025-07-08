@@ -59,7 +59,7 @@ import {
 import { format } from 'date-fns';
 import { AITradeEntry, AITradeFilterOptions, AITradeStatus } from '../../types/aiTradeTracker';
 import { aiTradeService } from '../../services/aiTradeService';
-import { getStatusDisplayText } from '../../utils/statusMapping';
+import { getStatusDisplayText, shouldCountForPerformance, isExecutedTrade } from '../../utils/statusMapping';
 
 interface AITradeHistoryPanelProps {
   onError: (error: string) => void;
@@ -167,26 +167,26 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError, onTr
 
   /**
    * Calculate summary statistics for filtered trades
+   * CRITICAL FIX: Only count executed trades toward performance metrics
    */
   const summaryStats = useMemo(() => {
-    const closedTrades = filteredAndSortedTrades.filter(trade =>
-      ['closed', 'profit_hit', 'stop_hit', 'ai_closed', 'user_closed'].includes(trade.status) &&
-      trade.profitLoss !== undefined
-    );
+    // Only count trades that were actually executed and have performance data
+    const closedTrades = filteredAndSortedTrades.filter(trade => shouldCountForPerformance(trade));
     
     const winningTrades = closedTrades.filter(trade =>
-      trade.profitLoss! > 0 || trade.status === 'profit_hit'
+      (trade.profitLossPercentage || 0) > 0 || trade.status === 'profit_hit'
     );
-    const totalReturn = closedTrades.reduce((sum, trade) => sum + (trade.profitLoss || 0), 0);
+    // Use percentage-based returns for cumulative calculation
+    const totalReturnPercentage = closedTrades.reduce((sum, trade) => sum + (trade.profitLossPercentage || 0), 0);
     const winRate = closedTrades.length > 0 ? (winningTrades.length / closedTrades.length) * 100 : 0;
-    const avgReturn = closedTrades.length > 0 ? totalReturn / closedTrades.length : 0;
+    const avgReturnPercentage = closedTrades.length > 0 ? totalReturnPercentage / closedTrades.length : 0;
 
     return {
       totalTrades: filteredAndSortedTrades.length,
       closedTrades: closedTrades.length,
       winRate,
-      totalReturn,
-      avgReturn
+      totalReturn: totalReturnPercentage, // Now percentage-based
+      avgReturn: avgReturnPercentage // Now percentage-based
     };
   }, [filteredAndSortedTrades]);
 
@@ -357,13 +357,13 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError, onTr
             <Stat>
               <StatLabel>Total Return</StatLabel>
               <StatNumber color={getPerformanceColor(summaryStats.totalReturn)}>
-                {summaryStats.totalReturn > 0 ? '+' : ''}${(summaryStats.totalReturn || 0).toFixed(2)}
+                {summaryStats.totalReturn > 0 ? '+' : ''}{(summaryStats.totalReturn || 0).toFixed(2)}%
               </StatNumber>
             </Stat>
             <Stat>
               <StatLabel>Avg Return</StatLabel>
               <StatNumber color={getPerformanceColor(summaryStats.avgReturn)}>
-                {summaryStats.avgReturn > 0 ? '+' : ''}${(summaryStats.avgReturn || 0).toFixed(2)}
+                {summaryStats.avgReturn > 0 ? '+' : ''}{(summaryStats.avgReturn || 0).toFixed(2)}%
               </StatNumber>
             </Stat>
           </SimpleGrid>
@@ -441,23 +441,32 @@ const AITradeHistoryPanel: React.FC<AITradeHistoryPanelProps> = ({ onError, onTr
                         )}
                       </Td>
                       <Td>
-                        {trade.profitLoss !== undefined ? (
+                        {isExecutedTrade(trade) && trade.profitLossPercentage !== undefined ? (
                           <VStack align="start" spacing={1}>
-                            <Text 
-                              fontWeight="bold" 
-                              color={getPerformanceColor(trade.profitLoss)}
+                            <Text
+                              fontWeight="bold"
+                              color={getPerformanceColor(trade.profitLossPercentage)}
                             >
-                              {(trade.profitLoss || 0) > 0 ? '+' : ''}${(trade.profitLoss || 0).toFixed(2)}
+                              {(trade.profitLossPercentage || 0) > 0 ? '+' : ''}
+                              {(trade.profitLossPercentage || 0).toFixed(2)}%
                             </Text>
-                            {trade.profitLossPercentage && (
+                            {trade.profitLoss && (
                               <Text
                                 fontSize="xs"
-                                color={getPerformanceColor(trade.profitLoss)}
+                                color={getPerformanceColor(trade.profitLossPercentage)}
                               >
-                                {(trade.profitLossPercentage || 0) > 0 ? '+' : ''}
-                                {(trade.profitLossPercentage || 0).toFixed(1)}%
+                                {(trade.profitLoss || 0) > 0 ? '+' : ''}${(trade.profitLoss || 0).toFixed(2)}
                               </Text>
                             )}
+                          </VStack>
+                        ) : !isExecutedTrade(trade) && ['user_closed', 'ai_closed', 'cancelled', 'expired'].includes(trade.status) ? (
+                          <VStack align="start" spacing={1}>
+                            <Text fontSize="xs" color="orange.500" fontWeight="medium">
+                              INVALIDATED
+                            </Text>
+                            <Text fontSize="xs" color={textColor}>
+                              Never executed
+                            </Text>
                           </VStack>
                         ) : (
                           <Text color={textColor}>-</Text>
