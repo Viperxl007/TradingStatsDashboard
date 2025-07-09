@@ -1052,7 +1052,7 @@ class ActiveTradeService:
             logger.error(f"Error closing trade by AI for {ticker}: {str(e)}")
             return False
     
-    def close_trade_by_user(self, ticker: str, current_price: float, notes: str = "") -> bool:
+    def close_trade_by_user(self, ticker: str, current_price: float, notes: str = "", close_reason: str = "user_closed") -> bool:
         """
         Close trade based on user override.
         
@@ -1082,6 +1082,16 @@ class ActiveTradeService:
             else:
                 realized_pnl = 0  # No P&L if trade was never triggered
             
+            # Map frontend close_reason to backend status and close_reason
+            status_mapping = {
+                'profit_hit': (TradeStatus.PROFIT_HIT.value, TradeCloseReason.PROFIT_TARGET.value),
+                'stop_hit': (TradeStatus.STOP_HIT.value, TradeCloseReason.STOP_LOSS.value),
+                'user_closed': (TradeStatus.USER_CLOSED.value, TradeCloseReason.USER_OVERRIDE.value)
+            }
+            
+            trade_status, trade_close_reason = status_mapping.get(close_reason,
+                (TradeStatus.USER_CLOSED.value, TradeCloseReason.USER_OVERRIDE.value))
+            
             with self.db_lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
@@ -1092,11 +1102,11 @@ class ActiveTradeService:
                             close_details = ?, realized_pnl = ?, current_price = ?, updated_at = ?
                         WHERE id = ?
                     ''', (
-                        TradeStatus.USER_CLOSED.value,
+                        trade_status,
                         datetime.now(),
                         current_price,
-                        TradeCloseReason.USER_OVERRIDE.value,
-                        json.dumps({'notes': notes}),
+                        trade_close_reason,
+                        json.dumps({'notes': notes, 'close_reason': close_reason}),
                         realized_pnl,
                         current_price,
                         datetime.now(),
@@ -1104,12 +1114,18 @@ class ActiveTradeService:
                     ))
                     
                     # Add trade update
-                    self._add_trade_update(cursor, trade['id'], current_price, 'user_closed',
+                    self._add_trade_update(cursor, trade['id'], current_price, close_reason,
                                          {'notes': notes, 'pnl': realized_pnl})
                     
                     conn.commit()
                     
-                    logger.info(f"👤 User closed trade {trade['id']} for {ticker}")
+                    reason_text = {
+                        'profit_hit': 'Profit target hit',
+                        'stop_hit': 'Stop loss hit',
+                        'user_closed': 'User closed'
+                    }.get(close_reason, 'User closed')
+                    
+                    logger.info(f"👤 {reason_text} - trade {trade['id']} for {ticker}")
                     return True
                     
         except Exception as e:

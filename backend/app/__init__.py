@@ -3,7 +3,11 @@ from flask_cors import CORS
 import os
 import logging
 import sys
+from dotenv import load_dotenv
 from app.utils import CustomJSONEncoder
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure enhanced logging (merged from run_direct.py)
 logging.basicConfig(
@@ -123,5 +127,26 @@ def create_app(test_config=None):
         logger.info("Registered concentrated liquidity routes")
     except Exception as e:
         logger.error(f"Failed to register concentrated liquidity routes: {str(e)}")
+    
+    # Register Hyperliquid routes
+    try:
+        # Add the backend directory to the path
+        backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        
+        from routes.hyperliquid_routes import register_hyperliquid_routes
+        register_hyperliquid_routes(app)
+        logger.info("Registered Hyperliquid routes")
+    except Exception as e:
+        logger.error(f"Failed to register Hyperliquid routes: {str(e)}")
+    
+    # Initialize Hyperliquid scheduler
+    try:
+        from services.hyperliquid_scheduler import auto_start_scheduler
+        auto_start_scheduler()
+        logger.info("Hyperliquid scheduler initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Hyperliquid scheduler: {str(e)}")
 
     return app

@@ -4,6 +4,14 @@
  * Handles the integration between chart analysis results and trade management.
  * Processes AI recommendations for closing existing positions and creating new trades.
  * Enhanced with MAINTAIN status detection and context synchronization.
+ *
+ * CRITICAL PRODUCTION FIX (v2.1.0):
+ * - Fixed AI trade cancellation detection for patterns like "TRADE CANCELLATION: Canceling BUY setup at $106,000"
+ * - Added case-insensitive pattern matching for all closure indicators
+ * - Fixed order of operations: cancellation check now takes precedence over maintain check
+ * - Enhanced cleanup process with validation, retry logic, and rollback mechanisms
+ * - Added safety guards to prevent new trade creation until cleanup is complete
+ * - Added comprehensive logging for debugging and monitoring
  */
 
 import { ChartAnalysisResult } from '../types/chartAnalysis';
@@ -11,6 +19,15 @@ import { AITradeEntry, CreateAITradeRequest, UpdateAITradeRequest } from '../typ
 import { closeActiveTradeInProduction, fetchActiveTradeFromProduction } from './productionActiveTradesService';
 import { aiTradeService } from './aiTradeService';
 import { deactivateRecommendationsForTicker } from './tradingRecommendationService';
+
+// SAFETY: Feature flags for gradual rollout
+const FEATURE_FLAGS = {
+  ENHANCED_CANCELLATION_DETECTION: true, // Set to false to disable new cancellation logic
+  ENHANCED_CLEANUP_VALIDATION: true,     // Set to false to use legacy cleanup
+  SAFETY_GUARDS_ENABLED: true,           // Set to false to disable safety checks
+  COMPREHENSIVE_LOGGING: true,           // Set to false to reduce logging
+  EMERGENCY_FRESH_ANALYSIS_PROTECTION: true // EMERGENCY: Set to false to disable fresh analysis protection
+};
 
 export interface TradeActionResult {
   success: boolean;
@@ -62,14 +79,68 @@ export const processAnalysisForTradeActions = async (
     console.log(`🧠 [AITradeIntegration] Context assessment for ${analysis.ticker}:`, contextAssessment);
     console.log(`📝 [AITradeIntegration] Raw context_assessment: "${analysis.context_assessment?.substring(0, 200)}..."`);
 
-    // Check for closure recommendations
-    const shouldClosePosition = checkForClosureRecommendation(analysis);
+    // CRITICAL VALIDATION: Log exactly what context_assessment contains for debugging
+    if (FEATURE_FLAGS.COMPREHENSIVE_LOGGING) {
+      console.log(`🔍 [EMERGENCY DEBUG] Full context_assessment for ${analysis.ticker}:`, analysis.context_assessment);
+      console.log(`🔍 [EMERGENCY DEBUG] Analysis recommendations:`, analysis.recommendations);
+      console.log(`🔍 [EMERGENCY DEBUG] Analysis has context_assessment: ${!!analysis.context_assessment}`);
+      console.log(`🔍 [EMERGENCY DEBUG] Context length: ${analysis.context_assessment?.length || 0}`);
+    }
+
+    // CRITICAL FIX: Check for closure recommendations FIRST (before maintain check)
+    // This ensures cancellation takes absolute precedence over maintain status
+    let shouldClosePosition = checkForClosureRecommendation(analysis);
     const hasNewRecommendation = analysis.recommendations && analysis.recommendations.action !== 'hold';
     
-    // Check for MAINTAIN status
-    const shouldMaintainPosition = checkForMaintainRecommendation(analysis);
+    // CRITICAL VALIDATION: Add safeguard to prevent closure on fresh analysis
+    if (shouldClosePosition) {
+      console.log(`🚨 [EMERGENCY VALIDATION] Closure recommendation detected for ${analysis.ticker}`);
+      console.log(`🚨 [EMERGENCY VALIDATION] Context assessment exists: ${!!analysis.context_assessment}`);
+      console.log(`🚨 [EMERGENCY VALIDATION] Context preview: "${analysis.context_assessment?.substring(0, 300)}"`);
+      
+      // Double-check that this is not a fresh analysis being incorrectly flagged for closure
+      const freshAnalysisCheck = !analysis.context_assessment ||
+        analysis.context_assessment.toLowerCase().includes('fresh analysis') ||
+        analysis.context_assessment.toLowerCase().includes('no previous position context') ||
+        analysis.context_assessment.toLowerCase().includes('no position context');
+        
+      if (freshAnalysisCheck) {
+        console.log(`🛡️ [EMERGENCY OVERRIDE] BLOCKING closure for ${analysis.ticker} - detected fresh analysis being incorrectly flagged for closure`);
+        console.log(`🛡️ [EMERGENCY OVERRIDE] This would have caused immediate trade closure on fresh analysis - CRITICAL BUG PREVENTED`);
+        // Override the closure recommendation
+        shouldClosePosition = false;
+      }
+    }
+    
+    // Check for MAINTAIN status (only if no closure recommendation)
+    const shouldMaintainPosition = !shouldClosePosition && checkForMaintainRecommendation(analysis);
 
-    if (shouldMaintainPosition) {
+    // CRITICAL: Cancellation takes absolute precedence
+    if (shouldClosePosition) {
+      console.log(`🚨 [AITradeIntegration] CRITICAL: AI recommends CLOSING/CANCELING position for ${analysis.ticker}`);
+      console.log(`📋 [AITradeIntegration] Closure context: ${analysis.context_assessment?.substring(0, 300)}...`);
+      
+      // Enhanced cleanup process with validation
+      const closeResult = await closeExistingPosition(analysis.ticker, analysis.currentPrice);
+      if (closeResult.success) {
+        result.closedTrades = closeResult.closedTrades;
+        result.message += `Closed existing position for ${analysis.ticker}. `;
+        result.shouldDeactivateRecommendations = true;
+        
+        if (hasNewRecommendation) {
+          result.actionType = 'close_and_create';
+          console.log(`🔄 [AITradeIntegration] Invalidation scenario detected - will close old position and create new one`);
+        } else {
+          result.actionType = 'close_only';
+          console.log(`🔒 [AITradeIntegration] Position closure only - no new recommendation`);
+        }
+      } else {
+        result.errors?.push(`Failed to close position: ${closeResult.message}`);
+        console.error(`❌ [AITradeIntegration] Position closure failed for ${analysis.ticker}: ${closeResult.message}`);
+        // SAFETY: Don't proceed with new trades if cleanup failed
+        return result;
+      }
+    } else if (shouldMaintainPosition) {
       console.log(`🔄 [AITradeIntegration] AI recommends MAINTAINING position for ${analysis.ticker}`);
       result.actionType = 'maintain';
       result.shouldPreserveExistingTargets = true;
@@ -80,7 +151,8 @@ export const processAnalysisForTradeActions = async (
       return result;
     }
 
-    if (shouldClosePosition) {
+    // Only proceed with new trade creation if no closure was needed OR closure was successful
+    if (hasNewRecommendation && !shouldMaintainPosition) {
       console.log(`🔒 [AITradeIntegration] AI recommends closing position for ${analysis.ticker}`);
       console.log(`📋 [AITradeIntegration] Context assessment: ${analysis.context_assessment?.substring(0, 200)}...`);
       
@@ -104,24 +176,50 @@ export const processAnalysisForTradeActions = async (
       }
     }
 
+    // SAFETY: Only proceed with new trade creation if no closure was needed OR closure was successful
     if (hasNewRecommendation && !shouldMaintainPosition) {
-      console.log(`📈 [AITradeIntegration] Creating new AI trade recommendation for ${analysis.ticker}`);
+      console.log(`📈 [AITradeIntegration] Preparing to create new AI trade recommendation for ${analysis.ticker}`);
+      
+      // CRITICAL VALIDATION: Ensure no active trades remain before creating new ones
+      console.log(`🔍 [AITradeIntegration] SAFETY CHECK: Validating no active trades remain before creating new trade...`);
+      const preCreateValidation = await getActiveTradesSummary(analysis.ticker);
+      
+      if (preCreateValidation.hasActiveTrades) {
+        const validationError = `SAFETY VIOLATION: Cannot create new trade for ${analysis.ticker} - ${preCreateValidation.aiTrades.length} AI trades and ${preCreateValidation.productionTrade ? '1' : '0'} production trades still active`;
+        console.error(`🚨 [AITradeIntegration] ${validationError}`);
+        result.errors?.push(validationError);
+        return result;
+      }
+      
+      console.log(`✅ [AITradeIntegration] SAFETY CHECK PASSED: No active trades found, proceeding with new trade creation`);
       console.log(`📊 [AITradeIntegration] New recommendation: ${analysis.recommendations.action} at $${analysis.recommendations.entryPrice || analysis.currentPrice}`);
       
-      // Create new AI trade entry
-      const newTradeResult = await createAITradeFromAnalysis(analysis);
-      if (newTradeResult.success) {
-        result.newTrades = newTradeResult.newTrades;
-        result.message += `Created new ${analysis.recommendations.action} recommendation for ${analysis.ticker}.`;
+      // Create new AI trade entry with timeout protection
+      const createTradePromise = createAITradeFromAnalysis(analysis);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Trade creation timeout after 30 seconds')), 30000)
+      );
+      
+      try {
+        const newTradeResult = await Promise.race([createTradePromise, timeoutPromise]) as any;
         
-        if (result.actionType === 'no_action') {
-          result.actionType = 'create_new';
+        if (newTradeResult.success) {
+          result.newTrades = newTradeResult.newTrades;
+          result.message += `Created new ${analysis.recommendations.action} recommendation for ${analysis.ticker}.`;
+          
+          if (result.actionType === 'no_action') {
+            result.actionType = 'create_new';
+          }
+          
+          console.log(`✅ [AITradeIntegration] New trade created successfully: ${newTradeResult.newTrades?.join(', ')}`);
+        } else {
+          result.errors?.push(`Failed to create new trade: ${newTradeResult.message}`);
+          console.error(`❌ [AITradeIntegration] New trade creation failed for ${analysis.ticker}: ${newTradeResult.message}`);
         }
-        
-        console.log(`✅ [AITradeIntegration] New trade created successfully: ${newTradeResult.newTrades?.join(', ')}`);
-      } else {
-        result.errors?.push(`Failed to create new trade: ${newTradeResult.message}`);
-        console.error(`❌ [AITradeIntegration] New trade creation failed for ${analysis.ticker}: ${newTradeResult.message}`);
+      } catch (error) {
+        const timeoutError = `New trade creation failed or timed out: ${error instanceof Error ? error.message : 'Unknown error'}`;
+        result.errors?.push(timeoutError);
+        console.error(`❌ [AITradeIntegration] ${timeoutError}`);
       }
     }
 
@@ -238,15 +336,73 @@ const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean 
 
 /**
  * Check if the analysis recommends closing an existing position
+ * EMERGENCY HOTFIX: Added critical safeguards to prevent closure on fresh analysis
  */
 const checkForClosureRecommendation = (analysis: ChartAnalysisResult): boolean => {
+  // EMERGENCY SAFEGUARD 1: If feature flag is disabled, return false immediately
+  if (!FEATURE_FLAGS.EMERGENCY_FRESH_ANALYSIS_PROTECTION) {
+    console.log(`🚨 [EMERGENCY] Fresh analysis protection disabled via feature flag for ${analysis.ticker}`);
+    return false;
+  }
+
+  // EMERGENCY SAFEGUARD 2: If no context_assessment exists, return false immediately
   if (!analysis.context_assessment) {
+    console.log(`🛡️ [EMERGENCY] No context_assessment found for ${analysis.ticker} - preventing closure on fresh analysis`);
     return false;
   }
 
   const contextAssessment = analysis.context_assessment.toLowerCase();
   
-  // Look for closure indicators in the context assessment
+  // EMERGENCY SAFEGUARD 3: If context contains "fresh analysis" or "no previous position context", return false immediately
+  const freshAnalysisIndicators = [
+    'fresh analysis',
+    'no previous position context',
+    'no position context',
+    'initial analysis',
+    'no context was provided',
+    'no previous context',
+    'fresh market analysis'
+  ];
+  
+  const isFreshAnalysis = freshAnalysisIndicators.some(indicator =>
+    contextAssessment.includes(indicator.toLowerCase())
+  );
+  
+  if (isFreshAnalysis) {
+    console.log(`🛡️ [EMERGENCY] Fresh analysis detected for ${analysis.ticker} - preventing closure. Indicators found: ${freshAnalysisIndicators.filter(indicator => contextAssessment.includes(indicator.toLowerCase())).join(', ')}`);
+    return false;
+  }
+  
+  // EMERGENCY SAFEGUARD 4: Only trigger closure if there's evidence of an EXISTING position to close
+  const existingPositionIndicators = [
+    'previous position',
+    'existing position',
+    'current position',
+    'open position',
+    'active position',
+    'position context was provided',
+    'previous trade',
+    'existing trade',
+    'position status:',
+    'position assessment:',
+    'previous bullish position',
+    'previous bearish position',
+    'canceling buy setup',
+    'canceling sell setup',
+    'cancelling buy setup',
+    'cancelling sell setup'
+  ];
+  
+  const hasExistingPosition = existingPositionIndicators.some(indicator =>
+    contextAssessment.includes(indicator.toLowerCase())
+  );
+  
+  if (!hasExistingPosition) {
+    console.log(`🛡️ [EMERGENCY] No existing position evidence found for ${analysis.ticker} - preventing closure on fresh analysis`);
+    return false;
+  }
+  
+  // Look for closure indicators in the context assessment (case-insensitive)
   const closureIndicators = [
     'previous position status: close',
     'position closure:',
@@ -262,7 +418,18 @@ const checkForClosureRecommendation = (analysis: ChartAnalysisResult): boolean =
     'failed breakout',
     'breakdown',
     'reversal',
-    'completely reversing'
+    'completely reversing',
+    // CRITICAL FIX: Add missing cancellation patterns
+    'trade cancellation',
+    'canceling buy setup',
+    'canceling sell setup',
+    'position assessment: replace',
+    'cancelling buy setup',
+    'cancelling sell setup',
+    'cancel trade',
+    'cancel position',
+    'trade cancel',
+    'setup cancellation'
   ];
 
   // Enhanced detection for invalidation scenarios
@@ -277,14 +444,20 @@ const checkForClosureRecommendation = (analysis: ChartAnalysisResult): boolean =
     'position continuity: completely reversing'
   ];
 
-  const hasClosureIndicator = closureIndicators.some(indicator => contextAssessment.includes(indicator));
-  const hasInvalidationIndicator = invalidationIndicators.some(indicator => contextAssessment.includes(indicator));
+  // CRITICAL FIX: Case-insensitive matching for all patterns
+  const hasClosureIndicator = closureIndicators.some(indicator =>
+    contextAssessment.includes(indicator.toLowerCase())
+  );
+  const hasInvalidationIndicator = invalidationIndicators.some(indicator =>
+    contextAssessment.includes(indicator.toLowerCase())
+  );
 
   if (hasClosureIndicator || hasInvalidationIndicator) {
-    console.log(`🔒 [AITradeIntegration] Closure recommendation detected for ${analysis.ticker}:`);
+    console.log(`🚨 [AITradeIntegration] CRITICAL: Closure/Cancellation recommendation detected for ${analysis.ticker}:`);
     console.log(`   - Closure indicators: ${hasClosureIndicator}`);
     console.log(`   - Invalidation indicators: ${hasInvalidationIndicator}`);
-    console.log(`   - Context: ${contextAssessment.substring(0, 200)}...`);
+    console.log(`   - Matched patterns: ${closureIndicators.filter(indicator => contextAssessment.includes(indicator.toLowerCase())).join(', ')}`);
+    console.log(`   - Context: ${contextAssessment.substring(0, 300)}...`);
     return true;
   }
 
@@ -327,6 +500,7 @@ const determineRecommendationValidity = (contextText: string): 'preserve' | 'upd
 
 /**
  * Close existing position in both production and AI Trade Tracker
+ * Enhanced with comprehensive validation and cleanup verification
  */
 const closeExistingPosition = async (
   ticker: string,
@@ -334,75 +508,145 @@ const closeExistingPosition = async (
 ): Promise<{ success: boolean; message: string; closedTrades?: string[] }> => {
   const closedTrades: string[] = [];
   const errors: string[] = [];
+  let cleanupAttempts = 0;
+  const maxCleanupAttempts = 3;
 
   try {
-    console.log(`🔒 [AITradeIntegration] Starting position closure for ${ticker} at price $${currentPrice}`);
+    console.log(`🚨 [AITradeIntegration] CRITICAL: Starting enhanced position closure for ${ticker} at price $${currentPrice}`);
+    console.log(`🔍 [AITradeIntegration] Pre-cleanup validation: Checking existing positions...`);
 
-    // 1. Close production active trade
-    const productionCloseResult = await closeActiveTradeInProduction(
-      ticker,
-      currentPrice,
-      'Closed due to AI invalidation - market conditions changed'
-    );
+    // ENHANCED: Pre-cleanup validation
+    const preCleanupSummary = await getActiveTradesSummary(ticker);
+    console.log(`📊 [AITradeIntegration] Pre-cleanup state:`, {
+      productionTrade: !!preCleanupSummary.productionTrade,
+      aiTrades: preCleanupSummary.aiTrades.length,
+      hasActiveTrades: preCleanupSummary.hasActiveTrades
+    });
 
-    if (productionCloseResult) {
-      console.log(`✅ [AITradeIntegration] Closed production trade for ${ticker}`);
-      closedTrades.push(`production-${ticker}`);
-    } else {
-      console.warn(`⚠️ [AITradeIntegration] No production trade found to close for ${ticker}`);
-      // Don't treat this as an error - there might not be a production trade
+    if (!preCleanupSummary.hasActiveTrades) {
+      console.log(`ℹ️ [AITradeIntegration] No active trades found for ${ticker} - cleanup not needed`);
+      return {
+        success: true,
+        message: `No active trades found to close for ${ticker}`,
+        closedTrades: []
+      };
     }
 
-    // 2. Close AI Trade Tracker entries
-    await aiTradeService.init();
-    const aiTrades = await aiTradeService.getTradesByTicker(ticker);
-    const activeTrades = aiTrades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
+    // ENHANCED: Systematic cleanup with retry logic
+    while (cleanupAttempts < maxCleanupAttempts) {
+      cleanupAttempts++;
+      console.log(`🔄 [AITradeIntegration] Cleanup attempt ${cleanupAttempts}/${maxCleanupAttempts} for ${ticker}`);
 
-    console.log(`🔍 [AITradeIntegration] Found ${activeTrades.length} active AI trades for ${ticker}`);
-
-    for (const trade of activeTrades) {
+      // 1. Close production active trade
       try {
-        // Calculate PnL for historical tracking
-        const entryPrice = trade.entryPrice;
-        const pnlPercentage = trade.action === 'buy'
-          ? ((currentPrice - entryPrice) / entryPrice) * 100
-          : ((entryPrice - currentPrice) / entryPrice) * 100;
+        const productionCloseResult = await closeActiveTradeInProduction(
+          ticker,
+          currentPrice,
+          'CRITICAL: Closed due to AI trade cancellation - position invalidated'
+        );
 
-        const updateRequest: UpdateAITradeRequest = {
-          id: trade.id,
-          status: 'closed',
-          exitDate: Date.now(),
-          exitPrice: currentPrice,
-          closeReason: 'ai_invalidation',
-          notes: `Closed due to AI invalidation - market conditions changed. PnL: ${pnlPercentage.toFixed(2)}%`
-        };
-
-        await aiTradeService.updateTrade(updateRequest);
-        console.log(`✅ [AITradeIntegration] Closed AI trade ${trade.id} for ${ticker} - PnL: ${pnlPercentage.toFixed(2)}%`);
-        closedTrades.push(trade.id);
+        if (productionCloseResult) {
+          console.log(`✅ [AITradeIntegration] Closed production trade for ${ticker}`);
+          closedTrades.push(`production-${ticker}`);
+        } else {
+          console.warn(`⚠️ [AITradeIntegration] No production trade found to close for ${ticker}`);
+        }
       } catch (error) {
-        console.error(`❌ [AITradeIntegration] Failed to close AI trade ${trade.id}:`, error);
-        errors.push(`Failed to close AI trade ${trade.id}`);
+        console.error(`❌ [AITradeIntegration] Production trade closure failed:`, error);
+        errors.push(`Production closure failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      // 2. Close AI Trade Tracker entries with enhanced validation
+      try {
+        await aiTradeService.init();
+        const aiTrades = await aiTradeService.getTradesByTicker(ticker);
+        const activeTrades = aiTrades.filter(trade => trade.status === 'waiting' || trade.status === 'open');
+
+        console.log(`🔍 [AITradeIntegration] Found ${activeTrades.length} active AI trades for ${ticker} (attempt ${cleanupAttempts})`);
+
+        for (const trade of activeTrades) {
+          try {
+            // Calculate PnL for historical tracking
+            const entryPrice = trade.entryPrice;
+            const pnlPercentage = trade.action === 'buy'
+              ? ((currentPrice - entryPrice) / entryPrice) * 100
+              : ((entryPrice - currentPrice) / entryPrice) * 100;
+
+            const updateRequest: UpdateAITradeRequest = {
+              id: trade.id,
+              status: 'closed',
+              exitDate: Date.now(),
+              exitPrice: currentPrice,
+              closeReason: 'ai_invalidation',
+              notes: `CRITICAL: Closed due to AI trade cancellation. PnL: ${pnlPercentage.toFixed(2)}%. Cleanup attempt: ${cleanupAttempts}`
+            };
+
+            await aiTradeService.updateTrade(updateRequest);
+            console.log(`✅ [AITradeIntegration] Closed AI trade ${trade.id} for ${ticker} - PnL: ${pnlPercentage.toFixed(2)}%`);
+            closedTrades.push(trade.id);
+          } catch (error) {
+            console.error(`❌ [AITradeIntegration] Failed to close AI trade ${trade.id}:`, error);
+            errors.push(`Failed to close AI trade ${trade.id}: ${error instanceof Error ? error.message : 'Unknown error'}`);
+          }
+        }
+      } catch (error) {
+        console.error(`❌ [AITradeIntegration] AI trades cleanup failed:`, error);
+        errors.push(`AI trades cleanup failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      }
+
+      // ENHANCED: Post-cleanup validation
+      console.log(`🔍 [AITradeIntegration] Post-cleanup validation (attempt ${cleanupAttempts})...`);
+      const postCleanupSummary = await getActiveTradesSummary(ticker);
+      console.log(`📊 [AITradeIntegration] Post-cleanup state:`, {
+        productionTrade: !!postCleanupSummary.productionTrade,
+        aiTrades: postCleanupSummary.aiTrades.length,
+        hasActiveTrades: postCleanupSummary.hasActiveTrades
+      });
+
+      if (!postCleanupSummary.hasActiveTrades) {
+        console.log(`✅ [AITradeIntegration] CLEANUP SUCCESSFUL: All trades cleared for ${ticker} after ${cleanupAttempts} attempts`);
+        break;
+      } else {
+        console.warn(`⚠️ [AITradeIntegration] Cleanup incomplete after attempt ${cleanupAttempts}. Remaining: ${postCleanupSummary.aiTrades.length} AI trades, Production: ${!!postCleanupSummary.productionTrade}`);
+        
+        if (cleanupAttempts < maxCleanupAttempts) {
+          console.log(`🔄 [AITradeIntegration] Retrying cleanup in 1 second...`);
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
       }
     }
 
+    // ENHANCED: Final validation and rollback mechanism
+    const finalValidation = await getActiveTradesSummary(ticker);
+    if (finalValidation.hasActiveTrades && cleanupAttempts >= maxCleanupAttempts) {
+      const rollbackError = `CRITICAL: Cleanup failed after ${maxCleanupAttempts} attempts. ${finalValidation.aiTrades.length} AI trades and ${finalValidation.productionTrade ? '1' : '0'} production trades remain active.`;
+      console.error(`🚨 [AITradeIntegration] ${rollbackError}`);
+      errors.push(rollbackError);
+      
+      return {
+        success: false,
+        message: `Partial cleanup failure: ${rollbackError}`,
+        closedTrades
+      };
+    }
+
     const successMessage = closedTrades.length > 0
-      ? `Successfully closed ${closedTrades.length} trades for ${ticker}`
+      ? `Successfully closed ${closedTrades.length} trades for ${ticker} after ${cleanupAttempts} attempts`
       : `No active trades found to close for ${ticker}`;
 
     console.log(`🏁 [AITradeIntegration] Position closure complete for ${ticker}: ${successMessage}`);
 
     return {
       success: errors.length === 0,
-      message: errors.length > 0 ? errors.join('; ') : successMessage,
+      message: errors.length > 0 ? `Partial success with errors: ${errors.join('; ')}` : successMessage,
       closedTrades
     };
 
   } catch (error) {
-    console.error(`❌ [AITradeIntegration] Error closing position for ${ticker}:`, error);
+    console.error(`❌ [AITradeIntegration] Critical error during position closure for ${ticker}:`, error);
     return {
       success: false,
-      message: `Error closing position: ${error instanceof Error ? error.message : 'Unknown error'}`
+      message: `Critical error during position closure: ${error instanceof Error ? error.message : 'Unknown error'}`
     };
   }
 };

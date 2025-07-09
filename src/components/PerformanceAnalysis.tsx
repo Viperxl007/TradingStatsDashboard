@@ -33,7 +33,11 @@ import {
   PopoverArrow,
   PopoverCloseButton,
   Stack,
-  Input
+  Input,
+  FormControl,
+  FormLabel,
+  VStack,
+  Badge
 } from '@chakra-ui/react';
 import {
   FiTrendingUp,
@@ -72,7 +76,7 @@ import { format, parseISO, subMonths, subDays, isAfter } from 'date-fns';
  * @param timeframe String representing the timeframe to filter by
  * @returns Filtered array of trade data
  */
-const filterDataByTimeframe = (data: any[], timeframe: string) => {
+const filterDataByTimeframe = (data: any[], timeframe: string, customStartDate?: Date, customEndDate?: Date) => {
   const now = new Date();
   
   switch (timeframe) {
@@ -86,6 +90,14 @@ const filterDataByTimeframe = (data: any[], timeframe: string) => {
       return data.filter(item => isAfter(new Date(item.date), subMonths(now, 6)));
     case 'year':
       return data.filter(item => isAfter(new Date(item.date), subMonths(now, 12)));
+    case 'custom':
+      if (customStartDate && customEndDate) {
+        return data.filter(item => {
+          const itemDate = new Date(item.date);
+          return itemDate >= customStartDate && itemDate <= customEndDate;
+        });
+      }
+      return data;
     case 'all':
     default:
       return data;
@@ -158,14 +170,33 @@ const PerformanceAnalysis: React.FC = () => {
     dispatch(updateFilters({ timeframe: newTimeframe }));
   };
   
+  // Helper function to get date range info
+  const getDateRangeInfo = () => {
+    if (timeframe === 'custom' && dateRange[0] && dateRange[1]) {
+      const start = dateRange[0];
+      const end = dateRange[1];
+      const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+      return {
+        label: `${format(start, 'MMM dd, yyyy')} - ${format(end, 'MMM dd, yyyy')}`,
+        days: days
+      };
+    }
+    return null;
+  };
+  
   // Colors
   const cardBg = useColorModeValue('white', 'gray.800');
   const cardBorderColor = useColorModeValue('gray.200', 'gray.700');
   
   // Prepare chart data
   const filteredByTimeframe = React.useMemo(() =>
-    filterDataByTimeframe(filteredData, timeframe),
-    [filteredData, timeframe]
+    filterDataByTimeframe(
+      filteredData,
+      timeframe,
+      timeframe === 'custom' && dateRange[0] ? dateRange[0] : undefined,
+      timeframe === 'custom' && dateRange[1] ? dateRange[1] : undefined
+    ),
+    [filteredData, timeframe, dateRange]
   );
   
   const groupedData = React.useMemo(() =>
@@ -249,7 +280,7 @@ const PerformanceAnalysis: React.FC = () => {
       <Heading size="lg" mb={6}>Performance Analysis</Heading>
       
       {/* Filters */}
-      <HStack mb={6} spacing={4} wrap="wrap" justifyContent="flex-start">
+      <HStack mb={6} spacing={6} wrap="wrap" justifyContent="flex-start" align="center">
         {/* Get context from DataContext */}
         {(() => {
           const { state, dispatch } = useData();
@@ -383,6 +414,7 @@ const PerformanceAnalysis: React.FC = () => {
                               const newDateRange: [Date | null, Date | null] = [date, dateRange[1]];
                               setDateRange(newDateRange);
                               
+                              
                               // Validate date range
                               if (date && dateRange[1]) {
                                 if (isAfter(date, dateRange[1])) {
@@ -405,6 +437,7 @@ const PerformanceAnalysis: React.FC = () => {
                               const date = e.target.value ? new Date(e.target.value) : null;
                               const newDateRange: [Date | null, Date | null] = [dateRange[0], date];
                               setDateRange(newDateRange);
+                              
                               
                               // Validate date range
                               if (dateRange[0] && date) {
@@ -439,6 +472,7 @@ const PerformanceAnalysis: React.FC = () => {
                               }
                               
                               dispatch(updateFilters({ dateRange }));
+                              setTimeframe('custom');
                               setIsDatePickerOpen(false);
                               setDateRangeError(null);
                             }
@@ -509,7 +543,9 @@ const PerformanceAnalysis: React.FC = () => {
                      timeframe === 'year' ? 'Past Year' :
                      timeframe === '6months' ? 'Past 6 Months' :
                      timeframe === '3months' ? 'Past 3 Months' :
-                     timeframe === 'month' ? 'Past Month' : 'Past Week'}
+                     timeframe === 'month' ? 'Past Month' :
+                     timeframe === 'week' ? 'Past Week' :
+                     timeframe === 'custom' ? (getDateRangeInfo()?.label || 'Custom Range') : 'All Time'}
                   </MenuButton>
                   <MenuList>
                     <MenuItem onClick={() => setTimeframe('all')}>All Time</MenuItem>
@@ -518,6 +554,7 @@ const PerformanceAnalysis: React.FC = () => {
                     <MenuItem onClick={() => setTimeframe('3months')}>Past 3 Months</MenuItem>
                     <MenuItem onClick={() => setTimeframe('month')}>Past Month</MenuItem>
                     <MenuItem onClick={() => setTimeframe('week')}>Past Week</MenuItem>
+                    <MenuItem onClick={() => setTimeframe('custom')}>Custom Range</MenuItem>
                   </MenuList>
                 </Menu>
               </Box>
