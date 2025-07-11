@@ -838,29 +838,55 @@ Be specific with exact price levels and realistic probability assessments.
             stop_loss = None
             stop_loss_levels = risk_management.get('stop_loss_levels', []) or risk_management.get('stopLoss_levels', [])
             
-            # First, check if the selected strategy has a corresponding stop loss
-            # If we have multiple strategies and multiple stop losses, try to match them
-            if selected_strategy and stop_loss_levels and len(original_entry_strategies) > 1 and len(stop_loss_levels) > 1:
-                # Find the index of the selected strategy in the ORIGINAL (unsorted) entry_strategies list by strategy_type
+            # CRITICAL FIX: Properly map stop loss to the selected highest probability strategy
+            # The issue was that we were using the original index but the strategies were sorted by probability
+            if selected_strategy and stop_loss_levels:
                 selected_strategy_type = selected_strategy.get('strategy_type', '')
-                selected_strategy_index = 0
-                for i, strategy in enumerate(original_entry_strategies):
-                    strategy_type = strategy.get('strategy_type', '')
-                    if strategy_type == selected_strategy_type:
-                        selected_strategy_index = i
-                        break
                 
-                # Use the corresponding stop loss if available, otherwise fall back to first
-                if selected_strategy_index < len(stop_loss_levels):
-                    stop_loss = stop_loss_levels[selected_strategy_index].get('price')
-                    logger.info(f"🎯 [STOP LOSS FIX] Using strategy-specific stop loss: ${stop_loss} for {selected_strategy_type} strategy (index {selected_strategy_index})")
+                # First, try to find a stop loss that matches the selected strategy by looking for strategy-specific stop losses
+                strategy_specific_stop_loss = None
+                
+                # Check if the selected strategy has its own stop loss defined
+                if hasattr(selected_strategy, 'get') and selected_strategy.get('stop_loss'):
+                    strategy_specific_stop_loss = selected_strategy.get('stop_loss')
+                    logger.info(f"🎯 [STOP LOSS FIX] Using strategy-embedded stop loss: ${strategy_specific_stop_loss} for {selected_strategy_type}")
+                
+                # If no strategy-specific stop loss, try to match by strategy type in stop loss levels
+                elif len(original_entry_strategies) > 1 and len(stop_loss_levels) > 1:
+                    # Find the index of the selected strategy in the ORIGINAL (unsorted) entry_strategies list
+                    selected_strategy_index = None
+                    for i, strategy in enumerate(original_entry_strategies):
+                        if strategy.get('strategy_type', '') == selected_strategy_type:
+                            selected_strategy_index = i
+                            break
+                    
+                    if selected_strategy_index is not None and selected_strategy_index < len(stop_loss_levels):
+                        stop_loss = stop_loss_levels[selected_strategy_index].get('price')
+                        logger.info(f"🎯 [STOP LOSS FIX] Using strategy-matched stop loss: ${stop_loss} for {selected_strategy_type} strategy (original index {selected_strategy_index})")
+                    else:
+                        # If we can't match by index, look for stop loss with matching strategy type or description
+                        matched_stop_loss = None
+                        for stop_level in stop_loss_levels:
+                            stop_description = stop_level.get('description', '').lower()
+                            if selected_strategy_type.lower() in stop_description:
+                                matched_stop_loss = stop_level.get('price')
+                                logger.info(f"🎯 [STOP LOSS FIX] Using description-matched stop loss: ${matched_stop_loss} for {selected_strategy_type} (matched by description)")
+                                break
+                        
+                        if matched_stop_loss:
+                            stop_loss = matched_stop_loss
+                        else:
+                            # Last resort: use the stop loss from the highest probability strategy if it exists
+                            stop_loss = stop_loss_levels[0].get('price')
+                            logger.warning(f"🎯 [STOP LOSS FIX] Could not match stop loss to strategy, using first available: ${stop_loss}")
                 else:
-                    stop_loss = stop_loss_levels[0].get('price')
-                    logger.warning(f"🎯 [STOP LOSS FIX] Strategy index {selected_strategy_index} exceeds stop loss array, using first stop loss: ${stop_loss}")
+                    # Single strategy or single stop loss - use the available stop loss
+                    stop_loss = strategy_specific_stop_loss or stop_loss_levels[0].get('price')
+                    logger.info(f"🎯 [STOP LOSS FIX] Using available stop loss: ${stop_loss} for {selected_strategy_type} (single strategy/stop loss)")
             elif stop_loss_levels:
-                # Fallback to first stop loss for backward compatibility
+                # Fallback when no strategy is selected
                 stop_loss = stop_loss_levels[0].get('price')
-                logger.info(f"🎯 [STOP LOSS FIX] Using default first stop loss: ${stop_loss} (single strategy or single stop loss)")
+                logger.info(f"🎯 [STOP LOSS FIX] Using default first stop loss: ${stop_loss} (no strategy selected)")
             
             # Calculate risk/reward
             risk_reward = None

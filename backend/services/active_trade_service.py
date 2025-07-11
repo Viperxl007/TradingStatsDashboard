@@ -70,20 +70,41 @@ class ActiveTradeService:
             Exit result dict if exit condition found, None otherwise
         """
         try:
-            # CRITICAL: Get the LAST chart analysis record timestamp for this ticker
-            # This ensures we only check candles since the last chart read
-            last_analysis_dt = self._get_last_chart_analysis_time(ticker)
-            if not last_analysis_dt:
-                logger.debug(f"No chart analysis records found for {ticker}, skipping historical check")
+            # CRITICAL FIX: Protect newly created trades from premature closure
+            # Only check historical exit conditions for trades that have been active for a reasonable time
+            created_time = self._safe_parse_datetime(trade.get('created_at'))
+            if not created_time:
+                logger.debug(f"Invalid created_at timestamp for trade {trade.get('id')}, skipping historical check")
                 return None
             
-            logger.info(f"🔍 Checking historical data since last chart analysis: {last_analysis_dt}")
+            # Grace period: Don't check historical exits for trades created within the last 5 minutes
+            # This prevents immediate closure due to stale price data or timing issues
+            time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
+            if time_since_creation < 5:
+                logger.debug(f"🛡️ Trade {trade['id']} created {time_since_creation:.1f} minutes ago - skipping historical check (grace period)")
+                return None
+            
+            # CRITICAL: For ACTIVE trades, use trigger hit time as the baseline, not last analysis time
+            # For WAITING trades, this method should not be called, but if it is, use creation time
+            if trade['status'] == TradeStatus.ACTIVE.value and trade.get('trigger_hit_time'):
+                baseline_time = self._safe_parse_datetime(trade['trigger_hit_time'])
+                baseline_description = "trigger hit time"
+            else:
+                # Fallback to creation time for safety
+                baseline_time = created_time
+                baseline_description = "trade creation time"
+            
+            if not baseline_time:
+                logger.debug(f"No valid baseline time found for trade {trade['id']}, skipping historical check")
+                return None
+            
+            logger.info(f"🔍 Checking historical data since {baseline_description}: {baseline_time}")
             
             # Use the existing market data infrastructure to get historical candles
-            historical_candles = self._fetch_historical_candles_since_analysis(ticker, last_analysis_dt)
+            historical_candles = self._fetch_historical_candles_since_analysis(ticker, baseline_time)
             
             if not historical_candles:
-                logger.debug(f"No historical candles found for {ticker} since {last_analysis_dt}")
+                logger.debug(f"No historical candles found for {ticker} since {baseline_time}")
                 return None
             
             # Extract trade parameters
@@ -102,8 +123,34 @@ class ActiveTradeService:
             logger.info(f"🔍 Checking {len(historical_candles)} historical candles for {ticker} trade {trade['id']}")
             logger.info(f"🔍 Entry: ${entry_price}, Target: ${target_price}, Stop: ${stop_loss}, Action: {action}")
             
+            # CRITICAL FIX: Only check candles that occurred AFTER the trade became active
+            # Filter out any candles that occurred before the baseline time to prevent false exits
+            valid_candles = []
+            baseline_timestamp = baseline_time.timestamp()
+            
+            for candle in historical_candles:
+                candle_time = candle.get('timestamp')
+                if isinstance(candle_time, str):
+                    parsed_time = self._safe_parse_datetime(candle_time)
+                    if parsed_time:
+                        candle_timestamp = parsed_time.timestamp()
+                    else:
+                        continue
+                else:
+                    candle_timestamp = float(candle_time)
+                
+                # Only include candles AFTER the baseline time
+                if candle_timestamp > baseline_timestamp:
+                    valid_candles.append(candle)
+            
+            if not valid_candles:
+                logger.debug(f"No valid candles found after {baseline_description} for trade {trade['id']}")
+                return None
+            
+            logger.info(f"🔍 Checking {len(valid_candles)} valid candles (filtered from {len(historical_candles)} total) for trade {trade['id']}")
+            
             # Check each candle chronologically for first hit (FIRST HIT WINS)
-            for candle in sorted(historical_candles, key=lambda x: x['timestamp']):
+            for candle in sorted(valid_candles, key=lambda x: x['timestamp']):
                 candle_time = candle['timestamp']
                 high_price = float(candle['high'])
                 low_price = float(candle['low'])
@@ -621,6 +668,16 @@ class ActiveTradeService:
             recommendations = analysis_data.get('recommendations', {})
             action = recommendations.get('action', '').lower()
             
+            # CRITICAL FIX: Check for MAINTAIN recommendation before creating trades
+            # If AI recommends MAINTAIN for existing position, skip trade creation entirely
+            context_assessment = analysis_data.get('context_assessment', {})
+            if isinstance(context_assessment, dict):
+                previous_position_status = context_assessment.get('previous_position_status', '')
+                # Safely handle non-string values and whitespace
+                if isinstance(previous_position_status, str) and previous_position_status.strip().upper() == 'MAINTAIN':
+                    logger.info(f"🔄 MAINTAIN recommendation detected for {ticker}: Skipping trade creation as AI recommends maintaining existing position")
+                    return None
+            
             # Only create trades for buy/sell actions
             if action not in ['buy', 'sell']:
                 logger.info(f"No trade created for {ticker}: action is '{action}' (not buy/sell)")
@@ -684,6 +741,18 @@ class ActiveTradeService:
             else:
                 logger.info(f"⏳ Creating WAITING trade for {ticker}: waiting for trigger at ${entry_price}")
             
+            # SIMPLE FIX: Check for AI trade cancellation and delete existing trade first
+            context_assessment = analysis_data.get('context_assessment', {})
+            if isinstance(context_assessment, dict):
+                position_assessment = context_assessment.get('position_assessment', '')
+                if isinstance(position_assessment, str) and 'TRADE CANCELLATION' in position_assessment:
+                    # AI wants to cancel existing trade - delete it first, then create new one
+                    existing_trade = self.get_active_trade(ticker)
+                    if existing_trade and existing_trade['status'] == TradeStatus.WAITING.value:
+                        logger.info(f"🗑️ AI TRADE CANCELLATION detected: Deleting existing waiting trade {existing_trade['id']} for {ticker}")
+                        self.delete_trade_by_id(existing_trade['id'], "cancelled_before_entry: AI trade cancellation - position invalidated")
+                        logger.info(f"✅ Existing trade deleted, proceeding to create new trade with updated parameters")
+
             with self.db_lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
@@ -1056,13 +1125,17 @@ class ActiveTradeService:
         """
         Close trade based on user override.
         
+        CRITICAL BUG FIX: For trades that were never executed (status='waiting'),
+        DELETE the trade instead of marking as 'user_closed' to prevent false performance data.
+        
         Args:
             ticker: Stock ticker symbol
             current_price: Current market price
             notes: User notes about the closure
+            close_reason: Reason for closure
             
         Returns:
-            True if trade was closed, False otherwise
+            True if trade was closed/deleted, False otherwise
         """
         try:
             trade = self.get_active_trade(ticker)
@@ -1070,17 +1143,21 @@ class ActiveTradeService:
                 logger.warning(f"No active trade found for {ticker} to close")
                 return False
             
-            # Calculate final P&L
+            # CRITICAL FIX: Delete waiting trades instead of marking as closed
+            if trade['status'] == TradeStatus.WAITING.value:
+                logger.info(f"🗑️ CRITICAL FIX: Deleting waiting trade {trade['id']} for {ticker} - never executed")
+                deletion_reason = f"cancelled_before_entry: {notes}" if notes else "cancelled_before_entry"
+                return self.delete_trade_by_id(trade['id'], deletion_reason)
+            
+            # For ACTIVE trades, proceed with normal closure logic
             entry_price = trade['entry_price']
             action = trade['action']
             
-            if trade['status'] == TradeStatus.ACTIVE.value:
-                if action == 'buy':
-                    realized_pnl = current_price - entry_price
-                else:  # sell
-                    realized_pnl = entry_price - current_price
-            else:
-                realized_pnl = 0  # No P&L if trade was never triggered
+            # Calculate final P&L for executed trades
+            if action == 'buy':
+                realized_pnl = current_price - entry_price
+            else:  # sell
+                realized_pnl = entry_price - current_price
             
             # Map frontend close_reason to backend status and close_reason
             status_mapping = {
@@ -1188,7 +1265,21 @@ class ActiveTradeService:
             
             # CRITICAL: Check for profit target and stop loss hits
             # First check current price, then historical candles if needed
-            logger.info(f"🎯 Checking exit conditions for {trade['status']} trade {trade['id']} ({ticker})")
+            logger.info(f"🎯 [TRADE CONTEXT] Checking exit conditions for {trade['status']} trade {trade['id']} ({ticker}) at ${current_price}")
+            
+            # Enhanced logging for debugging trade closure issues
+            created_time = self._safe_parse_datetime(trade.get('created_at'))
+            if created_time:
+                time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
+                logger.info(f"🎯 [TRADE CONTEXT] Trade {trade['id']} created {time_since_creation:.1f} minutes ago")
+            
+            if trade['status'] == TradeStatus.WAITING.value:
+                logger.info(f"🎯 [TRADE CONTEXT] WAITING trade {trade['id']} - entry trigger at ${trade['entry_price']}")
+            elif trade['status'] == TradeStatus.ACTIVE.value:
+                trigger_time = self._safe_parse_datetime(trade.get('trigger_hit_time'))
+                if trigger_time:
+                    time_since_trigger = (datetime.now() - trigger_time).total_seconds() / 60  # minutes
+                    logger.info(f"🎯 [TRADE CONTEXT] ACTIVE trade {trade['id']} - triggered {time_since_trigger:.1f} minutes ago at ${trade.get('trigger_hit_price')}")
             
             progress = self.update_trade_progress(ticker, current_price)
             
@@ -1197,12 +1288,24 @@ class ActiveTradeService:
                 logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by current price: {progress.get('exit_reason')}")
                 return None
             
-            # For active trades, also check historical candles since last update for precise exit detection
+            # CRITICAL FIX: Only check historical exit conditions for ACTIVE trades that have been active for a reasonable time
+            # WAITING trades should NEVER be subject to historical exit checks as they haven't been triggered yet
             if trade['status'] == TradeStatus.ACTIVE.value:
-                historical_exit = self._check_historical_exit_conditions(ticker, trade)
-                if historical_exit:
-                    logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data: {historical_exit.get('exit_reason')}")
-                    return None
+                # Additional safety check: ensure trade has been active for at least 1 minute before checking historical exits
+                trigger_time = self._safe_parse_datetime(trade.get('trigger_hit_time'))
+                if trigger_time:
+                    time_since_trigger = (datetime.now() - trigger_time).total_seconds() / 60  # minutes
+                    if time_since_trigger >= 1:
+                        historical_exit = self._check_historical_exit_conditions(ticker, trade)
+                        if historical_exit:
+                            logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data: {historical_exit.get('exit_reason')}")
+                            return None
+                    else:
+                        logger.debug(f"🛡️ Trade {trade['id']} triggered {time_since_trigger:.1f} minutes ago - skipping historical check (trigger grace period)")
+                else:
+                    logger.debug(f"🛡️ Trade {trade['id']} has no trigger time - skipping historical check for safety")
+            elif trade['status'] == TradeStatus.WAITING.value:
+                logger.debug(f"🛡️ Trade {trade['id']} is WAITING - historical exit checks are disabled for waiting trades")
             
             # Refresh trade data after potential updates
             trade = self.get_active_trade(ticker)
@@ -1394,9 +1497,9 @@ class ActiveTradeService:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     
-                    # Get all active trades for this analysis
+                    # Get all active trades for this analysis with creation time
                     cursor.execute('''
-                        SELECT id, ticker, action, entry_price FROM active_trades
+                        SELECT id, ticker, action, entry_price, created_at FROM active_trades
                         WHERE analysis_id = ? AND status IN ('waiting', 'active')
                     ''', (analysis_id,))
                     
@@ -1406,9 +1509,32 @@ class ActiveTradeService:
                     if not trades:
                         return True  # No trades to close
                     
-                    # Close each trade
+                    # CRITICAL FIX: Protect newly created trades from immediate force closure
+                    protected_trades = []
+                    closeable_trades = []
+                    
                     for trade in trades:
-                        trade_id, ticker, action, entry_price = trade
+                        trade_id, ticker, action, entry_price, created_at = trade
+                        
+                        # Parse creation time and check if trade is too new to close
+                        created_time = self._safe_parse_datetime(created_at)
+                        if created_time:
+                            time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
+                            if time_since_creation < 10:  # Protect trades created within last 10 minutes
+                                protected_trades.append((trade_id, ticker, time_since_creation))
+                                logger.warning(f"🛡️ [FORCE CLOSE PROTECTION] Protecting trade {trade_id} ({ticker}) - created {time_since_creation:.1f} minutes ago")
+                                continue
+                        
+                        closeable_trades.append(trade)
+                    
+                    if protected_trades:
+                        logger.warning(f"🛡️ [FORCE CLOSE PROTECTION] Protected {len(protected_trades)} newly created trades from force closure")
+                        for trade_id, ticker, age in protected_trades:
+                            logger.warning(f"🛡️ [FORCE CLOSE PROTECTION] - Trade {trade_id} ({ticker}): {age:.1f} minutes old")
+                    
+                    # Close only the trades that are old enough
+                    for trade in closeable_trades:
+                        trade_id, ticker, action, entry_price, created_at = trade
                         
                         # Update trade status to closed
                         cursor.execute('''

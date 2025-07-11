@@ -179,16 +179,29 @@ class ChartContextManager:
                     
                     logger.info(f"Stored analysis for {ticker} with ID {analysis_id}")
                     
-                    # Create active trade if this analysis contains a buy/sell recommendation
-                    try:
-                        trade_id = self.active_trade_service.create_trade_from_analysis(
-                            ticker, timeframe, analysis_id, analysis_data, context_data
-                        )
-                        if trade_id:
-                            logger.info(f"Created active trade {trade_id} for {ticker} from analysis {analysis_id}")
-                    except Exception as trade_error:
-                        logger.warning(f"Failed to create active trade for {ticker}: {str(trade_error)}")
-                        # Don't fail the analysis storage if trade creation fails
+                    # CRITICAL FIX: Check for MAINTAIN recommendation before attempting trade creation
+                    # If AI recommends MAINTAIN for existing position, skip trade creation entirely
+                    context_assessment = analysis_data.get('context_assessment', {})
+                    should_skip_trade_creation = False
+                    
+                    if isinstance(context_assessment, dict):
+                        previous_position_status = context_assessment.get('previous_position_status', '')
+                        # Safely handle non-string values and whitespace
+                        if isinstance(previous_position_status, str) and previous_position_status.strip().upper() == 'MAINTAIN':
+                            logger.info(f"🔄 MAINTAIN recommendation detected for {ticker}: Skipping trade creation as AI recommends maintaining existing position")
+                            should_skip_trade_creation = True
+                    
+                    # Create active trade if this analysis contains a buy/sell recommendation and not MAINTAIN
+                    if not should_skip_trade_creation:
+                        try:
+                            trade_id = self.active_trade_service.create_trade_from_analysis(
+                                ticker, timeframe, analysis_id, analysis_data, context_data
+                            )
+                            if trade_id:
+                                logger.info(f"Created active trade {trade_id} for {ticker} from analysis {analysis_id}")
+                        except Exception as trade_error:
+                            logger.warning(f"Failed to create active trade for {ticker}: {str(trade_error)}")
+                            # Don't fail the analysis storage if trade creation fails
                     
                     return analysis_id
                     

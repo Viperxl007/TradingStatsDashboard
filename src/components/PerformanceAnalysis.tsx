@@ -49,6 +49,8 @@ import {
   FiFilter
 } from 'react-icons/fi';
 import { useData, updateFilters, resetFilters } from '../context/DataContext';
+import { useHyperliquid } from '../context/HyperliquidContext';
+import { transformHyperliquidTrades, calculateTokenPerformanceFromHyperliquid } from '../services/hyperliquidDataTransform';
 import {
   LineChart,
   Line,
@@ -154,10 +156,25 @@ const calculateCumulativePL = (data: any[]) => {
 
 const PerformanceAnalysis: React.FC = () => {
   const { state } = useData();
-  const { filteredData, tokenPerformance: allTokenPerformance } = state;
+  const { state: hyperliquidState } = useHyperliquid();
+  
+  // Use Hyperliquid data if available, fallback to legacy imported data
+  const useHyperliquidData = hyperliquidState.trades.length > 0;
+  const rawTradeData = useHyperliquidData
+    ? transformHyperliquidTrades(hyperliquidState.trades)
+    : (state?.filteredData || []);
   
   // Local state
   const [chartType, setChartType] = React.useState('line');
+  const [chartDataTypes, setChartDataTypes] = React.useState<{
+    daily: boolean;
+    cumulative: boolean;
+    volume: boolean;
+  }>({
+    daily: false,
+    cumulative: true,
+    volume: false
+  });
   const [dateRange, setDateRange] = React.useState<[Date | null, Date | null]>([null, null]);
   const [isDatePickerOpen, setIsDatePickerOpen] = React.useState(false);
   const [dateRangeError, setDateRangeError] = React.useState<string | null>(null);
@@ -188,15 +205,15 @@ const PerformanceAnalysis: React.FC = () => {
   const cardBg = useColorModeValue('white', 'gray.800');
   const cardBorderColor = useColorModeValue('gray.200', 'gray.700');
   
-  // Prepare chart data
+  // Prepare chart data using the appropriate data source
   const filteredByTimeframe = React.useMemo(() =>
     filterDataByTimeframe(
-      filteredData,
+      rawTradeData,
       timeframe,
       timeframe === 'custom' && dateRange[0] ? dateRange[0] : undefined,
       timeframe === 'custom' && dateRange[1] ? dateRange[1] : undefined
     ),
-    [filteredData, timeframe, dateRange]
+    [rawTradeData, timeframe, dateRange]
   );
   
   const groupedData = React.useMemo(() =>
@@ -214,8 +231,13 @@ const PerformanceAnalysis: React.FC = () => {
     // Always recalculate token performance based on the filtered data
     // This ensures all filters (tokens, date range, trade type, timeframe) are applied
     
-    // First apply timeframe filter to the already filtered data
-    const filteredByTimeframeData = filterDataByTimeframe(filteredData, timeframe);
+    // First apply timeframe filter to the raw trade data
+    const filteredByTimeframeData = filterDataByTimeframe(
+      rawTradeData,
+      timeframe,
+      timeframe === 'custom' && dateRange[0] ? dateRange[0] : undefined,
+      timeframe === 'custom' && dateRange[1] ? dateRange[1] : undefined
+    );
     
     // Group by token
     const tokenGroups = filteredByTimeframeData.reduce((acc, trade) => {
@@ -259,7 +281,7 @@ const PerformanceAnalysis: React.FC = () => {
         totalVolume
       };
     });
-  }, [filteredData, timeframe]); // Only depend on filteredData and timeframe
+  }, [rawTradeData, timeframe, dateRange]); // Depend on rawTradeData, timeframe, and dateRange
   
   // Loading state
   if (state.isLoading) {
@@ -284,15 +306,15 @@ const PerformanceAnalysis: React.FC = () => {
         {/* Get context from DataContext */}
         {(() => {
           const { state, dispatch } = useData();
-          const { selectedTokens, tradeType, filteredData } = state;
+          const { selectedTokens, tradeType } = state;
           
           // Get unique tokens from raw data
-          const uniqueTokens = [...new Set(state.rawData.map(trade => trade.token))].sort();
+          const uniqueTokens = [...new Set(rawTradeData.map(trade => trade.token))].sort();
           
           // Get tokens that are actually present in the filtered data
           const tokensInFilteredData = React.useMemo(() =>
-            [...new Set(filteredData.map(trade => trade.token))],
-            [filteredData]
+            [...new Set(rawTradeData.map(trade => trade.token))],
+            [rawTradeData]
           );
           
           // Handle token selection
@@ -611,7 +633,35 @@ const PerformanceAnalysis: React.FC = () => {
       {/* Main performance chart */}
       <Card bg={cardBg} borderWidth="1px" borderColor={cardBorderColor} borderRadius="lg" overflow="hidden" mb={6}>
         <CardBody>
-          <Heading size="md" mb={4}>Performance Over Time</Heading>
+          <HStack justify="space-between" align="center" mb={4}>
+            <Heading size="md">Performance Over Time</Heading>
+            <HStack spacing={2}>
+              <Button
+                size="sm"
+                variant={chartDataTypes.daily ? 'solid' : 'outline'}
+                colorScheme="blue"
+                onClick={() => setChartDataTypes(prev => ({ ...prev, daily: !prev.daily }))}
+              >
+                Daily P/L
+              </Button>
+              <Button
+                size="sm"
+                variant={chartDataTypes.cumulative ? 'solid' : 'outline'}
+                colorScheme="blue"
+                onClick={() => setChartDataTypes(prev => ({ ...prev, cumulative: !prev.cumulative }))}
+              >
+                Cumulative P/L
+              </Button>
+              <Button
+                size="sm"
+                variant={chartDataTypes.volume ? 'solid' : 'outline'}
+                colorScheme="blue"
+                onClick={() => setChartDataTypes(prev => ({ ...prev, volume: !prev.volume }))}
+              >
+                Volume
+              </Button>
+            </HStack>
+          </HStack>
           
           <Box h="400px">
             <ResponsiveContainer width="100%" height="100%">
@@ -641,50 +691,54 @@ const PerformanceAnalysis: React.FC = () => {
                     tickFormatter={(value) => format(new Date(value), 'MMM dd')}
                     axisLine={{ stroke: useColorModeValue('gray.300', 'gray.500') }}
                   />
-                  <YAxis
-                    yAxisId="left"
-                    orientation="left"
-                    tick={{ fill: useColorModeValue('gray.700', 'white') }}
-                    tickFormatter={(value) => {
-                      if (Math.abs(value) >= 1000000) {
-                        return `$${(value / 1000000).toFixed(1)}M`;
-                      } else if (Math.abs(value) >= 1000) {
-                        return `$${(value / 1000).toFixed(0)}K`;
-                      }
-                      return `$${value}`;
-                    }}
-                    width={80}
-                    label={{
-                      value: 'Profit/Loss ($)',
-                      angle: -90,
-                      position: 'insideLeft',
-                      fill: useColorModeValue('gray.700', 'white'),
-                      style: { textShadow: useColorModeValue('none', '0 0 3px rgba(0,0,0,0.5)') }
-                    }}
-                    axisLine={{ stroke: useColorModeValue('gray.300', 'gray.500') }}
-                  />
-                  <YAxis
-                    yAxisId="right"
-                    orientation="right"
-                    tick={{ fill: useColorModeValue('gray.700', 'white') }}
-                    tickFormatter={(value) => {
-                      if (Math.abs(value) >= 1000000) {
-                        return `$${(value / 1000000).toFixed(1)}M`;
-                      } else if (Math.abs(value) >= 1000) {
-                        return `$${(value / 1000).toFixed(0)}K`;
-                      }
-                      return `$${value}`;
-                    }}
-                    width={80}
-                    label={{
-                      value: 'Volume ($)',
-                      angle: 90,
-                      position: 'insideRight',
-                      fill: useColorModeValue('gray.700', 'white'),
-                      style: { textShadow: useColorModeValue('none', '0 0 3px rgba(0,0,0,0.5)') }
-                    }}
-                    axisLine={{ stroke: useColorModeValue('gray.300', 'gray.500') }}
-                  />
+                  {(chartDataTypes.daily || chartDataTypes.cumulative) && (
+                    <YAxis
+                      yAxisId="left"
+                      orientation="left"
+                      tick={{ fill: useColorModeValue('gray.700', 'white') }}
+                      tickFormatter={(value) => {
+                        if (Math.abs(value) >= 1000000) {
+                          return `$${(value / 1000000).toFixed(1)}M`;
+                        } else if (Math.abs(value) >= 1000) {
+                          return `$${(value / 1000).toFixed(0)}K`;
+                        }
+                        return `$${value}`;
+                      }}
+                      width={80}
+                      label={{
+                        value: 'Profit/Loss ($)',
+                        angle: -90,
+                        position: 'insideLeft',
+                        fill: useColorModeValue('gray.700', 'white'),
+                        style: { textShadow: useColorModeValue('none', '0 0 3px rgba(0,0,0,0.5)') }
+                      }}
+                      axisLine={{ stroke: useColorModeValue('gray.300', 'gray.500') }}
+                    />
+                  )}
+                  {chartDataTypes.volume && (
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fill: useColorModeValue('gray.700', 'white') }}
+                      tickFormatter={(value) => {
+                        if (Math.abs(value) >= 1000000) {
+                          return `$${(value / 1000000).toFixed(1)}M`;
+                        } else if (Math.abs(value) >= 1000) {
+                          return `$${(value / 1000).toFixed(0)}K`;
+                        }
+                        return `$${value}`;
+                      }}
+                      width={80}
+                      label={{
+                        value: 'Volume ($)',
+                        angle: 90,
+                        position: 'insideRight',
+                        fill: useColorModeValue('gray.700', 'white'),
+                        style: { textShadow: useColorModeValue('none', '0 0 3px rgba(0,0,0,0.5)') }
+                      }}
+                      axisLine={{ stroke: useColorModeValue('gray.300', 'gray.500') }}
+                    />
+                  )}
                   <Tooltip
                     contentStyle={{
                       backgroundColor: useColorModeValue('white', '#1A202C'),
@@ -718,43 +772,49 @@ const PerformanceAnalysis: React.FC = () => {
                     }}
                     iconType="circle"
                   />
-                  <Area
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="profitLoss"
-                    name="Daily P/L"
-                    stroke={useColorModeValue('#38A169', '#68D391')}
-                    fillOpacity={1}
-                    fill="url(#colorPL)"
-                  />
-                  <Line
-                    yAxisId="left"
-                    type="monotone"
-                    dataKey="cumulativePL"
-                    name="Cumulative P/L"
-                    stroke={useColorModeValue('#805AD5', '#B794F4')}
-                    strokeWidth={3}
-                    dot={{
-                      r: 3,
-                      stroke: useColorModeValue('#805AD5', '#B794F4'),
-                      fill: useColorModeValue('white', '#1A202C')
-                    }}
-                    activeDot={{
-                      r: 6,
-                      stroke: useColorModeValue('#805AD5', '#B794F4'),
-                      strokeWidth: 2,
-                      fill: useColorModeValue('white', '#1A202C')
-                    }}
-                  />
-                  <Bar
-                    yAxisId="right"
-                    dataKey="volume"
-                    name="Volume"
-                    barSize={20}
-                    fill="url(#colorVolume)"
-                    radius={[4, 4, 0, 0]}
-                    opacity={0.6}
-                  />
+                  {chartDataTypes.daily && (
+                    <Area
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="profitLoss"
+                      name="Daily P/L"
+                      stroke={useColorModeValue('#38A169', '#68D391')}
+                      fillOpacity={1}
+                      fill="url(#colorPL)"
+                    />
+                  )}
+                  {chartDataTypes.cumulative && (
+                    <Line
+                      yAxisId="left"
+                      type="monotone"
+                      dataKey="cumulativePL"
+                      name="Cumulative P/L"
+                      stroke={useColorModeValue('#805AD5', '#B794F4')}
+                      strokeWidth={3}
+                      dot={{
+                        r: 3,
+                        stroke: useColorModeValue('#805AD5', '#B794F4'),
+                        fill: useColorModeValue('white', '#1A202C')
+                      }}
+                      activeDot={{
+                        r: 6,
+                        stroke: useColorModeValue('#805AD5', '#B794F4'),
+                        strokeWidth: 2,
+                        fill: useColorModeValue('white', '#1A202C')
+                      }}
+                    />
+                  )}
+                  {chartDataTypes.volume && (
+                    <Bar
+                      yAxisId="right"
+                      dataKey="volume"
+                      name="Volume"
+                      barSize={20}
+                      fill="url(#colorVolume)"
+                      radius={[4, 4, 0, 0]}
+                      opacity={0.6}
+                    />
+                  )}
                 </ComposedChart>
               ) : chartType === 'bar' ? (
                 <BarChart
@@ -1424,12 +1484,12 @@ const PerformanceAnalysis: React.FC = () => {
                     <ResponsiveContainer width="100%" height="100%">
                       <BarChart
                         data={[
-                          { range: 'Large Loss (>$1000)', count: filteredData.filter(t => t.profitLoss <= -1000).length },
-                          { range: 'Medium Loss ($500-$1000)', count: filteredData.filter(t => t.profitLoss < -500 && t.profitLoss > -1000).length },
-                          { range: 'Small Loss ($0-$500)', count: filteredData.filter(t => t.profitLoss < 0 && t.profitLoss >= -500).length },
-                          { range: 'Small Profit ($0-$500)', count: filteredData.filter(t => t.profitLoss > 0 && t.profitLoss <= 500).length },
-                          { range: 'Medium Profit ($500-$1000)', count: filteredData.filter(t => t.profitLoss > 500 && t.profitLoss <= 1000).length },
-                          { range: 'Large Profit (>$1000)', count: filteredData.filter(t => t.profitLoss > 1000).length }
+                          { range: 'Large Loss (>$1000)', count: rawTradeData.filter((t: any) => t.profitLoss <= -1000).length },
+                          { range: 'Medium Loss ($500-$1000)', count: rawTradeData.filter((t: any) => t.profitLoss < -500 && t.profitLoss > -1000).length },
+                          { range: 'Small Loss ($0-$500)', count: rawTradeData.filter((t: any) => t.profitLoss < 0 && t.profitLoss >= -500).length },
+                          { range: 'Small Profit ($0-$500)', count: rawTradeData.filter((t: any) => t.profitLoss > 0 && t.profitLoss <= 500).length },
+                          { range: 'Medium Profit ($500-$1000)', count: rawTradeData.filter((t: any) => t.profitLoss > 500 && t.profitLoss <= 1000).length },
+                          { range: 'Large Profit (>$1000)', count: rawTradeData.filter((t: any) => t.profitLoss > 1000).length }
                         ]}
                         margin={{ top: 20, right: 30, left: 20, bottom: 20 }}
                       >

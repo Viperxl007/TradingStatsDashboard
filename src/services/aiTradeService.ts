@@ -91,28 +91,40 @@ class AITradeService {
   /**
    * Update an existing AI trade
    * This delegates to the backend production system
+   *
+   * CRITICAL BUG FIX: For waiting trades being cancelled, DELETE instead of UPDATE
    */
   async updateTrade(updateRequest: UpdateAITradeRequest): Promise<AITradeEntry> {
     console.log(`🔄 [AITradeService] Updating trade: ${updateRequest.id}`);
     
-    // For production trades, we need to use the backend API
+    // CRITICAL FIX: Check if this is a cancellation of a waiting trade
+    const currentTrade = await this.getTradeById(updateRequest.id);
+    if (!currentTrade) {
+      throw new Error(`Trade ${updateRequest.id} not found`);
+    }
+    
+    // If trying to close a waiting trade, DELETE it instead
+    if (currentTrade.status === 'waiting' &&
+        (updateRequest.status === 'cancelled' || updateRequest.status === 'user_closed')) {
+      console.log(`🗑️ [AITradeService] CRITICAL FIX: Deleting waiting trade ${updateRequest.id} - never executed`);
+      await this.deleteTrade(updateRequest.id);
+      throw new Error('Trade deleted - was never entered, no performance impact');
+    }
+    
+    // For production trades that were actually executed, use normal update flow
     if (updateRequest.status === 'closed' && updateRequest.exitPrice) {
-      // Extract ticker from the trade ID or get it from the current trade
-      const currentTrade = await this.getTradeById(updateRequest.id);
-      if (currentTrade) {
-        const success = await closeActiveTradeInProduction(
-          currentTrade.ticker,
-          updateRequest.exitPrice,
-          updateRequest.notes || 'Closed via AI Trade Tracker'
-        );
-        
-        if (success) {
-          // Return the updated trade by fetching fresh data
-          const updatedTrade = await this.getTradeById(updateRequest.id);
-          if (updatedTrade) {
-            console.log(`✅ [AITradeService] Updated trade: ${updateRequest.id}`);
-            return updatedTrade;
-          }
+      const success = await closeActiveTradeInProduction(
+        currentTrade.ticker,
+        updateRequest.exitPrice,
+        updateRequest.notes || 'Closed via AI Trade Tracker'
+      );
+      
+      if (success) {
+        // Return the updated trade by fetching fresh data
+        const updatedTrade = await this.getTradeById(updateRequest.id);
+        if (updatedTrade) {
+          console.log(`✅ [AITradeService] Updated trade: ${updateRequest.id}`);
+          return updatedTrade;
         }
       }
     }

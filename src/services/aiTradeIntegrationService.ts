@@ -151,30 +151,10 @@ export const processAnalysisForTradeActions = async (
       return result;
     }
 
-    // Only proceed with new trade creation if no closure was needed OR closure was successful
-    if (hasNewRecommendation && !shouldMaintainPosition) {
-      console.log(`🔒 [AITradeIntegration] AI recommends closing position for ${analysis.ticker}`);
-      console.log(`📋 [AITradeIntegration] Context assessment: ${analysis.context_assessment?.substring(0, 200)}...`);
-      
-      // Close existing position
-      const closeResult = await closeExistingPosition(analysis.ticker, analysis.currentPrice);
-      if (closeResult.success) {
-        result.closedTrades = closeResult.closedTrades;
-        result.message += `Closed existing position for ${analysis.ticker}. `;
-        result.shouldDeactivateRecommendations = true;
-        
-        if (hasNewRecommendation) {
-          result.actionType = 'close_and_create';
-          console.log(`🔄 [AITradeIntegration] Invalidation scenario detected - will close old position and create new one`);
-        } else {
-          result.actionType = 'close_only';
-          console.log(`🔒 [AITradeIntegration] Position closure only - no new recommendation`);
-        }
-      } else {
-        result.errors?.push(`Failed to close position: ${closeResult.message}`);
-        console.error(`❌ [AITradeIntegration] Position closure failed for ${analysis.ticker}: ${closeResult.message}`);
-      }
-    }
+    // CRITICAL FIX: Remove duplicate closure logic that was causing immediate trade closures
+    // The closure logic above (lines 119-142) already handles position closure when shouldClosePosition is true
+    // This duplicate logic was incorrectly closing trades even when shouldClosePosition was false
+    console.log(`🛡️ [CRITICAL FIX] Removed duplicate closure logic that was causing immediate trade closures`);
 
     // SAFETY: Only proceed with new trade creation if no closure was needed OR closure was successful
     if (hasNewRecommendation && !shouldMaintainPosition) {
@@ -261,7 +241,7 @@ const analyzeContextAssessment = (analysis: ChartAnalysisResult): ContextAssessm
  * Check if the analysis recommends maintaining an existing position
  * Fixed to properly distinguish between fresh analysis context and position management context
  */
-const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean => {
+export const checkForMaintainRecommendation = (analysis: ChartAnalysisResult): boolean => {
   if (!analysis.context_assessment) {
     return false;
   }
@@ -429,7 +409,14 @@ const checkForClosureRecommendation = (analysis: ChartAnalysisResult): boolean =
     'cancel trade',
     'cancel position',
     'trade cancel',
-    'setup cancellation'
+    'setup cancellation',
+    // CRITICAL FIX: Add explicit closure recommendation patterns
+    'recommend closing existing position',
+    'recommend closing the position',
+    'recommend closing position',
+    'recommend close position',
+    'recommend exit position',
+    'recommend exiting position'
   ];
 
   // Enhanced detection for invalidation scenarios

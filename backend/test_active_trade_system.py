@@ -255,6 +255,258 @@ def test_user_override():
         print("❌ User override failed")
         return False
 
+def test_maintain_recommendation_logic():
+    """Test MAINTAIN recommendation logic prevents trade creation"""
+    print("\n🧪 Testing MAINTAIN Recommendation Logic")
+    print("=" * 50)
+    
+    # Initialize services
+    db_path = os.path.join(os.path.dirname(__file__), 'instance', 'test_maintain.db')
+    
+    # Clean up any existing test database
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    
+    trade_service = ActiveTradeService(db_path)
+    chart_manager = ChartContextManager(db_path)
+    
+    ticker = "MAINTAINTEST"
+    timeframe = "1h"
+    current_price = 100.0
+    
+    print(f"📊 Testing MAINTAIN logic with {ticker} at ${current_price}")
+    
+    # Test 1: MAINTAIN recommendation should prevent trade creation
+    print("\n1️⃣ Testing MAINTAIN recommendation prevents trade creation...")
+    
+    analysis_data_maintain = {
+        "currentPrice": current_price,
+        "recommendations": {
+            "action": "buy",  # This would normally create a trade
+            "entryPrice": 95.0,
+            "targetPrice": 110.0,
+            "stopLoss": 90.0,
+            "reasoning": "Maintain existing position"
+        },
+        "context_assessment": {
+            "previous_position_status": "MAINTAIN",
+            "previous_position_reasoning": "Existing trade is performing well, maintain position",
+            "fundamental_changes": "No significant changes",
+            "position_continuity": "Continue holding current position"
+        },
+        "detailedAnalysis": {
+            "tradingAnalysis": {
+                "entry_strategies": [{
+                    "strategy_type": "maintain",
+                    "entry_condition": "Maintain existing position",
+                    "entry_price": 95.0,
+                    "probability": "high"
+                }]
+            }
+        },
+        "sentiment": "bullish",
+        "confidence": 0.85,
+        "timeframe": timeframe
+    }
+    
+    # This should NOT create a trade due to MAINTAIN status
+    trade_id = trade_service.create_trade_from_analysis(
+        ticker, timeframe, 1, analysis_data_maintain
+    )
+    
+    if trade_id is None:
+        print("✅ MAINTAIN recommendation correctly prevented trade creation")
+    else:
+        print(f"❌ MAINTAIN recommendation failed - trade {trade_id} was created")
+        return False
+    
+    # Verify no active trade exists
+    active_trade = trade_service.get_active_trade(ticker)
+    if active_trade is None:
+        print("✅ No active trade exists after MAINTAIN recommendation")
+    else:
+        print("❌ Active trade exists despite MAINTAIN recommendation")
+        return False
+    
+    # Test 2: Non-MAINTAIN recommendations should still create trades
+    print("\n2️⃣ Testing non-MAINTAIN recommendations still create trades...")
+    
+    analysis_data_new = {
+        "currentPrice": current_price,
+        "recommendations": {
+            "action": "buy",
+            "entryPrice": 95.0,
+            "targetPrice": 110.0,
+            "stopLoss": 90.0,
+            "reasoning": "New bullish setup"
+        },
+        "context_assessment": {
+            "previous_position_status": "NONE",  # No previous position
+            "previous_position_reasoning": "No existing position",
+            "fundamental_changes": "New bullish catalyst",
+            "position_continuity": "New position"
+        },
+        "detailedAnalysis": {
+            "tradingAnalysis": {
+                "entry_strategies": [{
+                    "strategy_type": "breakout",
+                    "entry_condition": "Wait for breakout above resistance",
+                    "entry_price": 95.0,
+                    "probability": "high"
+                }]
+            }
+        },
+        "sentiment": "bullish",
+        "confidence": 0.85,
+        "timeframe": timeframe
+    }
+    
+    trade_id = trade_service.create_trade_from_analysis(
+        ticker, timeframe, 2, analysis_data_new
+    )
+    
+    if trade_id is not None:
+        print(f"✅ Non-MAINTAIN recommendation correctly created trade {trade_id}")
+    else:
+        print("❌ Non-MAINTAIN recommendation failed to create trade")
+        return False
+    
+    # Test 3: Test case-insensitive MAINTAIN detection
+    print("\n3️⃣ Testing case-insensitive MAINTAIN detection...")
+    
+    # Clean up previous trade
+    trade_service.close_trade_by_user(ticker, current_price, "Test cleanup")
+    
+    analysis_data_lowercase = {
+        "currentPrice": current_price,
+        "recommendations": {
+            "action": "sell",
+            "entryPrice": 105.0,
+            "targetPrice": 90.0,
+            "stopLoss": 110.0,
+            "reasoning": "Maintain existing short position"
+        },
+        "context_assessment": {
+            "previous_position_status": "maintain",  # lowercase
+            "previous_position_reasoning": "Existing short position is working",
+            "fundamental_changes": "No changes",
+            "position_continuity": "Continue short position"
+        },
+        "detailedAnalysis": {
+            "tradingAnalysis": {
+                "entry_strategies": [{
+                    "strategy_type": "maintain",
+                    "entry_condition": "Maintain short position",
+                    "entry_price": 105.0,
+                    "probability": "high"
+                }]
+            }
+        },
+        "sentiment": "bearish",
+        "confidence": 0.80,
+        "timeframe": timeframe
+    }
+    
+    trade_id = trade_service.create_trade_from_analysis(
+        ticker, timeframe, 3, analysis_data_lowercase
+    )
+    
+    if trade_id is None:
+        print("✅ Lowercase 'maintain' correctly prevented trade creation")
+    else:
+        print(f"❌ Lowercase 'maintain' failed - trade {trade_id} was created")
+        return False
+    
+    # Test 4: Test missing context_assessment (should not prevent trade creation)
+    print("\n4️⃣ Testing missing context_assessment allows trade creation...")
+    
+    analysis_data_no_context = {
+        "currentPrice": current_price,
+        "recommendations": {
+            "action": "buy",
+            "entryPrice": 98.0,
+            "targetPrice": 115.0,
+            "stopLoss": 92.0,
+            "reasoning": "New opportunity"
+        },
+        # No context_assessment field
+        "detailedAnalysis": {
+            "tradingAnalysis": {
+                "entry_strategies": [{
+                    "strategy_type": "momentum",
+                    "entry_condition": "Momentum breakout",
+                    "entry_price": 98.0,
+                    "probability": "medium"
+                }]
+            }
+        },
+        "sentiment": "bullish",
+        "confidence": 0.75,
+        "timeframe": timeframe
+    }
+    
+    trade_id = trade_service.create_trade_from_analysis(
+        ticker, timeframe, 4, analysis_data_no_context
+    )
+    
+    if trade_id is not None:
+        print(f"✅ Missing context_assessment correctly allowed trade creation {trade_id}")
+    else:
+        print("❌ Missing context_assessment incorrectly prevented trade creation")
+        return False
+    
+    # Test 5: Test other status values (CLOSE, REPLACE, MODIFY) allow trade creation
+    print("\n5️⃣ Testing other status values allow trade creation...")
+    
+    # Clean up previous trade
+    trade_service.close_trade_by_user(ticker, current_price, "Test cleanup")
+    
+    for status in ["CLOSE", "REPLACE", "MODIFY", "NONE"]:
+        analysis_data_other = {
+            "currentPrice": current_price,
+            "recommendations": {
+                "action": "buy",
+                "entryPrice": 97.0,
+                "targetPrice": 112.0,
+                "stopLoss": 91.0,
+                "reasoning": f"Test {status} status"
+            },
+            "context_assessment": {
+                "previous_position_status": status,
+                "previous_position_reasoning": f"Testing {status} status",
+                "fundamental_changes": "Test changes",
+                "position_continuity": f"Test {status}"
+            },
+            "detailedAnalysis": {
+                "tradingAnalysis": {
+                    "entry_strategies": [{
+                        "strategy_type": "test",
+                        "entry_condition": f"Test {status}",
+                        "entry_price": 97.0,
+                        "probability": "medium"
+                    }]
+                }
+            },
+            "sentiment": "bullish",
+            "confidence": 0.70,
+            "timeframe": timeframe
+        }
+        
+        trade_id = trade_service.create_trade_from_analysis(
+            ticker, timeframe, 5, analysis_data_other
+        )
+        
+        if trade_id is not None:
+            print(f"✅ Status '{status}' correctly allowed trade creation")
+            # Clean up for next test
+            trade_service.close_trade_by_user(ticker, current_price, f"Test cleanup {status}")
+        else:
+            print(f"❌ Status '{status}' incorrectly prevented trade creation")
+            return False
+    
+    print("\n🎉 All MAINTAIN logic tests passed!")
+    return True
+
 def test_api_endpoints():
     """Test the API endpoints"""
     print("\n🧪 Testing API Endpoints")
@@ -311,6 +563,7 @@ if __name__ == "__main__":
     tests = [
         ("Active Trade Lifecycle", test_active_trade_lifecycle),
         ("User Override", test_user_override),
+        ("MAINTAIN Recommendation Logic", test_maintain_recommendation_logic),
         ("API Endpoints", test_api_endpoints)
     ]
     
