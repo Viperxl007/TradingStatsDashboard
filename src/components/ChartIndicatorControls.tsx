@@ -22,6 +22,7 @@ interface ChartIndicatorControlsProps {
   onToggleSMA50: (enabled: boolean) => void;
   onToggleSMA200: (enabled: boolean) => void;
   onToggleVWAP: (enabled: boolean) => void;
+  onToggleAllIndicators: (enabled: boolean) => void;
   hasVolumeData?: boolean;
 }
 
@@ -42,9 +43,15 @@ const ChartIndicatorControls: React.FC<ChartIndicatorControlsProps> = ({
   onToggleSMA50,
   onToggleSMA200,
   onToggleVWAP,
+  onToggleAllIndicators,
   hasVolumeData = false,
 }) => {
   const { colorMode } = useColorMode();
+
+  // Calculate if all indicators are currently enabled
+  const allIndicatorsEnabled = showVolume && showSMA20 && showSMA50 && showSMA200 && showVWAP;
+  // Calculate if any indicators are enabled
+  const anyIndicatorsEnabled = showVolume || showSMA20 || showSMA50 || showSMA200 || showVWAP;
 
   const indicatorColors = {
     light: {
@@ -127,6 +134,32 @@ const ChartIndicatorControls: React.FC<ChartIndicatorControlsProps> = ({
             Chart Overlays
           </Badge>
         </HStack>
+
+        <Divider />
+
+        {/* Master Toggle for All Indicators */}
+        <Tooltip label="Toggle all technical indicators on/off at once" placement="top" hasArrow>
+          <HStack spacing={3} p={2} borderRadius="md" bg={colorMode === 'dark' ? 'gray.700' : 'gray.100'}>
+            <Switch
+              isChecked={allIndicatorsEnabled}
+              onChange={(e) => onToggleAllIndicators(e.target.checked)}
+              colorScheme="blue"
+              size="md"
+            />
+            <HStack spacing={2}>
+              <Box
+                w={3}
+                h={3}
+                borderRadius="full"
+                bg={anyIndicatorsEnabled ? 'blue.400' : 'gray.400'}
+                opacity={anyIndicatorsEnabled ? 1 : 0.3}
+              />
+              <Text fontSize="sm" fontWeight="semibold">
+                All Indicators
+              </Text>
+            </HStack>
+          </HStack>
+        </Tooltip>
 
         <Divider />
 

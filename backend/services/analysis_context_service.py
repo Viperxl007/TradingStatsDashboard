@@ -309,6 +309,36 @@ class AnalysisContextService:
                 'current_price': current_price
             }
     
+    def _is_breakout_trade(self, entry_condition: str) -> bool:
+        """
+        Determine if this is a breakout trade based on the entry condition.
+        
+        Args:
+            entry_condition: Entry condition description
+            
+        Returns:
+            True if this is a breakout trade, False for traditional trades
+        """
+        if not entry_condition:
+            return False
+            
+        entry_condition_lower = entry_condition.lower()
+        
+        # Breakout indicators in entry conditions
+        breakout_keywords = [
+            'breakout above',
+            'breakout below',
+            'break above',
+            'break below',
+            'waiting for breakout',
+            'wait for breakout',
+            'breakout confirmation',
+            'break out above',
+            'break out below'
+        ]
+        
+        return any(keyword in entry_condition_lower for keyword in breakout_keywords)
+
     def _check_entry_trigger_hit(self, ticker: str, timeframe: str, last_analysis_timestamp: str,
                                 entry_price: Optional[float], action: str, entry_condition: str,
                                 is_active_trade: bool = False) -> Dict[str, Any]:
@@ -374,6 +404,9 @@ class AnalysisContextService:
                 logger.warning(f"⚠️ No candlestick data available for {ticker} trigger check")
                 return default_response
             
+            # CRITICAL FIX: Detect if this is a breakout trade vs traditional trade
+            is_breakout_trade = self._is_breakout_trade(entry_condition)
+            
             # Check if trigger was hit in the candlestick data
             trigger_hit = False
             trigger_details = None
@@ -383,35 +416,65 @@ class AnalysisContextService:
                 candle_high = candle.get('high', 0)
                 candle_low = candle.get('low', 0)
                 
-                # For buy actions, check if price dipped to or below entry price
-                if action == 'buy' and candle_low <= entry_price:
-                    trigger_hit = True
-                    trigger_details = {
-                        'trigger_time': candle_time,
-                        'trigger_price': candle_low,
-                        'entry_price': entry_price,
-                        'candle_data': candle
-                    }
-                    logger.info(f"🎯 BUY TRIGGER HIT for {ticker}: price dipped to ${candle_low} (target: ${entry_price}) at {candle_time}")
-                    break
+                if action == 'buy':
+                    if is_breakout_trade:
+                        # BREAKOUT BUY: Wait for price to break ABOVE entry price
+                        if candle_high >= entry_price:
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_high,
+                                'entry_price': entry_price,
+                                'candle_data': candle
+                            }
+                            logger.info(f"🎯 BREAKOUT BUY TRIGGER HIT for {ticker}: price broke above ${candle_high} (target: ${entry_price}) at {candle_time}")
+                            break
+                    else:
+                        # TRADITIONAL BUY: Wait for price to dip TO OR BELOW entry price
+                        if candle_low <= entry_price:
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_low,
+                                'entry_price': entry_price,
+                                'candle_data': candle
+                            }
+                            logger.info(f"🎯 TRADITIONAL BUY TRIGGER HIT for {ticker}: price dipped to ${candle_low} (target: ${entry_price}) at {candle_time}")
+                            break
                 
-                # For sell actions, check if price rose to or above entry price
-                elif action == 'sell' and candle_high >= entry_price:
-                    trigger_hit = True
-                    trigger_details = {
-                        'trigger_time': candle_time,
-                        'trigger_price': candle_high,
-                        'entry_price': entry_price,
-                        'candle_data': candle
-                    }
-                    logger.info(f"🎯 SELL TRIGGER HIT for {ticker}: price rose to ${candle_high} (target: ${entry_price}) at {candle_time}")
-                    break
+                elif action == 'sell':
+                    if is_breakout_trade:
+                        # BREAKOUT SELL: Wait for price to break BELOW entry price
+                        if candle_low <= entry_price:
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_low,
+                                'entry_price': entry_price,
+                                'candle_data': candle
+                            }
+                            logger.info(f"🎯 BREAKOUT SELL TRIGGER HIT for {ticker}: price broke below ${candle_low} (target: ${entry_price}) at {candle_time}")
+                            break
+                    else:
+                        # TRADITIONAL SELL: Wait for price to rise TO OR ABOVE entry price
+                        if candle_high >= entry_price:
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_high,
+                                'entry_price': entry_price,
+                                'candle_data': candle
+                            }
+                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price rose to ${candle_high} (target: ${entry_price}) at {candle_time}")
+                            break
             
             if trigger_hit:
-                trigger_message = f"ENTRY TRIGGER WAS HIT: {action.upper()} at ${trigger_details['trigger_price']} (target: ${entry_price}) on {trigger_details['trigger_time']}"
+                trade_type = "BREAKOUT" if is_breakout_trade else "TRADITIONAL"
+                trigger_message = f"ENTRY TRIGGER WAS HIT: {trade_type} {action.upper()} at ${trigger_details['trigger_price']} (target: ${entry_price}) on {trigger_details['trigger_time']}"
                 logger.info(f"✅ {trigger_message}")
             else:
-                logger.info(f"📊 No trigger hit for {ticker}: checked {len(candlestick_data)} candles since last analysis")
+                trade_type = "BREAKOUT" if is_breakout_trade else "TRADITIONAL"
+                logger.info(f"📊 No {trade_type.lower()} trigger hit for {ticker}: checked {len(candlestick_data)} candles since last analysis")
             
             return {
                 'trigger_hit': trigger_hit,

@@ -80,6 +80,13 @@ export const shouldCountForPerformance = (trade: { actualEntryDate?: number; act
          trade.profitLossPercentage !== undefined;
 };
 
+// CRITICAL BUG FIX: Validate if a trade can transition to user_closed status
+// Prevents waiting trades from being marked as user_closed
+export const canTransitionToUserClosed = (trade: { actualEntryDate?: number; actualEntryPrice?: number; status: AITradeStatus | ProductionTradeStatus }): boolean => {
+  // Only executed trades can be marked as user_closed
+  return isExecutedTrade(trade) && !isWaitingTradeStatus(trade.status);
+};
+
 // Get display text for status
 export const getStatusDisplayText = (status: AITradeStatus | ProductionTradeStatus): string => {
   switch (status) {

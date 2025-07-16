@@ -38,9 +38,12 @@ import AITradeTracker from './AITradeTracker';
 import LiquidityTrackingDashboard from './liquidityTracking/LiquidityTrackingDashboard';
 import { useData, importDataStart, importDataSuccess, importDataError, setActiveTab, toggleDarkMode } from '../context/DataContext';
 import { importData } from '../services/dataImport';
+import { HyperliquidProvider, useHyperliquid } from '../context/HyperliquidContext';
+import HyperliquidAccountSwitcher from './HyperliquidAccountSwitcher';
 
-const Dashboard: React.FC = () => {
+const DashboardContent: React.FC = () => {
   const { state, dispatch } = useData();
+  const { state: hyperliquidState } = useHyperliquid();
   const { colorMode, toggleColorMode } = useColorMode();
   const { isOpen, onOpen, onClose } = useDisclosure();
   const [importError, setImportError] = useState<string | null>(null);
@@ -102,7 +105,7 @@ const Dashboard: React.FC = () => {
   };
 
   return (
-    <Box w="100%" h="100%">
+      <Box w="100%" h="100%">
       {/* Header */}
       <Flex
         as="header"
@@ -120,6 +123,8 @@ const Dashboard: React.FC = () => {
         </Heading>
         
         <HStack spacing={4}>
+          <HyperliquidAccountSwitcher />
+          
           <Button
             leftIcon={<Icon as={FiUpload} />}
             colorScheme="brand"
@@ -134,7 +139,7 @@ const Dashboard: React.FC = () => {
             leftIcon={<Icon as={FiDownload} />}
             variant="outline"
             colorScheme="brand"
-            isDisabled={state.rawData.length === 0}
+            isDisabled={!hyperliquidState.trades || hyperliquidState.trades.length === 0}
           >
             Export
           </Button>
@@ -173,7 +178,7 @@ const Dashboard: React.FC = () => {
               <Button colorScheme="brand" onClick={onOpen}>Try Again</Button>
             </VStack>
           </Flex>
-        ) : state.rawData.length === 0 ? (
+        ) : (!hyperliquidState.trades || hyperliquidState.trades.length === 0) ? (
           <Flex justify="center" align="center" h="50vh">
             <VStack spacing={4}>
               <Text fontSize="xl">No data available</Text>
@@ -286,7 +291,15 @@ const Dashboard: React.FC = () => {
           </ModalBody>
         </ModalContent>
       </Modal>
-    </Box>
+      </Box>
+  );
+};
+
+const Dashboard: React.FC = () => {
+  return (
+    <HyperliquidProvider>
+      <DashboardContent />
+    </HyperliquidProvider>
   );
 };
 

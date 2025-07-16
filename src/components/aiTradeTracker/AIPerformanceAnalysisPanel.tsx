@@ -71,7 +71,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
   };
 
   const formatPercentage = (value: number) => {
-    return `${(value * 100).toFixed(2)}%`;
+    return `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
   };
 
   const getConfidenceColor = (confidence: number) => {
@@ -109,7 +109,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                   </Badge>
                 </HStack>
                 <Badge colorScheme={data.totalReturn >= 0 ? 'green' : 'red'}>
-                  {formatCurrency(data.totalReturn)}
+                  {formatPercentage(data.totalReturn)}
                 </Badge>
               </HStack>
               
@@ -121,13 +121,13 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(data.averageReturn)}>
-                    {formatCurrency(data.averageReturn)}
+                    {formatPercentage(data.averageReturn)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Total Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(data.totalReturn)}>
-                    {formatCurrency(data.totalReturn)}
+                    {formatPercentage(data.totalReturn)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
@@ -161,7 +161,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                   <Badge variant="outline">{data.count} trades</Badge>
                 </HStack>
                 <Badge colorScheme={data.totalReturn >= 0 ? 'green' : 'red'}>
-                  {formatCurrency(data.totalReturn)}
+                  {formatPercentage(data.totalReturn)}
                 </Badge>
               </HStack>
               
@@ -173,13 +173,13 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(data.averageReturn)}>
-                    {formatCurrency(data.averageReturn)}
+                    {formatPercentage(data.averageReturn)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Total Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(data.totalReturn)}>
-                    {formatCurrency(data.totalReturn)}
+                    {formatPercentage(data.totalReturn)}
                   </StatNumber>
                 </Stat>
               </SimpleGrid>
@@ -205,7 +205,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                   <Badge variant="outline">{data.totalRecommendations} recommendations</Badge>
                 </HStack>
                 <Badge colorScheme={data.totalReturn >= 0 ? 'green' : 'red'}>
-                  {formatCurrency(data.totalReturn)}
+                  {formatPercentage(data.totalReturn)}
                 </Badge>
               </HStack>
               
@@ -221,13 +221,13 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(data.averageReturn)}>
-                    {formatCurrency(data.averageReturn)}
+                    {formatPercentage(data.averageReturn)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Best Trade</StatLabel>
                   <StatNumber fontSize="md" color={positiveColor}>
-                    {formatCurrency(data.bestTrade)}
+                    {formatPercentage(data.bestTrade)}
                   </StatNumber>
                 </Stat>
               </SimpleGrid>
@@ -262,7 +262,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                   <Badge variant="outline">{month.trades} trades</Badge>
                 </HStack>
                 <Badge colorScheme={month.totalReturn >= 0 ? 'green' : 'red'}>
-                  {formatCurrency(month.totalReturn)}
+                  {formatPercentage(month.totalReturn)}
                 </Badge>
               </HStack>
               
@@ -274,19 +274,19 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
                   <StatNumber fontSize="md" color={getPerformanceColor(month.averageReturn)}>
-                    {formatCurrency(month.averageReturn)}
+                    {formatPercentage(month.averageReturn)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Best Trade</StatLabel>
                   <StatNumber fontSize="md" color={positiveColor}>
-                    {formatCurrency(month.bestTrade)}
+                    {formatPercentage(month.bestTrade)}
                   </StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Worst Trade</StatLabel>
                   <StatNumber fontSize="md" color={negativeColor}>
-                    {formatCurrency(month.worstTrade)}
+                    {formatPercentage(month.worstTrade)}
                   </StatNumber>
                 </Stat>
               </SimpleGrid>
@@ -355,11 +355,11 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               <Stat>
                 <StatLabel>Total Return</StatLabel>
                 <StatNumber color={getPerformanceColor(statistics.totalReturn)}>
-                  {formatCurrency(statistics.totalReturn)}
+                  {formatPercentage(statistics.totalReturn)}
                 </StatNumber>
                 <StatHelpText>
                   <StatArrow type={statistics.totalReturn >= 0 ? 'increase' : 'decrease'} />
-                  {formatPercentage(statistics.averageReturn)}
+                  Avg: {formatPercentage(statistics.averageReturn)}
                 </StatHelpText>
               </Stat>
               

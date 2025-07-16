@@ -2011,6 +2011,7 @@ def close_active_trade(ticker):
         data = request.get_json()
         current_price = data.get('current_price')
         notes = data.get('notes', '')
+        close_reason = data.get('close_reason', 'user_closed')
         
         if current_price is None:
             return jsonify({
@@ -2019,7 +2020,7 @@ def close_active_trade(ticker):
             }), 400
         
         trade_service = get_active_trade_service()
-        success = trade_service.close_trade_by_user(ticker, float(current_price), notes)
+        success = trade_service.close_trade_by_user(ticker, float(current_price), notes, close_reason)
         
         if success:
             return jsonify({

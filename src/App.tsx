@@ -1,8 +1,7 @@
 import * as React from 'react';
 import { ChakraProvider, Box, Flex, useColorMode, useToast } from '@chakra-ui/react';
 import Dashboard from './components/Dashboard';
-import { DataProvider, useData, importDataStart, importDataSuccess, importDataError } from './context/DataContext';
-import { loadExampleData } from './services/loadExampleData';
+import { DataProvider, useData } from './context/DataContext';
 import theme from './theme';
 
 // Import testing and cleanup utilities to ensure they're included in the bundle
@@ -24,39 +23,8 @@ const AppContent: React.FC = () => {
   const { state, dispatch } = useData();
   const toast = useToast();
   
-  // Load example data and initialize utilities on component mount
+  // Initialize utilities on component mount - NO SAMPLE DATA LOADING
   React.useEffect(() => {
-    const loadData = async () => {
-      try {
-        // Only load data if no data is already loaded
-        if (state.rawData.length === 0) {
-          dispatch(importDataStart());
-          
-          const data = await loadExampleData();
-          dispatch(importDataSuccess(data));
-          
-          toast({
-            title: 'Example data loaded',
-            description: `Loaded ${data.length} sample trades`,
-            status: 'success',
-            duration: 5000,
-            isClosable: true,
-          });
-        }
-      } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        dispatch(importDataError(errorMessage));
-        
-        toast({
-          title: 'Failed to load example data',
-          description: errorMessage,
-          status: 'error',
-          duration: 5000,
-          isClosable: true,
-        });
-      }
-    };
-    
     // Initialize testing and cleanup utilities for browser console access
     const initializeUtilities = () => {
       try {
@@ -69,9 +37,8 @@ const AppContent: React.FC = () => {
       }
     };
     
-    loadData();
     initializeUtilities();
-  }, [dispatch, state.rawData.length, toast]);
+  }, []);
   
   return (
     <Box
