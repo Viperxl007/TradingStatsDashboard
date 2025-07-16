@@ -456,16 +456,16 @@ class AnalysisContextService:
                             logger.info(f"🎯 BREAKOUT SELL TRIGGER HIT for {ticker}: price broke below ${candle_low} (target: ${entry_price}) at {candle_time}")
                             break
                     else:
-                        # TRADITIONAL SELL: Wait for price to rise TO OR ABOVE entry price
-                        if candle_high >= entry_price:
+                        # TRADITIONAL SELL: Wait for price to fall TO OR BELOW entry price
+                        if candle_low <= entry_price:
                             trigger_hit = True
                             trigger_details = {
                                 'trigger_time': candle_time,
-                                'trigger_price': candle_high,
+                                'trigger_price': candle_low,
                                 'entry_price': entry_price,
                                 'candle_data': candle
                             }
-                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price rose to ${candle_high} (target: ${entry_price}) at {candle_time}")
+                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price fell to ${candle_low} (target: ${entry_price}) at {candle_time}")
                             break
             
             if trigger_hit:
