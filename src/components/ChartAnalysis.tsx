@@ -95,6 +95,15 @@ const ChartAnalysis: React.FC = () => {
   const [showSMA200, setShowSMA200] = useState(false);
   const [showVWAP, setShowVWAP] = useState(false);
   const [chartData, setChartData] = useState<any[]>([]);
+
+  // Master toggle function for all indicators
+  const handleToggleAllIndicators = (enabled: boolean) => {
+    setShowVolume(enabled);
+    setShowSMA20(enabled);
+    setShowSMA50(enabled);
+    setShowSMA200(enabled);
+    setShowVWAP(enabled);
+  };
   const [currentPrice, setCurrentPrice] = useState<number | undefined>(undefined);
   const [activeTradeOverlays, setActiveTradeOverlays] = useState<Map<string, TradingRecommendationOverlay>>(new Map());
   
@@ -1319,6 +1328,7 @@ const ChartAnalysis: React.FC = () => {
                       onToggleSMA50={setShowSMA50}
                       onToggleSMA200={setShowSMA200}
                       onToggleVWAP={setShowVWAP}
+                      onToggleAllIndicators={handleToggleAllIndicators}
                       hasVolumeData={hasVolumeData(chartData)}
                     />
                   </Box>

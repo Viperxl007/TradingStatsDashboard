@@ -264,9 +264,19 @@ class AITradeService {
 
   /**
    * Delete a trade (delegates to backend)
+   * CRITICAL FIX: Added protection check to prevent deletion of newly created trades
    */
   async deleteTrade(id: string): Promise<void> {
     console.log(`🗑️ [AITradeService] Attempting to delete trade: ${id}`);
+    
+    // CRITICAL FIX: Check if trade is protected from deletion
+    const { isTradeProtected } = await import('./aiTradeIntegrationService');
+    
+    if (isTradeProtected(id)) {
+      const protectionError = `🛡️ [TRADE PROTECTION] BLOCKED deletion of protected trade: ${id}. Trade was recently created and is protected from immediate deletion.`;
+      console.error(protectionError);
+      throw new Error(protectionError);
+    }
     
     // Extract backend ID from the AI trade ID format: "backend-{id}"
     if (!id.startsWith('backend-')) {

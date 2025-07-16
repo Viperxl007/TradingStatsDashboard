@@ -991,6 +991,14 @@ class ActiveTradeService:
                     logger.info(f"🎯 STOP LOSS HIT: {ticker} trade {trade['id']} - Stop: ${stop_loss}, Current: ${current_price}")
                 
                 else:
+                    # DIAGNOSTIC: Add detailed logging for stop loss analysis
+                    if stop_loss:
+                        if action == 'buy':
+                            logger.info(f"🔍 [STOP LOSS DIAGNOSTIC] BUY trade {trade['id']}: Current ${current_price} vs Stop ${stop_loss} - {'HIT' if current_price <= stop_loss else 'NOT HIT'}")
+                            logger.info(f"🔍 [STOP LOSS DIAGNOSTIC] Price needs to drop to ${stop_loss} or below to trigger stop loss")
+                        else:
+                            logger.info(f"🔍 [STOP LOSS DIAGNOSTIC] SELL trade {trade['id']}: Current ${current_price} vs Stop ${stop_loss} - {'HIT' if current_price >= stop_loss else 'NOT HIT'}")
+                            logger.info(f"🔍 [STOP LOSS DIAGNOSTIC] Price needs to rise to ${stop_loss} or above to trigger stop loss")
                     logger.debug(f"🎯 No exit conditions met for {ticker} trade {trade['id']} at current price ${current_price}")
             
             with self.db_lock:
@@ -1125,17 +1133,18 @@ class ActiveTradeService:
         """
         Close trade based on user override.
         
-        CRITICAL BUG FIX: For trades that were never executed (status='waiting'),
-        DELETE the trade instead of marking as 'user_closed' to prevent false performance data.
+        CRITICAL FIX: Manual intervention (PROFIT/STOP/CLOSE buttons) should ALWAYS override
+        automated processes and properly close trades regardless of current status.
+        This ensures consistent behavior and proper performance tracking.
         
         Args:
             ticker: Stock ticker symbol
             current_price: Current market price
             notes: User notes about the closure
-            close_reason: Reason for closure
+            close_reason: Reason for closure ('profit_hit', 'stop_hit', 'user_closed')
             
         Returns:
-            True if trade was closed/deleted, False otherwise
+            True if trade was closed successfully, False otherwise
         """
         try:
             trade = self.get_active_trade(ticker)
@@ -1143,21 +1152,33 @@ class ActiveTradeService:
                 logger.warning(f"No active trade found for {ticker} to close")
                 return False
             
-            # CRITICAL FIX: Delete waiting trades instead of marking as closed
-            if trade['status'] == TradeStatus.WAITING.value:
-                logger.info(f"🗑️ CRITICAL FIX: Deleting waiting trade {trade['id']} for {ticker} - never executed")
-                deletion_reason = f"cancelled_before_entry: {notes}" if notes else "cancelled_before_entry"
-                return self.delete_trade_by_id(trade['id'], deletion_reason)
+            # CRITICAL FIX: Manual buttons should ALWAYS close trades, never delete them
+            # This ensures proper performance tracking and consistent user experience
+            logger.info(f"👤 Manual close requested for {trade['status']} trade {trade['id']} ({ticker}) - reason: {close_reason}")
             
-            # For ACTIVE trades, proceed with normal closure logic
             entry_price = trade['entry_price']
             action = trade['action']
             
-            # Calculate final P&L for executed trades
+            # For waiting trades that are manually closed, use entry price as the effective close price
+            # unless a specific close price is provided based on the close reason
+            effective_close_price = current_price
+            
+            # Determine effective close price based on close reason and trade parameters
+            if close_reason == 'profit_hit' and trade.get('target_price'):
+                effective_close_price = float(trade['target_price'])
+                logger.info(f"👤 Using target price ${effective_close_price} for profit hit closure")
+            elif close_reason == 'stop_hit' and trade.get('stop_loss'):
+                effective_close_price = float(trade['stop_loss'])
+                logger.info(f"👤 Using stop loss ${effective_close_price} for stop hit closure")
+            else:
+                effective_close_price = current_price
+                logger.info(f"👤 Using current price ${effective_close_price} for manual closure")
+            
+            # Calculate P&L based on effective close price
             if action == 'buy':
-                realized_pnl = current_price - entry_price
+                realized_pnl = effective_close_price - entry_price
             else:  # sell
-                realized_pnl = entry_price - current_price
+                realized_pnl = entry_price - effective_close_price
             
             # Map frontend close_reason to backend status and close_reason
             status_mapping = {
@@ -1173,6 +1194,16 @@ class ActiveTradeService:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     
+                    # Enhanced close details for manual intervention
+                    close_details = {
+                        'notes': notes,
+                        'close_reason': close_reason,
+                        'manual_intervention': True,
+                        'original_status': trade['status'],
+                        'effective_close_price': effective_close_price,
+                        'current_market_price': current_price
+                    }
+                    
                     cursor.execute('''
                         UPDATE active_trades
                         SET status = ?, close_time = ?, close_price = ?, close_reason = ?,
@@ -1181,18 +1212,23 @@ class ActiveTradeService:
                     ''', (
                         trade_status,
                         datetime.now(),
-                        current_price,
+                        effective_close_price,  # Use effective close price, not current price
                         trade_close_reason,
-                        json.dumps({'notes': notes, 'close_reason': close_reason}),
+                        json.dumps(close_details),
                         realized_pnl,
-                        current_price,
+                        current_price,  # Keep current price for reference
                         datetime.now(),
                         trade['id']
                     ))
                     
-                    # Add trade update
-                    self._add_trade_update(cursor, trade['id'], current_price, close_reason,
-                                         {'notes': notes, 'pnl': realized_pnl})
+                    # Add trade update with enhanced details
+                    self._add_trade_update(cursor, trade['id'], effective_close_price, close_reason,
+                                         {
+                                             'notes': notes,
+                                             'pnl': realized_pnl,
+                                             'manual_intervention': True,
+                                             'original_status': trade['status']
+                                         })
                     
                     conn.commit()
                     
@@ -1202,7 +1238,7 @@ class ActiveTradeService:
                         'user_closed': 'User closed'
                     }.get(close_reason, 'User closed')
                     
-                    logger.info(f"👤 {reason_text} - trade {trade['id']} for {ticker}")
+                    logger.info(f"👤 {reason_text} - trade {trade['id']} for {ticker} at ${effective_close_price} (P&L: ${realized_pnl:.2f})")
                     return True
                     
         except Exception as e:
@@ -1303,7 +1339,24 @@ class ActiveTradeService:
                     else:
                         logger.debug(f"🛡️ Trade {trade['id']} triggered {time_since_trigger:.1f} minutes ago - skipping historical check (trigger grace period)")
                 else:
-                    logger.debug(f"🛡️ Trade {trade['id']} has no trigger time - skipping historical check for safety")
+                    # CRITICAL FIX: For ACTIVE trades without trigger_hit_time, use creation time as fallback
+                    # This ensures stop loss checking still occurs for active trades
+                    created_time = self._safe_parse_datetime(trade.get('created_at'))
+                    if created_time:
+                        time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
+                        if time_since_creation >= 5:  # 5 minute grace period for newly created trades
+                            logger.warning(f"🔧 [STOP LOSS FIX] Trade {trade['id']} missing trigger_hit_time - using creation time for historical check")
+                            logger.warning(f"🔧 [STOP LOSS FIX] This ensures stop loss detection works even without trigger timestamp")
+                            historical_exit = self._check_historical_exit_conditions(ticker, trade)
+                            if historical_exit:
+                                logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data (fallback method): {historical_exit.get('exit_reason')}")
+                                return None
+                        else:
+                            logger.debug(f"🛡️ Trade {trade['id']} created {time_since_creation:.1f} minutes ago - skipping historical check (creation grace period)")
+                    else:
+                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Trade {trade['id']} has no trigger_hit_time AND no valid created_at - this prevents historical stop loss checking!")
+                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Trade status: {trade['status']}, Entry: ${trade['entry_price']}, Stop: ${trade.get('stop_loss')}")
+                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Without trigger_hit_time, only current price (${current_price}) is checked for stop loss")
             elif trade['status'] == TradeStatus.WAITING.value:
                 logger.debug(f"🛡️ Trade {trade['id']} is WAITING - historical exit checks are disabled for waiting trades")
             
