@@ -40,20 +40,26 @@ export const prepareContextSync = async (
 ): Promise<ContextSyncRequest> => {
   try {
     // Check for active trades that might be transitioning from WAITING to ACTIVE
-    const activeTradeUrl = `http://localhost:5000/api/active-trades/${ticker}`;
-    console.log(`🔍 [ContextSync] Fetching active trade from: ${activeTradeUrl}`);
+    // CRITICAL FIX: Include timeframe parameter for proper isolation
+    const activeTradeUrl = `http://localhost:5000/api/active-trades/${ticker}?timeframe=${timeframe}`;
+    console.log(`🔍 [ContextSync] Fetching active trade from: ${activeTradeUrl} (timeframe: ${timeframe})`);
     const activeTradeResponse = await fetch(activeTradeUrl);
     
     console.log(`📡 [ContextSync] Response status: ${activeTradeResponse.status}`);
     if (activeTradeResponse.ok) {
       const activeTradeData = await activeTradeResponse.json();
       
-      // Check if we have an active trade
+      // Check if we have an active trade for this specific timeframe
       if (activeTradeData && activeTradeData.active_trade) {
         const trade = activeTradeData.active_trade;
         
-        if (trade.status === 'waiting') {
+        // CRITICAL FIX: Verify timeframe matches to ensure proper isolation
+        if (trade.timeframe !== timeframe) {
+          console.log(`📭 [ContextSync] Trade timeframe (${trade.timeframe}) doesn't match analysis timeframe (${timeframe}) - treating as fresh analysis`);
+          // Fall through to fresh analysis
+        } else if (trade.status === 'waiting') {
           // This is a waiting trade that might have triggered
+          console.log(`🎯 [ContextSync] Found waiting trade for ${ticker} on ${timeframe} timeframe`);
           return {
             ticker,
             timeframe,
@@ -67,6 +73,7 @@ export const prepareContextSync = async (
           };
         } else if (trade.status === 'active') {
           // This is an active trade - continuation analysis
+          console.log(`🔄 [ContextSync] Found active trade for ${ticker} on ${timeframe} timeframe`);
           return {
             ticker,
             timeframe,
