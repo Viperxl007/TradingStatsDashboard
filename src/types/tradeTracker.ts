@@ -1,8 +1,11 @@
 /**
  * Trade Tracker Types
- * 
+ *
  * This file contains all type definitions for the Trade Tracker functionality.
  */
+
+import { MonteCarloResults } from '../services/monteCarloSimulation';
+import { EnhancedHistoricalData } from './index';
 
 /**
  * Trade entry status
@@ -58,7 +61,54 @@ export interface TradeEntry {
   tags: string[];                  // Custom tags for filtering
   createdAt: number;               // Unix timestamp of creation
   updatedAt: number;               // Unix timestamp of last update
-  metadata?: Record<string, any>;  // Additional metadata (company name, etc.)
+  metadata?: TradeIdeaMetadata;    // Additional metadata (company name, etc.)
+}
+
+/**
+ * Trade Idea Metadata Interface
+ * Defines the structure for metadata stored with trade ideas
+ */
+export interface TradeIdeaMetadata {
+  // Basic company/ticker information
+  companyName?: string;
+  currentPrice?: number;
+  expectedMove?: string;
+  earningsDate?: string;
+  earningsTime?: 'BMO' | 'AMC';
+  closestStrikes?: number[];
+  estimatedSpreadCost?: number;
+  
+  // Core metrics
+  metrics?: {
+    avgVolume: number;
+    iv30Rv30: number;
+    tsSlope: number;
+  };
+  lastMetricsRefresh?: string;
+  
+  // Monte Carlo simulation results
+  simulationResults?: MonteCarloResults;
+  lastSimulationRefresh?: string;
+  enhancedHistoricalData?: EnhancedHistoricalData;
+  
+  // Analysis data
+  deeperAnalysis?: any;
+  
+  // Option-specific metadata
+  optionType?: 'call' | 'put';
+  
+  // Calendar spread specific
+  calendarSpreadData?: any;
+  
+  // Trading metadata
+  ivRvRatioAtEntry?: number;
+  tsSlopeAtEntry?: number;
+  currentLegPrices?: {[key: string]: number};
+  lastPriceFetch?: string;
+  priceUpdateHistory?: Array<{
+    timestamp: string;
+    prices: {[key: string]: number};
+  }>;
 }
 
 /**

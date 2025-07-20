@@ -538,7 +538,7 @@ class ActiveTradeService:
         except Exception as e:
             logger.error(f"Error fetching historical candles for {ticker}: {str(e)}")
             return None
-    
+
     def _ensure_active_trades_table(self):
         """Ensure the active_trades table and chart_analysis table exist with proper schema"""
         try:
@@ -1001,6 +1001,7 @@ class ActiveTradeService:
                             logger.info(f"🔍 [STOP LOSS DIAGNOSTIC] Price needs to rise to ${stop_loss} or above to trigger stop loss")
                     logger.debug(f"🎯 No exit conditions met for {ticker} trade {trade['id']} at current price ${current_price}")
             
+            
             with self.db_lock:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
@@ -1283,20 +1284,26 @@ class ActiveTradeService:
             logger.error(f"Error getting recent trade closures for {ticker}: {str(e)}")
             return []
     
-    def get_trade_context_for_ai(self, ticker: str, current_price: float) -> Optional[Dict[str, Any]]:
+    def get_trade_context_for_ai(self, ticker: str, current_price: float, timeframe: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
-        Get comprehensive trade context for AI analysis.
+        Get comprehensive trade context for AI analysis with timeframe isolation.
         
         Args:
             ticker: Stock ticker symbol
             current_price: Current market price
+            timeframe: Chart timeframe to filter trades by (enables parallel trades on different timeframes)
             
         Returns:
-            Trade context data for AI or None if no active trade
+            Trade context data for AI or None if no active trade for the specified timeframe
         """
         try:
-            trade = self.get_active_trade(ticker)
+            # CRITICAL FIX: Filter by timeframe to enable parallel trades on different timeframes
+            trade = self.get_active_trade(ticker, timeframe)
             if not trade:
+                if timeframe:
+                    logger.info(f"📭 [TRADE CONTEXT] No active trade found for {ticker} on {timeframe} timeframe")
+                else:
+                    logger.info(f"📭 [TRADE CONTEXT] No active trade found for {ticker} (any timeframe)")
                 return None
             
             # CRITICAL: Check for profit target and stop loss hits

@@ -129,23 +129,33 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       const eventSource = new EventSource('http://localhost:5000/api/scan/earnings');
       eventSourceRef.current = eventSource;
       
-      // Add a failsafe timeout to ensure loading state is cleared
-      const failsafeTimeout = setTimeout(() => {
-        console.warn('⚠️ FAILSAFE: Scan timeout reached, clearing loading state');
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
+      // Add a progress-based timeout that resets when progress is made
+      let progressTimeout: NodeJS.Timeout;
+      
+      const resetProgressTimeout = () => {
+        if (progressTimeout) {
+          clearTimeout(progressTimeout);
         }
-        dispatch(scanEarningsSuccess([]));
-        setScanProgress(null);
-        toast({
-          title: 'Scan Timeout',
-          description: 'The scan took too long and was cancelled. Please try again.',
-          status: 'warning',
-          duration: 5000,
-          isClosable: true,
-        });
-      }, 120000); // 2 minute timeout
+        progressTimeout = setTimeout(() => {
+          console.warn('⚠️ PROGRESS TIMEOUT: No progress made in 2 minutes, cancelling scan');
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+          dispatch(scanEarningsSuccess([]));
+          setScanProgress(null);
+          toast({
+            title: 'Scan Timeout',
+            description: 'No progress was made for 2 minutes. The scan was cancelled.',
+            status: 'warning',
+            duration: 5000,
+            isClosable: true,
+          });
+        }, 120000); // 2 minute timeout, but resets on progress
+      };
+      
+      // Start the initial timeout
+      resetProgressTimeout();
       
       eventSource.onmessage = async (event) => {
         try {
@@ -153,6 +163,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           console.log("SSE data received:", data);
           
           if (data.status === 'in_progress') {
+            // Reset timeout since we received progress
+            resetProgressTimeout();
+            
             // Update progress information
             setScanProgress(data.progress);
             
@@ -165,8 +178,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
               dispatch(scanEarningsSuccess(processedResults));
             }
           } else if (data.status === 'complete') {
-            // Clear the failsafe timeout
-            clearTimeout(failsafeTimeout);
+            // Clear the progress timeout
+            if (progressTimeout) {
+              clearTimeout(progressTimeout);
+            }
             
             // Close the event source first
             eventSource.close();
@@ -217,8 +232,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
         
-        // Clear the failsafe timeout
-        clearTimeout(failsafeTimeout);
+        // Clear the progress timeout
+        if (progressTimeout) {
+          clearTimeout(progressTimeout);
+        }
         
         eventSource.close();
         eventSourceRef.current = null;
@@ -293,23 +310,33 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       const eventSource = new EventSource(`http://localhost:5000/api/scan/earnings?date=${customDate}`);
       eventSourceRef.current = eventSource;
       
-      // Add a failsafe timeout to ensure loading state is cleared
-      const failsafeTimeout = setTimeout(() => {
-        console.warn('⚠️ FAILSAFE: Custom date scan timeout reached, clearing loading state');
-        if (eventSourceRef.current) {
-          eventSourceRef.current.close();
-          eventSourceRef.current = null;
+      // Add a progress-based timeout that resets when progress is made
+      let progressTimeout: NodeJS.Timeout;
+      
+      const resetProgressTimeout = () => {
+        if (progressTimeout) {
+          clearTimeout(progressTimeout);
         }
-        dispatch(scanEarningsSuccess([]));
-        setScanProgress(null);
-        toast({
-          title: 'Scan Timeout',
-          description: 'The scan took too long and was cancelled. Please try again.',
-          status: 'warning',
-          duration: 5000,
-          isClosable: true,
-        });
-      }, 120000); // 2 minute timeout
+        progressTimeout = setTimeout(() => {
+          console.warn('⚠️ PROGRESS TIMEOUT: No progress made in 2 minutes, cancelling custom date scan');
+          if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+          }
+          dispatch(scanEarningsSuccess([]));
+          setScanProgress(null);
+          toast({
+            title: 'Scan Timeout',
+            description: 'No progress was made for 2 minutes. The scan was cancelled.',
+            status: 'warning',
+            duration: 5000,
+            isClosable: true,
+          });
+        }, 120000); // 2 minute timeout, but resets on progress
+      };
+      
+      // Start the initial timeout
+      resetProgressTimeout();
       
       eventSource.onmessage = async (event) => {
         try {
@@ -317,6 +344,9 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
           console.log("SSE data received:", data);
           
           if (data.status === 'in_progress') {
+            // Reset timeout since we received progress
+            resetProgressTimeout();
+            
             // Update progress information
             setScanProgress(data.progress);
             
@@ -352,8 +382,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
               }
             }
           } else if (data.status === 'complete') {
-            // Clear the failsafe timeout
-            clearTimeout(failsafeTimeout);
+            // Clear the progress timeout
+            if (progressTimeout) {
+              clearTimeout(progressTimeout);
+            }
             
             // Close the event source first
             eventSource.close();
@@ -397,8 +429,10 @@ const ScanResults: React.FC<ScanResultsProps> = ({ scanType: initialScanType }) 
       eventSource.onerror = (error) => {
         console.error('EventSource error:', error);
         
-        // Clear the failsafe timeout
-        clearTimeout(failsafeTimeout);
+        // Clear the progress timeout
+        if (progressTimeout) {
+          clearTimeout(progressTimeout);
+        }
         
         eventSource.close();
         eventSourceRef.current = null;

@@ -209,7 +209,7 @@ const PinTradeButton: React.FC<PinTradeButtonProps> = ({
             },
             expectedMove: result.expectedMove,
             earningsDate: earningsDate || '', // Use passed earnings date
-            earningsTime: reportTime || result.reportTime || '', // Use passed report time or fallback to result
+            earningsTime: (reportTime || result.reportTime) as 'BMO' | 'AMC' | undefined, // Use passed report time or fallback to result
             closestStrikes: result.optimalCalendarSpread ? [result.optimalCalendarSpread.strike] : [],
             estimatedSpreadCost: result.optimalCalendarSpread ? result.optimalCalendarSpread.spreadCost : 0
           };

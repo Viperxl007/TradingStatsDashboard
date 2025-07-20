@@ -456,16 +456,16 @@ class AnalysisContextService:
                             logger.info(f"🎯 BREAKOUT SELL TRIGGER HIT for {ticker}: price broke below ${candle_low} (target: ${entry_price}) at {candle_time}")
                             break
                     else:
-                        # TRADITIONAL SELL: Wait for price to rise TO OR ABOVE entry price
-                        if candle_high >= entry_price:
+                        # TRADITIONAL SELL: Wait for price to fall TO OR BELOW entry price
+                        if candle_low <= entry_price:
                             trigger_hit = True
                             trigger_details = {
                                 'trigger_time': candle_time,
-                                'trigger_price': candle_high,
+                                'trigger_price': candle_low,
                                 'entry_price': entry_price,
                                 'candle_data': candle
                             }
-                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price rose to ${candle_high} (target: ${entry_price}) at {candle_time}")
+                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price fell to ${candle_low} (target: ${entry_price}) at {candle_time}")
                             break
             
             if trigger_hit:
@@ -587,8 +587,8 @@ class AnalysisContextService:
         try:
             logger.info(f"🔍 Getting comprehensive context for {ticker} at ${current_price}")
             
-            # First, check for active trades
-            active_trade_context = self.active_trade_service.get_trade_context_for_ai(ticker, current_price)
+            # First, check for active trades with timeframe filtering for isolation
+            active_trade_context = self.active_trade_service.get_trade_context_for_ai(ticker, current_price, current_timeframe)
             
             if active_trade_context:
                 logger.info(f"🎯 Active trade found for {ticker}: {active_trade_context['status']}")
@@ -620,9 +620,13 @@ class AnalysisContextService:
                 
                 # Update trade progress and check for trigger hits
                 if active_trade_context['status'] == 'waiting':
-                    # Check if trigger was hit since last update
+                    # CRITICAL FIX: Use trade's original timeframe for trigger checking, not current analysis timeframe
+                    trade_timeframe = active_trade_context.get('timeframe', current_timeframe)
+                    logger.info(f"🎯 Checking trigger for {ticker}: entry_price=${active_trade_context['entry_price']}, action={active_trade_context['action']}, time_window={self.get_contextual_timeframe_hours(trade_timeframe)}h")
+                    
+                    # Check if trigger was hit since last update using TRADE'S ORIGINAL TIMEFRAME
                     trigger_status = self._check_entry_trigger_hit(
-                        ticker, current_timeframe,
+                        ticker, trade_timeframe,  # Use trade's timeframe, not analysis timeframe
                         active_trade_context.get('trigger_hit_time') or datetime.now() - timedelta(hours=24),
                         active_trade_context['entry_price'],
                         active_trade_context['action'],
@@ -633,8 +637,8 @@ class AnalysisContextService:
                     if trigger_status.get('trigger_hit'):
                         # Update the trade to active status
                         self.active_trade_service.update_trade_trigger(ticker, trigger_status['trigger_details'])
-                        # Refresh context after update
-                        active_trade_context = self.active_trade_service.get_trade_context_for_ai(ticker, current_price)
+                        # Refresh context after update with timeframe filtering
+                        active_trade_context = self.active_trade_service.get_trade_context_for_ai(ticker, current_price, current_timeframe)
                         comprehensive_context.update(active_trade_context)
                         logger.info(f"🎯 Trade trigger updated for {ticker}: now ACTIVE")
                 
