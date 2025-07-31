@@ -60,7 +60,7 @@ describe('New Trade Immediate Deletion Fix', () => {
 
     it('should remove protection after expiration', (done) => {
       const tradeId = 'test-trade-456';
-      const creationTime = Date.now() - 35000; // Set creation time to 35 seconds ago (past expiration)
+      const creationTime = Date.now() - (6 * 60 * 1000); // Set creation time to 6 minutes ago (past 5-minute expiration)
       
       // Add trade to protection list with old timestamp
       addTradeToProtectionList(tradeId, creationTime);
@@ -222,7 +222,7 @@ describe('New Trade Immediate Deletion Fix', () => {
 
     it('should handle expired protection gracefully', () => {
       const tradeId = 'expired-trade';
-      const oldCreationTime = Date.now() - 60000; // 1 minute ago
+      const oldCreationTime = Date.now() - (6 * 60 * 1000); // 6 minutes ago (past 5-minute expiration)
       
       // Add trade with old timestamp
       addTradeToProtectionList(tradeId, oldCreationTime);

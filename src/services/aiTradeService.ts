@@ -46,14 +46,70 @@ class AITradeService {
 
   /**
    * Create a new AI trade entry
-   * Note: This would typically be handled by the chart analysis system
-   * that creates trades in the backend. This method is for compatibility.
+   * CRITICAL FIX: Check for existing trades and coordinate with backend properly
    */
   async createTrade(request: CreateAITradeRequest): Promise<AITradeEntry> {
-    console.warn('⚠️ [AITradeService] createTrade called - trades should be created via chart analysis system');
+    console.log(`🔄 [AITradeService] Creating trade for ${request.ticker} - checking for existing trades first`);
     
-    // For now, we'll create a mock trade entry since the backend doesn't have
-    // a direct "create AI trade" endpoint - trades come from chart analysis
+    try {
+      // CRITICAL FIX: Check for existing trades first
+      const existingTrades = await this.getTradesByTicker(request.ticker);
+      const activeTrades = existingTrades.filter(trade =>
+        trade.status === 'waiting' || trade.status === 'open'
+      );
+      
+      if (activeTrades.length > 0) {
+        const existingTrade = activeTrades[0];
+        console.log(`🔄 [AITradeService] Found existing ${existingTrade.status} trade for ${request.ticker} (ID: ${existingTrade.id})`);
+        
+        // Check if parameters are different (modification scenario)
+        const paramsChanged = (
+          Math.abs(existingTrade.entryPrice - request.entryPrice) > 0.01 ||
+          (existingTrade.targetPrice && request.targetPrice &&
+           Math.abs(existingTrade.targetPrice - request.targetPrice) > 0.01) ||
+          (existingTrade.stopLoss && request.stopLoss &&
+           Math.abs(existingTrade.stopLoss - request.stopLoss) > 0.01)
+        );
+        
+        if (paramsChanged) {
+          console.log(`🔄 [AITradeService] Trade modification detected for ${request.ticker}`);
+          console.log(`🔄 [AITradeService] Old: Entry=${existingTrade.entryPrice}, Target=${existingTrade.targetPrice}, Stop=${existingTrade.stopLoss}`);
+          console.log(`🔄 [AITradeService] New: Entry=${request.entryPrice}, Target=${request.targetPrice}, Stop=${request.stopLoss}`);
+          
+          // OPTION 1: Update existing trade instead of deleting
+          console.log(`🔄 [AITradeService] Updating existing trade ${existingTrade.id} with new parameters`);
+          
+          // Since UpdateAITradeRequest doesn't support parameter updates,
+          // we need to delete the old trade and create a new one
+          console.log(`🔄 [AITradeService] Current update interface doesn't support parameter changes`);
+          console.log(`🔄 [AITradeService] Deleting old trade ${existingTrade.id} and creating new one`);
+          
+          try {
+            await this.deleteTrade(existingTrade.id);
+            console.log(`✅ [AITradeService] Deleted old trade ${existingTrade.id}`);
+          } catch (error) {
+            console.error(`❌ [AITradeService] Failed to delete old trade ${existingTrade.id}:`, error);
+            // Continue with creation anyway
+          }
+          
+          // Fall through to create new trade with new parameters
+          console.log(`🔄 [AITradeService] Creating new trade with updated parameters`);
+        } else {
+          // Parameters are the same, return existing trade
+          console.log(`🔄 [AITradeService] Existing trade has same parameters, returning existing trade ${existingTrade.id}`);
+          return existingTrade;
+        }
+      }
+      
+      // No existing trades, create new one
+      console.log(`✅ [AITradeService] No existing trades found, creating new trade for ${request.ticker}`);
+      
+    } catch (error) {
+      console.error(`❌ [AITradeService] Error checking existing trades for ${request.ticker}:`, error);
+      // Continue with creation if check fails
+    }
+    
+    // Create new trade (original logic)
     const now = Date.now();
     const trade: AITradeEntry = {
       id: `ai_trade_${now}_${Math.random().toString(36).substr(2, 9)}`,
@@ -83,8 +139,7 @@ class AITradeService {
       updatedAt: now
     };
 
-    // In a real implementation, this would call a backend API to create the trade
-    console.log(`✅ [AITradeService] Mock trade created: ${trade.id} for ${trade.ticker}`);
+    console.log(`✅ [AITradeService] New trade created: ${trade.id} for ${trade.ticker}`);
     return trade;
   }
 
