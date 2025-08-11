@@ -141,6 +141,14 @@ def create_app(test_config=None):
     except Exception as e:
         logger.error(f"Failed to register Hyperliquid routes: {str(e)}")
     
+    # Register Macro Sentiment routes
+    try:
+        from routes.macro_sentiment_routes import register_macro_sentiment_routes
+        register_macro_sentiment_routes(app)
+        logger.info("Registered Macro Sentiment routes")
+    except Exception as e:
+        logger.error(f"Failed to register Macro Sentiment routes: {str(e)}")
+    
     # Initialize Hyperliquid scheduler
     try:
         from services.hyperliquid_scheduler import auto_start_scheduler
@@ -148,5 +156,13 @@ def create_app(test_config=None):
         logger.info("Hyperliquid scheduler initialized")
     except Exception as e:
         logger.error(f"Failed to initialize Hyperliquid scheduler: {str(e)}")
+    
+    # Initialize Macro Sentiment scanner
+    try:
+        from services.macro_scanner_service import auto_start_scanner
+        auto_start_scanner()
+        logger.info("Macro Sentiment scanner initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize Macro Sentiment scanner: {str(e)}")
 
     return app

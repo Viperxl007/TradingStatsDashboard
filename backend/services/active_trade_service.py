@@ -795,51 +795,44 @@ class ActiveTradeService:
                             logger.info(f"🔄 Old: Entry=${existing_entry}, Target=${existing_target}, Stop=${existing_stop}")
                             logger.info(f"🔄 New: Entry=${entry_price}, Target=${target_price}, Stop=${stop_loss}")
                             
-                            # CRITICAL: Check if this is a recent trade (within last 5 minutes)
-                            # Only auto-update very recent trades to prevent deletion of legitimate waiting trades
+                            # CRITICAL FIX: Always handle trade modifications in backend, regardless of age
+                            # The AI makes the final decision on trade modifications - no arbitrary time limits
                             cursor.execute('SELECT created_at FROM active_trades WHERE id = ?', (existing_id,))
                             created_at_str = cursor.fetchone()[0]
                             created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
                             trade_age_minutes = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)).total_seconds() / 60
                             
-                            # Only auto-update trades created within the last 5 minutes
-                            # This prevents deletion of legitimate waiting trades while still handling rapid parameter changes
-                            if trade_age_minutes <= 5:
-                                logger.info(f"🔄 Auto-updating recent trade {existing_id} (age: {trade_age_minutes:.1f} minutes)")
-                                
-                                cursor.execute('''
-                                    UPDATE active_trades
-                                    SET entry_price = ?, target_price = ?, stop_loss = ?,
-                                        analysis_id = ?, entry_strategy = ?, entry_condition = ?,
-                                        original_analysis_data = ?, original_context = ?, updated_at = ?
-                                    WHERE id = ?
-                                ''', (
-                                    entry_price, target_price, stop_loss,
-                                    analysis_id, entry_strategy, entry_condition,
-                                    json.dumps(analysis_data), json.dumps(context) if context else None,
-                                    datetime.now(), existing_id
-                                ))
-                                
-                                # Add trade update record for the modification
-                                self._add_trade_update(cursor, existing_id, entry_price, 'trade_modified', {
-                                    'old_entry_price': existing_entry,
-                                    'new_entry_price': entry_price,
-                                    'old_target_price': existing_target,
-                                    'new_target_price': target_price,
-                                    'old_stop_loss': existing_stop,
-                                    'new_stop_loss': stop_loss,
-                                    'modification_reason': 'ai_recommendation_change',
-                                    'trade_age_minutes': trade_age_minutes
-                                })
-                                
-                                conn.commit()
-                                logger.info(f"✅ Updated existing trade {existing_id} for {ticker} with new AI parameters")
-                                return existing_id
-                            else:
-                                # For older trades, let the frontend handle the delete+recreate flow
-                                logger.info(f"🔄 Trade {existing_id} is {trade_age_minutes:.1f} minutes old - letting frontend handle delete+recreate")
-                                logger.info(f"🔄 Returning existing trade ID for frontend to process")
-                                return existing_id
+                            logger.info(f"🔄 Auto-updating trade {existing_id} (age: {trade_age_minutes:.1f} minutes) - AI recommendation takes precedence")
+                            
+                            # Always update trade parameters when AI recommends changes
+                            cursor.execute('''
+                                UPDATE active_trades
+                                SET entry_price = ?, target_price = ?, stop_loss = ?,
+                                    analysis_id = ?, entry_strategy = ?, entry_condition = ?,
+                                    original_analysis_data = ?, original_context = ?, updated_at = ?
+                                WHERE id = ?
+                            ''', (
+                                entry_price, target_price, stop_loss,
+                                analysis_id, entry_strategy, entry_condition,
+                                json.dumps(analysis_data), json.dumps(context) if context else None,
+                                datetime.now(), existing_id
+                            ))
+                            
+                            # Add trade update record for the modification
+                            self._add_trade_update(cursor, existing_id, entry_price, 'trade_modified', {
+                                'old_entry_price': existing_entry,
+                                'new_entry_price': entry_price,
+                                'old_target_price': existing_target,
+                                'new_target_price': target_price,
+                                'old_stop_loss': existing_stop,
+                                'new_stop_loss': stop_loss,
+                                'modification_reason': 'ai_recommendation_change',
+                                'trade_age_minutes': trade_age_minutes
+                            })
+                            
+                            conn.commit()
+                            logger.info(f"✅ Updated existing trade {existing_id} for {ticker} with new AI parameters")
+                            return existing_id
                         else:
                             # Parameters are the same, just return existing trade
                             logger.info(f"🔄 Existing {existing_status} trade found for {ticker} (ID: {existing_id}) with same parameters. Returning existing trade.")

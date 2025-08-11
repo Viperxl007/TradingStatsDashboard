@@ -70,6 +70,7 @@ import TradingRecommendationPanel from './TradingRecommendationPanel';
 import ModelSelector from './ModelSelector';
 import ModernCandlestickChart from './ModernCandlestickChart';
 import ChartIndicatorControls from './ChartIndicatorControls';
+import MacroSentimentPanel from './MacroSentimentPanel';
 import { hasVolumeData } from '../utils/technicalIndicators';
 
 const ChartAnalysis: React.FC = () => {
@@ -876,6 +877,17 @@ const ChartAnalysis: React.FC = () => {
     <Box w="100%" h="100%">
       {/* Header */}
       <VStack spacing={4} align="stretch">
+        {/* Macro Sentiment Panel - Always visible at top */}
+        <MacroSentimentPanel
+          data={null}
+          isLoading={false}
+          error={null}
+          onRefresh={() => {
+            // Refresh macro sentiment data
+            console.log('Refreshing macro sentiment data...');
+          }}
+        />
+        
         <Box>
           <Heading size="md" mb={1} color={colorMode === 'dark' ? 'white' : 'gray.800'}>
             AI Chart Analysis
