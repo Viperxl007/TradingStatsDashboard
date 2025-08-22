@@ -91,6 +91,7 @@ class MacroSentimentDatabase:
                         btc_market_cap REAL NOT NULL,
                         eth_market_cap REAL NOT NULL,
                         btc_price REAL NOT NULL,
+                        eth_price REAL NOT NULL,
                         
                         -- Calculated derived metrics
                         alt_market_cap REAL NOT NULL,
@@ -108,6 +109,7 @@ class MacroSentimentDatabase:
                         CHECK(btc_market_cap > 0),
                         CHECK(eth_market_cap > 0),
                         CHECK(btc_price > 0),
+                        CHECK(eth_price > 0),
                         CHECK(btc_dominance >= 0 AND btc_dominance <= 100),
                         CHECK(data_quality_score >= 0 AND data_quality_score <= 1)
                     )
@@ -125,6 +127,8 @@ class MacroSentimentDatabase:
                         overall_confidence INTEGER NOT NULL,
                         btc_trend_direction TEXT NOT NULL,
                         btc_trend_strength INTEGER NOT NULL,
+                        eth_trend_direction TEXT NOT NULL,
+                        eth_trend_strength INTEGER NOT NULL,
                         alt_trend_direction TEXT NOT NULL,
                         alt_trend_strength INTEGER NOT NULL,
                         
@@ -141,9 +145,10 @@ class MacroSentimentDatabase:
                         
                         -- Chart images (base64 encoded)
                         btc_chart_image TEXT,
+                        eth_chart_image TEXT,
                         dominance_chart_image TEXT,
                         alt_strength_chart_image TEXT,
-                        combined_chart_image TEXT,
+                        eth_btc_ratio_chart_image TEXT,
                         
                         -- System metadata
                         created_at INTEGER NOT NULL,
@@ -152,8 +157,10 @@ class MacroSentimentDatabase:
                         UNIQUE(analysis_timestamp),
                         CHECK(overall_confidence >= 0 AND overall_confidence <= 100),
                         CHECK(btc_trend_strength >= 0 AND btc_trend_strength <= 100),
+                        CHECK(eth_trend_strength >= 0 AND eth_trend_strength <= 100),
                         CHECK(alt_trend_strength >= 0 AND alt_trend_strength <= 100),
                         CHECK(btc_trend_direction IN ('UP', 'DOWN', 'SIDEWAYS')),
+                        CHECK(eth_trend_direction IN ('UP', 'DOWN', 'SIDEWAYS')),
                         CHECK(alt_trend_direction IN ('UP', 'DOWN', 'SIDEWAYS')),
                         CHECK(trade_permission IN ('NO_TRADE', 'SELECTIVE', 'ACTIVE', 'AGGRESSIVE')),
                         CHECK(market_regime IN ('BTC_SEASON', 'ALT_SEASON', 'TRANSITION', 'BEAR_MARKET')),
@@ -218,6 +225,44 @@ class MacroSentimentDatabase:
                 except sqlite3.OperationalError as e:
                     if "duplicate column name" not in str(e).lower():
                         logger.warning(f"Could not add scanner_running field: {e}")
+                
+                # ETH Integration Migration - Add eth_price field if it doesn't exist
+                try:
+                    cursor.execute('ALTER TABLE macro_market_data ADD COLUMN eth_price REAL')
+                    logger.info("Added eth_price field to macro_market_data table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add eth_price field: {e}")
+                
+                # ETH Integration Migration - Add ETH trend fields if they don't exist
+                try:
+                    cursor.execute('ALTER TABLE macro_sentiment_analysis ADD COLUMN eth_trend_direction TEXT')
+                    logger.info("Added eth_trend_direction field to macro_sentiment_analysis table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add eth_trend_direction field: {e}")
+                
+                try:
+                    cursor.execute('ALTER TABLE macro_sentiment_analysis ADD COLUMN eth_trend_strength INTEGER')
+                    logger.info("Added eth_trend_strength field to macro_sentiment_analysis table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add eth_trend_strength field: {e}")
+                
+                try:
+                    cursor.execute('ALTER TABLE macro_sentiment_analysis ADD COLUMN eth_chart_image TEXT')
+                    logger.info("Added eth_chart_image field to macro_sentiment_analysis table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add eth_chart_image field: {e}")
+
+                # Add eth_btc_ratio_chart_image field if it doesn't exist
+                try:
+                    cursor.execute('ALTER TABLE macro_sentiment_analysis ADD COLUMN eth_btc_ratio_chart_image TEXT')
+                    logger.info("Added eth_btc_ratio_chart_image field to macro_sentiment_analysis table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add eth_btc_ratio_chart_image field: {e}")
                 
                 # Create performance indexes
                 indexes = [
@@ -294,10 +339,10 @@ class MacroSentimentDatabase:
                     
                     cursor.execute('''
                         INSERT OR REPLACE INTO macro_market_data (
-                            timestamp, data_source, total_market_cap, btc_market_cap, 
-                            eth_market_cap, btc_price, alt_market_cap, alt_strength_ratio, 
+                            timestamp, data_source, total_market_cap, btc_market_cap,
+                            eth_market_cap, btc_price, eth_price, alt_market_cap, alt_strength_ratio,
                             btc_dominance, data_quality_score, collection_latency_ms, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         market_data['timestamp'],
                         market_data.get('data_source', 'coingecko'),
@@ -305,6 +350,7 @@ class MacroSentimentDatabase:
                         market_data['btc_market_cap'],
                         market_data['eth_market_cap'],
                         market_data['btc_price'],
+                        market_data.get('eth_price', 0),  # Default to 0 for backward compatibility
                         alt_market_cap,
                         alt_strength_ratio,
                         btc_dominance,
@@ -342,11 +388,12 @@ class MacroSentimentDatabase:
                         INSERT OR REPLACE INTO macro_sentiment_analysis (
                             analysis_timestamp, data_period_start, data_period_end,
                             overall_confidence, btc_trend_direction, btc_trend_strength,
-                            alt_trend_direction, alt_trend_strength, trade_permission,
-                            market_regime, ai_reasoning, chart_data_hash, processing_time_ms,
-                            model_used, prompt_version, btc_chart_image, dominance_chart_image,
-                            alt_strength_chart_image, combined_chart_image, created_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            eth_trend_direction, eth_trend_strength, alt_trend_direction,
+                            alt_trend_strength, trade_permission, market_regime, ai_reasoning,
+                            chart_data_hash, processing_time_ms, model_used, prompt_version,
+                            btc_chart_image, eth_chart_image, dominance_chart_image,
+                            alt_strength_chart_image, eth_btc_ratio_chart_image, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         analysis_data['analysis_timestamp'],
                         analysis_data['data_period_start'],
@@ -354,6 +401,8 @@ class MacroSentimentDatabase:
                         analysis_data['overall_confidence'],
                         analysis_data['btc_trend_direction'],
                         analysis_data['btc_trend_strength'],
+                        analysis_data.get('eth_trend_direction', 'SIDEWAYS'),  # Default for backward compatibility
+                        analysis_data.get('eth_trend_strength', 50),  # Default for backward compatibility
                         analysis_data['alt_trend_direction'],
                         analysis_data['alt_trend_strength'],
                         analysis_data['trade_permission'],
@@ -364,9 +413,10 @@ class MacroSentimentDatabase:
                         analysis_data['model_used'],
                         analysis_data.get('prompt_version', 'v1.0'),
                         analysis_data.get('btc_chart_image'),
+                        analysis_data.get('eth_chart_image'),
                         analysis_data.get('dominance_chart_image'),
                         analysis_data.get('alt_strength_chart_image'),
-                        analysis_data.get('combined_chart_image'),
+                        analysis_data.get('eth_btc_ratio_chart_image'),
                         current_timestamp
                     ))
                     

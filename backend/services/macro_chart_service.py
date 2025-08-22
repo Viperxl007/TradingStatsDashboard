@@ -57,6 +57,7 @@ class MacroChartService:
             'style': 'seaborn-v0_8-darkgrid',
             'colors': {
                 'btc_price': '#F7931A',      # Bitcoin orange
+                'eth_price': '#627EEA',      # Ethereum blue
                 'dominance': '#2E86AB',      # Blue
                 'alt_strength': '#A23B72',   # Purple
                 'background': '#1E1E1E',     # Dark background
@@ -102,9 +103,10 @@ class MacroChartService:
             
             # Generate individual charts
             btc_chart = self._generate_btc_price_chart(df)
+            eth_chart = self._generate_eth_price_chart(df)  # ETH Integration: Add ETH chart
             dominance_chart = self._generate_dominance_chart(df)
             alt_strength_chart = self._generate_alt_strength_chart(df)
-            combined_chart = self._generate_combined_chart(df)
+            eth_btc_ratio_chart = self._generate_eth_btc_ratio_chart(df)  # ETH/BTC ratio chart
             
             # Calculate data hash for caching
             data_hash = self._calculate_data_hash(market_data)
@@ -116,9 +118,10 @@ class MacroChartService:
                 'data_period_end': end_timestamp,
                 'data_points': len(market_data),
                 'btc_chart_image': btc_chart,
+                'eth_chart_image': eth_chart,  # ETH Integration: Add ETH chart to result
                 'dominance_chart_image': dominance_chart,
                 'alt_strength_chart_image': alt_strength_chart,
-                'combined_chart_image': combined_chart,
+                'eth_btc_ratio_chart_image': eth_btc_ratio_chart,  # ETH/BTC ratio chart
                 'chart_data_hash': data_hash,
                 'processing_time_ms': int(processing_time),
                 'chart_config': self.chart_config
@@ -179,6 +182,53 @@ class MacroChartService:
         except Exception as e:
             logger.error(f"Error generating BTC price chart: {e}")
             raise
+    def _generate_eth_price_chart(self, df: pd.DataFrame) -> str:
+        """Generate ETH price chart."""
+        try:
+            plt.style.use(self.chart_config['style'])
+            
+            fig, ax = plt.subplots(figsize=(12, 6), facecolor=self.chart_config['colors']['background'])
+            ax.set_facecolor(self.chart_config['colors']['background'])
+            
+            # Plot ETH price
+            ax.plot(df['datetime'], df['eth_price'], 
+                   color=self.chart_config['colors']['eth_price'], 
+                   linewidth=2, label='ETH Price')
+            
+            # Formatting
+            ax.set_title('Ethereum Price (USD)', fontsize=16, color=self.chart_config['colors']['text'], pad=20)
+            ax.set_xlabel('Date', fontsize=12, color=self.chart_config['colors']['text'])
+            ax.set_ylabel('Price (USD)', fontsize=12, color=self.chart_config['colors']['text'])
+            
+            # Format y-axis as currency
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
+            
+            # Format x-axis dates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 10)))
+            
+            # Style
+            ax.tick_params(colors=self.chart_config['colors']['text'])
+            ax.grid(True, alpha=0.3, color=self.chart_config['colors']['grid'])
+            ax.legend(facecolor=self.chart_config['colors']['background'], 
+                     edgecolor=self.chart_config['colors']['text'])
+            
+            plt.tight_layout()
+            
+            # Convert to base64
+            buffer = io.BytesIO()
+            plt.savefig(buffer, format='png', dpi=self.chart_config['dpi'], 
+                       facecolor=self.chart_config['colors']['background'])
+            buffer.seek(0)
+            image_base64 = base64.b64encode(buffer.getvalue()).decode()
+            
+            plt.close(fig)
+            return image_base64
+            
+        except Exception as e:
+            logger.error(f"Error generating ETH price chart: {e}")
+            raise
+    
     
     def _generate_dominance_chart(self, df: pd.DataFrame) -> str:
         """Generate BTC dominance chart."""
@@ -283,64 +333,54 @@ class MacroChartService:
             logger.error(f"Error generating alt strength chart: {e}")
             raise
     
-    def _generate_combined_chart(self, df: pd.DataFrame) -> str:
-        """Generate combined chart with all three metrics."""
+    def _generate_eth_btc_ratio_chart(self, df: pd.DataFrame) -> str:
+        """Generate ETH/BTC market cap ratio chart to show ETH strength relative to BTC."""
         try:
             plt.style.use(self.chart_config['style'])
             
-            fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 12), 
-                                               facecolor=self.chart_config['colors']['background'])
+            # Calculate ETH/BTC ratio from market caps
+            df['eth_btc_ratio'] = df['eth_market_cap'] / df['btc_market_cap']
             
-            # BTC Price (top)
-            ax1.set_facecolor(self.chart_config['colors']['background'])
-            ax1.plot(df['datetime'], df['btc_price'], 
-                    color=self.chart_config['colors']['btc_price'], 
-                    linewidth=2, label='BTC Price')
-            ax1.set_title('Bitcoin Price (USD)', fontsize=14, color=self.chart_config['colors']['text'])
-            ax1.set_ylabel('Price (USD)', fontsize=10, color=self.chart_config['colors']['text'])
-            ax1.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x:,.0f}'))
-            ax1.tick_params(colors=self.chart_config['colors']['text'])
-            ax1.grid(True, alpha=0.3, color=self.chart_config['colors']['grid'])
+            fig, ax = plt.subplots(figsize=(16, 8),
+                                  facecolor=self.chart_config['colors']['background'])
+            ax.set_facecolor(self.chart_config['colors']['background'])
             
-            # BTC Dominance (middle)
-            ax2.set_facecolor(self.chart_config['colors']['background'])
-            ax2.plot(df['datetime'], df['btc_dominance'], 
-                    color=self.chart_config['colors']['dominance'], 
-                    linewidth=2, label='BTC Dominance')
-            ax2.axhline(y=50, color='gray', linestyle='--', alpha=0.5)
-            ax2.set_title('Bitcoin Market Dominance (%)', fontsize=14, color=self.chart_config['colors']['text'])
-            ax2.set_ylabel('Dominance (%)', fontsize=10, color=self.chart_config['colors']['text'])
-            ax2.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1f}%'))
-            ax2.set_ylim(0, 100)
-            ax2.tick_params(colors=self.chart_config['colors']['text'])
-            ax2.grid(True, alpha=0.3, color=self.chart_config['colors']['grid'])
+            # Plot ETH/BTC ratio
+            ax.plot(df['datetime'], df['eth_btc_ratio'],
+                   color=self.chart_config['colors']['eth_price'],
+                   linewidth=2, label='ETH/BTC Ratio')
             
-            # Alt Strength Ratio (bottom)
-            ax3.set_facecolor(self.chart_config['colors']['background'])
-            ax3.plot(df['datetime'], df['alt_strength_ratio'], 
-                    color=self.chart_config['colors']['alt_strength'], 
-                    linewidth=2, label='Alt Strength Ratio')
-            ax3.set_title('Altcoin Strength Ratio', fontsize=14, color=self.chart_config['colors']['text'])
-            ax3.set_xlabel('Date', fontsize=10, color=self.chart_config['colors']['text'])
-            ax3.set_ylabel('Ratio', fontsize=10, color=self.chart_config['colors']['text'])
-            ax3.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.2f}'))
-            ax3.tick_params(colors=self.chart_config['colors']['text'])
-            ax3.grid(True, alpha=0.3, color=self.chart_config['colors']['grid'])
+            # Chart formatting
+            ax.set_title('ETH/BTC Market Cap Ratio', fontsize=16, color=self.chart_config['colors']['text'], pad=20)
+            ax.set_xlabel('Date', fontsize=12, color=self.chart_config['colors']['text'])
+            ax.set_ylabel('Ratio (ETH Market Cap / BTC Market Cap)', fontsize=12, color=self.chart_config['colors']['text'])
             
-            # Format x-axis dates for all subplots
-            for ax in [ax1, ax2, ax3]:
-                ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
-                ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 10)))
+            # Format y-axis to show ratio values
+            ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.3f}'))
             
-            # Only show x-axis labels on bottom chart
-            ax1.set_xticklabels([])
-            ax2.set_xticklabels([])
+            # Format x-axis dates
+            ax.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+            ax.xaxis.set_major_locator(mdates.DayLocator(interval=max(1, len(df) // 10)))
+            
+            # Styling
+            ax.tick_params(colors=self.chart_config['colors']['text'])
+            ax.grid(True, alpha=0.3, color=self.chart_config['colors']['grid'])
+            ax.legend(loc='upper left', facecolor=self.chart_config['colors']['background'],
+                     edgecolor=self.chart_config['colors']['text'])
+            
+            # Add annotation for current ratio
+            current_ratio = df['eth_btc_ratio'].iloc[-1]
+            ax.annotate(f'Current: {current_ratio:.3f}',
+                       xy=(df['datetime'].iloc[-1], current_ratio),
+                       xytext=(10, 10), textcoords='offset points',
+                       bbox=dict(boxstyle='round,pad=0.3', facecolor=self.chart_config['colors']['eth_price'], alpha=0.7),
+                       color='white', fontweight='bold')
             
             plt.tight_layout()
             
             # Convert to base64
             buffer = io.BytesIO()
-            plt.savefig(buffer, format='png', dpi=self.chart_config['dpi'], 
+            plt.savefig(buffer, format='png', dpi=self.chart_config['dpi'],
                        facecolor=self.chart_config['colors']['background'])
             buffer.seek(0)
             image_base64 = base64.b64encode(buffer.getvalue()).decode()
@@ -360,6 +400,7 @@ class MacroChartService:
                 {
                     'timestamp': item['timestamp'],
                     'btc_price': item['btc_price'],
+                    'eth_price': item['eth_price'],
                     'btc_dominance': item['btc_dominance'],
                     'alt_strength_ratio': item['alt_strength_ratio']
                 }
@@ -397,6 +438,12 @@ class MacroChartService:
                     'max': float(df['btc_price'].max()),
                     'change_percent': float(((df['btc_price'].iloc[-1] - df['btc_price'].iloc[0]) / df['btc_price'].iloc[0]) * 100)
                 },
+                'eth_price': {
+                    'current': float(df['eth_price'].iloc[-1]),
+                    'min': float(df['eth_price'].min()),
+                    'max': float(df['eth_price'].max()),
+                    'change_percent': float(((df['eth_price'].iloc[-1] - df['eth_price'].iloc[0]) / df['eth_price'].iloc[0]) * 100)
+                },
                 'btc_dominance': {
                     'current': float(df['btc_dominance'].iloc[-1]),
                     'min': float(df['btc_dominance'].min()),
@@ -433,14 +480,17 @@ class MacroChartService:
             # Define realistic ranges for crypto market data
             btc_price_min = 60000    # Minimum realistic BTC price
             btc_price_max = 200000   # Maximum realistic BTC price
+            eth_price_min = 2000     # Minimum realistic ETH price (ETH Integration: Add ETH validation)
+            eth_price_max = 8000     # Maximum realistic ETH price (ETH Integration: Add ETH validation)
             dominance_min = 35       # Minimum realistic BTC dominance %
             dominance_max = 75       # Maximum realistic BTC dominance %
             alt_ratio_min = 5000000  # Minimum realistic alt strength ratio
             alt_ratio_max = 25000000 # Maximum realistic alt strength ratio
             
-            # Filter out outliers
+            # Filter out outliers (ETH Integration: Add ETH price validation)
             df_clean = df[
                 (df['btc_price'] >= btc_price_min) & (df['btc_price'] <= btc_price_max) &
+                (df['eth_price'] >= eth_price_min) & (df['eth_price'] <= eth_price_max) &
                 (df['btc_dominance'] >= dominance_min) & (df['btc_dominance'] <= dominance_max) &
                 (df['alt_strength_ratio'] >= alt_ratio_min) & (df['alt_strength_ratio'] <= alt_ratio_max)
             ].copy()

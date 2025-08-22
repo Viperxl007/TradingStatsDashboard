@@ -116,7 +116,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
                 <Stat size="sm">
                   <StatLabel>Win Rate</StatLabel>
-                  <StatNumber fontSize="md">{formatPercentage(data.winRate / 100)}</StatNumber>
+                  <StatNumber fontSize="md">{formatPercentage(data.winRate)}</StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
@@ -168,7 +168,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               <SimpleGrid columns={{ base: 2, md: 3 }} spacing={4}>
                 <Stat size="sm">
                   <StatLabel>Win Rate</StatLabel>
-                  <StatNumber fontSize="md">{formatPercentage(data.winRate / 100)}</StatNumber>
+                  <StatNumber fontSize="md">{formatPercentage(data.winRate)}</StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
@@ -212,7 +212,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
                 <Stat size="sm">
                   <StatLabel>Win Rate</StatLabel>
-                  <StatNumber fontSize="md">{formatPercentage(data.winRate / 100)}</StatNumber>
+                  <StatNumber fontSize="md">{formatPercentage(data.winRate)}</StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Avg Confidence</StatLabel>
@@ -269,7 +269,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               <SimpleGrid columns={{ base: 2, md: 4 }} spacing={4}>
                 <Stat size="sm">
                   <StatLabel>Win Rate</StatLabel>
-                  <StatNumber fontSize="md">{formatPercentage(month.winRate / 100)}</StatNumber>
+                  <StatNumber fontSize="md">{formatPercentage(month.winRate)}</StatNumber>
                 </Stat>
                 <Stat size="sm">
                   <StatLabel>Avg Return</StatLabel>
@@ -345,7 +345,7 @@ const AIPerformanceAnalysisPanel: React.FC<AIPerformanceAnalysisPanelProps> = ({
               
               <Stat>
                 <StatLabel>Overall Win Rate</StatLabel>
-                <StatNumber>{formatPercentage(statistics.winRate / 100)}</StatNumber>
+                <StatNumber>{formatPercentage(statistics.winRate)}</StatNumber>
                 <StatHelpText>
                   <StatArrow type={statistics.winRate >= 50 ? 'increase' : 'decrease'} />
                   {statistics.winningTrades}/{statistics.closedTrades}

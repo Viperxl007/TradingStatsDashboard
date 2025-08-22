@@ -170,6 +170,15 @@ const DetailedAnalysisModal: React.FC<DetailedAnalysisModalProps> = ({
                 </Stat>
                 
                 <Stat>
+                  <StatLabel>ETH Trend</StatLabel>
+                  <HStack>
+                    <Icon as={getTrendIcon(data.eth_trend_direction)} color={getTrendColor(data.eth_trend_direction)} />
+                    <StatNumber fontSize="md">{data.eth_trend_direction}</StatNumber>
+                  </HStack>
+                  <StatHelpText>Strength: {data.eth_trend_strength}%</StatHelpText>
+                </Stat>
+                
+                <Stat>
                   <StatLabel>ALT Trend</StatLabel>
                   <HStack>
                     <Icon as={getTrendIcon(data.alt_trend_direction)} color={getTrendColor(data.alt_trend_direction)} />
@@ -201,7 +210,7 @@ const DetailedAnalysisModal: React.FC<DetailedAnalysisModalProps> = ({
             <Divider />
 
             {/* Chart Images */}
-            {(data.btc_chart_image || data.dominance_chart_image || data.alt_strength_chart_image) && (
+            {(data.btc_chart_image || data.eth_chart_image || data.dominance_chart_image || data.alt_strength_chart_image || data.eth_btc_ratio_chart_image) && (
               <Box>
                 <HStack spacing={2} mb={4}>
                   <Icon as={FiBarChart} color="purple.500" />
@@ -228,6 +237,31 @@ const DetailedAnalysisModal: React.FC<DetailedAnalysisModalProps> = ({
                           border="1px solid"
                           borderColor={colorMode === 'dark' ? 'gray.600' : 'gray.200'}
                           key={`btc-${data.analysis_timestamp || Date.now()}`}
+                        />
+                      </AccordionPanel>
+                    </AccordionItem>
+                  )}
+                  
+                  {data.eth_chart_image && (
+                    <AccordionItem>
+                      <AccordionButton>
+                        <Box flex="1" textAlign="left">
+                          <HStack>
+                            <Icon as={FiTrendingUp} color="blue.400" />
+                            <Text>Ethereum Price Chart</Text>
+                          </HStack>
+                        </Box>
+                        <AccordionIcon />
+                      </AccordionButton>
+                      <AccordionPanel pb={4}>
+                        <Image
+                          src={`data:image/png;base64,${data.eth_chart_image}`}
+                          alt="Ethereum Price Chart"
+                          maxW="100%"
+                          borderRadius="md"
+                          border="1px solid"
+                          borderColor={colorMode === 'dark' ? 'gray.600' : 'gray.200'}
+                          key={`eth-${data.analysis_timestamp || Date.now()}`}
                         />
                       </AccordionPanel>
                     </AccordionItem>
@@ -278,6 +312,31 @@ const DetailedAnalysisModal: React.FC<DetailedAnalysisModalProps> = ({
                           border="1px solid"
                           borderColor={colorMode === 'dark' ? 'gray.600' : 'gray.200'}
                           key={`alt-strength-${data.analysis_timestamp || Date.now()}`}
+                        />
+                      </AccordionPanel>
+                    </AccordionItem>
+                  )}
+                  
+                  {data.eth_btc_ratio_chart_image && (
+                    <AccordionItem>
+                      <AccordionButton>
+                        <Box flex="1" textAlign="left">
+                          <HStack>
+                            <Icon as={FiActivity} color="green.500" />
+                            <Text>ETH/BTC Ratio Chart</Text>
+                          </HStack>
+                        </Box>
+                        <AccordionIcon />
+                      </AccordionButton>
+                      <AccordionPanel pb={4}>
+                        <Image
+                          src={`data:image/png;base64,${data.eth_btc_ratio_chart_image}`}
+                          alt="ETH/BTC Ratio Chart"
+                          maxW="100%"
+                          borderRadius="md"
+                          border="1px solid"
+                          borderColor={colorMode === 'dark' ? 'gray.600' : 'gray.200'}
+                          key={`eth-btc-ratio-${data.analysis_timestamp || Date.now()}`}
                         />
                       </AccordionPanel>
                     </AccordionItem>

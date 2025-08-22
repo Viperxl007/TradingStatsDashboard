@@ -140,8 +140,8 @@ class MacroAIService:
             # Prepare the analysis prompt
             prompt = self._build_analysis_prompt(chart_summary)
             
-            # Prepare image for analysis (combined chart)
-            combined_chart_b64 = chart_data['combined_chart_image']
+            # Prepare image for analysis (ETH/BTC ratio chart)
+            eth_btc_ratio_chart_b64 = chart_data['eth_btc_ratio_chart_image']
             
             # Make API request
             logger.debug(f"Making Claude API request with model: {model}")
@@ -163,7 +163,7 @@ class MacroAIService:
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/png",
-                                    "data": combined_chart_b64
+                                    "data": eth_btc_ratio_chart_b64
                                 }
                             }
                         ]
@@ -206,14 +206,23 @@ class MacroAIService:
         
         # Extract current values for context
         btc_price = chart_summary.get('btc_price', {})
+        eth_price = chart_summary.get('eth_price', {})  # ETH Integration: Add ETH price context
         btc_dominance = chart_summary.get('btc_dominance', {})
         alt_strength = chart_summary.get('alt_strength_ratio', {})
         
         prompt = f"""
-You are an expert cryptocurrency macro analyst. Analyze the provided charts showing Bitcoin price, Bitcoin dominance, and Altcoin strength ratio over the past {chart_summary.get('data_points', 'unknown')} data points.
+You are an expert cryptocurrency macro analyst. Analyze the provided 5 charts showing comprehensive market data over the past {chart_summary.get('data_points', 'unknown')} data points.
+
+CHARTS PROVIDED FOR ANALYSIS:
+1. Bitcoin Price Chart - BTC price movements and trends
+2. Ethereum Price Chart - ETH price movements and trends
+3. Bitcoin Dominance Chart - BTC's market share percentage
+4. Altcoin Strength Index Chart - Overall altcoin performance ratio
+5. ETH/BTC Ratio Chart - ETH market cap relative to BTC market cap (shows ETH strength vs BTC)
 
 CURRENT MARKET CONTEXT:
 - BTC Price: ${btc_price.get('current', 0):,.2f} (Change: {btc_price.get('change_percent', 0):+.1f}%)
+- ETH Price: ${eth_price.get('current', 0):,.2f} (Change: {eth_price.get('change_percent', 0):+.1f}%)
 - BTC Dominance: {btc_dominance.get('current', 0):.1f}% (Change: {btc_dominance.get('change_percent', 0):+.1f}%)
 - Alt Strength Ratio: {alt_strength.get('current', 0):.2f} (Change: {alt_strength.get('change_percent', 0):+.1f}%)
 
@@ -229,6 +238,7 @@ ANALYSIS REQUIREMENTS:
 
 2. TREND ANALYSIS:
    - BTC Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
+   - ETH Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
    - ALT Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
    - Base analysis on observable chart patterns, not speculation
 
@@ -257,6 +267,8 @@ Respond with ONLY a JSON object in this exact format:
     "overall_confidence": <0-100 integer>,
     "btc_trend_direction": "<UP|DOWN|SIDEWAYS>",
     "btc_trend_strength": <0-100 integer>,
+    "eth_trend_direction": "<UP|DOWN|SIDEWAYS>",
+    "eth_trend_strength": <0-100 integer>,
     "alt_trend_direction": "<UP|DOWN|SIDEWAYS>",
     "alt_trend_strength": <0-100 integer>,
     "trade_permission": "<NO_TRADE|SELECTIVE|ACTIVE|AGGRESSIVE>",
@@ -287,6 +299,7 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
             # Validate required fields
             required_fields = [
                 'overall_confidence', 'btc_trend_direction', 'btc_trend_strength',
+                'eth_trend_direction', 'eth_trend_strength',  # ETH Integration: Add ETH validation
                 'alt_trend_direction', 'alt_trend_strength', 'trade_permission',
                 'market_regime', 'reasoning'
             ]
@@ -296,7 +309,7 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
                     raise ValueError(f"Missing required field: {field}")
             
             # Validate confidence scores
-            confidence_fields = ['overall_confidence', 'btc_trend_strength', 'alt_trend_strength']
+            confidence_fields = ['overall_confidence', 'btc_trend_strength', 'eth_trend_strength', 'alt_trend_strength']
             for field in confidence_fields:
                 value = ai_result[field]
                 if not isinstance(value, int) or value < 0 or value > 100:
@@ -309,6 +322,9 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
             
             if ai_result['btc_trend_direction'] not in valid_directions:
                 raise ValueError(f"Invalid BTC trend direction: {ai_result['btc_trend_direction']}")
+            
+            if ai_result['eth_trend_direction'] not in valid_directions:
+                raise ValueError(f"Invalid ETH trend direction: {ai_result['eth_trend_direction']}")
             
             if ai_result['alt_trend_direction'] not in valid_directions:
                 raise ValueError(f"Invalid ALT trend direction: {ai_result['alt_trend_direction']}")
@@ -327,6 +343,8 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
                 'overall_confidence': ai_result['overall_confidence'],
                 'btc_trend_direction': ai_result['btc_trend_direction'],
                 'btc_trend_strength': ai_result['btc_trend_strength'],
+                'eth_trend_direction': ai_result['eth_trend_direction'],
+                'eth_trend_strength': ai_result['eth_trend_strength'],
                 'alt_trend_direction': ai_result['alt_trend_direction'],
                 'alt_trend_strength': ai_result['alt_trend_strength'],
                 'trade_permission': ai_result['trade_permission'],
@@ -337,9 +355,10 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
                 'model_used': self.default_model,
                 'prompt_version': 'v1.0',
                 'btc_chart_image': chart_data['btc_chart_image'],
+                'eth_chart_image': chart_data['eth_chart_image'],
                 'dominance_chart_image': chart_data['dominance_chart_image'],
                 'alt_strength_chart_image': chart_data['alt_strength_chart_image'],
-                'combined_chart_image': chart_data['combined_chart_image']
+                'eth_btc_ratio_chart_image': chart_data['eth_btc_ratio_chart_image']
             }
             
             logger.debug("AI result processed and validated successfully")

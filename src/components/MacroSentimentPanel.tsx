@@ -294,15 +294,20 @@ const MacroSentimentPanel: React.FC<MacroSentimentPanelProps> = ({
         )}
 
         {/* Main Content */}
-        <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} spacing={6}>
+        <SimpleGrid columns={{ base: 1, md: 2, lg: 5 }} spacing={6}>
           <ConfidenceGauge confidence={data.overall_confidence} />
-          <TrendIndicator 
-            type="BTC" 
+          <TrendIndicator
+            type="BTC"
             direction={data.btc_trend_direction}
             strength={data.btc_trend_strength}
           />
-          <TrendIndicator 
-            type="ALT" 
+          <TrendIndicator
+            type="ETH"
+            direction={data.eth_trend_direction}
+            strength={data.eth_trend_strength}
+          />
+          <TrendIndicator
+            type="ALT"
             direction={data.alt_trend_direction}
             strength={data.alt_trend_strength}
           />

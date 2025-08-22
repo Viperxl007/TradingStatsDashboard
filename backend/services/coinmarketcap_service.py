@@ -358,6 +358,7 @@ class CoinMarketCapService:
                     'btc_market_cap': btc_point['market_cap'],
                     'eth_market_cap': eth_point['market_cap'],
                     'btc_price': btc_point['price'],
+                    'eth_price': eth_point['price'],  # ETH Integration: Add ETH price
                     'btc_dominance': global_point['btc_dominance'],
                     'alt_market_cap': alt_market_cap,
                     'alt_strength_index': alt_strength_index,

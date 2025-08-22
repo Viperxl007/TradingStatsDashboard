@@ -10,6 +10,8 @@ export interface MacroSentimentData {
   overall_confidence: number; // 0-100
   btc_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS';
   btc_trend_strength: number; // 0-100
+  eth_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS'; // ETH Integration: Add ETH trend fields
+  eth_trend_strength: number; // 0-100
   alt_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS';
   alt_trend_strength: number; // 0-100
   trade_permission: 'NO_TRADE' | 'SELECTIVE' | 'ACTIVE' | 'AGGRESSIVE';
@@ -22,9 +24,10 @@ export interface MacroSentimentData {
   created_at: number;
   // Chart images (base64 encoded)
   btc_chart_image?: string | null;
+  eth_chart_image?: string | null; // ETH Integration: Add ETH chart image
   dominance_chart_image?: string | null;
   alt_strength_chart_image?: string | null;
-  combined_chart_image?: string | null;
+  eth_btc_ratio_chart_image?: string | null; // ETH/BTC ratio chart
 }
 
 // Historical sentiment data
@@ -105,6 +108,12 @@ export interface MacroChartSummary {
     max: number;
     change_percent: number;
   };
+  eth_price: { // ETH Integration: Add ETH price data
+    current: number;
+    min: number;
+    max: number;
+    change_percent: number;
+  };
   btc_dominance: {
     current: number;
     min: number;
@@ -156,6 +165,8 @@ export interface AnalysisResult {
   overall_confidence: number;
   btc_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS';
   btc_trend_strength: number;
+  eth_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS'; // ETH Integration: Add ETH trend fields
+  eth_trend_strength: number;
   alt_trend_direction: 'UP' | 'DOWN' | 'SIDEWAYS';
   alt_trend_strength: number;
   trade_permission: 'NO_TRADE' | 'SELECTIVE' | 'ACTIVE' | 'AGGRESSIVE';
@@ -185,7 +196,7 @@ export interface ConfidenceGaugeProps {
 }
 
 export interface TrendIndicatorProps {
-  type: 'BTC' | 'ALT';
+  type: 'BTC' | 'ETH' | 'ALT'; // ETH Integration: Add ETH type support
   direction: 'UP' | 'DOWN' | 'SIDEWAYS';
   strength: number;
   size?: 'sm' | 'md' | 'lg';

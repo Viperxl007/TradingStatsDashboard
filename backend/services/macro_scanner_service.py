@@ -200,28 +200,84 @@ class MacroScannerService:
                 # Get current global metrics and real-time coin data
                 global_data = await service.get_current_global_metrics()
                 
-                # Get current BTC and ETH data using real-time quotes endpoint
-                crypto_quotes = await service.get_cryptocurrency_quotes_latest('BTC,ETH')
-                btc_data = crypto_quotes.get('BTC', {})
-                eth_data = crypto_quotes.get('ETH', {})
+                # Step 2: Get current BTC and ETH data with robust validation and retry logic
+                max_retries = 3
+                retry_delay = 2.0
+                crypto_quotes = None
                 
-                # Create snapshot with real-time data (all from same timestamp)
+                for attempt in range(max_retries):
+                    try:
+                        logger.debug(f"Attempting to get cryptocurrency quotes (attempt {attempt + 1}/{max_retries})")
+                        crypto_quotes = await service.get_cryptocurrency_quotes_latest('BTC,ETH')
+                        
+                        # CRITICAL VALIDATION: Ensure we have BOTH BTC and ETH data
+                        btc_data = crypto_quotes.get('BTC', {})
+                        eth_data = crypto_quotes.get('ETH', {})
+                        
+                        # Validate BTC data
+                        btc_price = btc_data.get('price')
+                        btc_market_cap = btc_data.get('market_cap')
+                        
+                        # Validate ETH data
+                        eth_price = eth_data.get('price')
+                        eth_market_cap = eth_data.get('market_cap')
+                        
+                        # STRICT VALIDATION: All data must be present and valid
+                        if (not btc_price or btc_price <= 0 or
+                            not btc_market_cap or btc_market_cap <= 0 or
+                            not eth_price or eth_price <= 0 or
+                            not eth_market_cap or eth_market_cap <= 0):
+                            
+                            missing_fields = []
+                            if not btc_price or btc_price <= 0:
+                                missing_fields.append("BTC price")
+                            if not btc_market_cap or btc_market_cap <= 0:
+                                missing_fields.append("BTC market cap")
+                            if not eth_price or eth_price <= 0:
+                                missing_fields.append("ETH price")
+                            if not eth_market_cap or eth_market_cap <= 0:
+                                missing_fields.append("ETH market cap")
+                            
+                            logger.warning(f"Incomplete cryptocurrency data on attempt {attempt + 1}: missing {', '.join(missing_fields)}")
+                            
+                            if attempt < max_retries - 1:
+                                logger.info(f"Retrying in {retry_delay} seconds...")
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            else:
+                                raise ValueError(f"Failed to get complete cryptocurrency data after {max_retries} attempts. Missing: {', '.join(missing_fields)}")
+                        
+                        # SUCCESS: We have complete, valid data
+                        logger.info(f"✅ Successfully retrieved complete cryptocurrency data: BTC=${btc_price:,.2f}, ETH=${eth_price:,.2f}")
+                        break
+                        
+                    except Exception as e:
+                        logger.error(f"Error getting cryptocurrency quotes on attempt {attempt + 1}: {e}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Retrying in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            raise CoinMarketCapAPIError(f"Failed to get cryptocurrency quotes after {max_retries} attempts: {e}")
+                
+                # Create snapshot with validated real-time data (all from same timestamp)
                 snapshot = {
                     'timestamp': int(datetime.now(timezone.utc).timestamp()),
                     'total_market_cap': global_data['total_market_cap'],
-                    'btc_market_cap': btc_data.get('market_cap', 0),
-                    'eth_market_cap': eth_data.get('market_cap', 0),
-                    'btc_price': btc_data.get('price', 0),
+                    'btc_market_cap': btc_market_cap,
+                    'eth_market_cap': eth_market_cap,
+                    'btc_price': btc_price,
+                    'eth_price': eth_price,  # ETH Integration: VALIDATED ETH price
                     'btc_dominance': global_data['btc_dominance'],
                     'data_source': 'coinmarketcap_scanner_realtime',
                     'data_quality_score': 1.0,
                     'collection_latency_ms': int((time.time() - start_time) * 1000)
                 }
                 
-                # Step 2: Store market data
+                # Step 3: Store ONLY validated, complete market data
+                logger.info(f"Storing validated market data: BTC=${btc_price:,.2f}, ETH=${eth_price:,.2f}")
                 self.db.insert_market_data(snapshot)
                 
-                # Step 3: Check if we should trigger AI analysis
+                # Step 4: Check if we should trigger AI analysis
                 should_analyze = await self._should_trigger_analysis()
                 
                 scan_duration = int((time.time() - start_time) * 1000)
@@ -234,7 +290,7 @@ class MacroScannerService:
                     'triggered_analysis': should_analyze
                 }
                 
-                # Step 4: Trigger AI analysis if needed
+                # Step 5: Trigger AI analysis if needed
                 if should_analyze:
                     try:
                         # Import here to avoid circular imports
@@ -370,25 +426,81 @@ class MacroScannerService:
                 # Get current global metrics and real-time coin data
                 global_data = await service.get_current_global_metrics()
                 
-                # Get current BTC and ETH data using real-time quotes endpoint
-                crypto_quotes = await service.get_cryptocurrency_quotes_latest('BTC,ETH')
-                btc_data = crypto_quotes.get('BTC', {})
-                eth_data = crypto_quotes.get('ETH', {})
+                # Step 2: Get current BTC and ETH data with robust validation and retry logic
+                max_retries = 3
+                retry_delay = 2.0
+                crypto_quotes = None
                 
-                # Create snapshot with real-time data (all from same timestamp)
+                for attempt in range(max_retries):
+                    try:
+                        logger.debug(f"Manual scan: Attempting to get cryptocurrency quotes (attempt {attempt + 1}/{max_retries})")
+                        crypto_quotes = await service.get_cryptocurrency_quotes_latest('BTC,ETH')
+                        
+                        # CRITICAL VALIDATION: Ensure we have BOTH BTC and ETH data
+                        btc_data = crypto_quotes.get('BTC', {})
+                        eth_data = crypto_quotes.get('ETH', {})
+                        
+                        # Validate BTC data
+                        btc_price = btc_data.get('price')
+                        btc_market_cap = btc_data.get('market_cap')
+                        
+                        # Validate ETH data
+                        eth_price = eth_data.get('price')
+                        eth_market_cap = eth_data.get('market_cap')
+                        
+                        # STRICT VALIDATION: All data must be present and valid
+                        if (not btc_price or btc_price <= 0 or
+                            not btc_market_cap or btc_market_cap <= 0 or
+                            not eth_price or eth_price <= 0 or
+                            not eth_market_cap or eth_market_cap <= 0):
+                            
+                            missing_fields = []
+                            if not btc_price or btc_price <= 0:
+                                missing_fields.append("BTC price")
+                            if not btc_market_cap or btc_market_cap <= 0:
+                                missing_fields.append("BTC market cap")
+                            if not eth_price or eth_price <= 0:
+                                missing_fields.append("ETH price")
+                            if not eth_market_cap or eth_market_cap <= 0:
+                                missing_fields.append("ETH market cap")
+                            
+                            logger.warning(f"Manual scan: Incomplete cryptocurrency data on attempt {attempt + 1}: missing {', '.join(missing_fields)}")
+                            
+                            if attempt < max_retries - 1:
+                                logger.info(f"Manual scan: Retrying in {retry_delay} seconds...")
+                                await asyncio.sleep(retry_delay)
+                                continue
+                            else:
+                                raise ValueError(f"Manual scan: Failed to get complete cryptocurrency data after {max_retries} attempts. Missing: {', '.join(missing_fields)}")
+                        
+                        # SUCCESS: We have complete, valid data
+                        logger.info(f"✅ Manual scan: Successfully retrieved complete cryptocurrency data: BTC=${btc_price:,.2f}, ETH=${eth_price:,.2f}")
+                        break
+                        
+                    except Exception as e:
+                        logger.error(f"Manual scan: Error getting cryptocurrency quotes on attempt {attempt + 1}: {e}")
+                        if attempt < max_retries - 1:
+                            logger.info(f"Manual scan: Retrying in {retry_delay} seconds...")
+                            await asyncio.sleep(retry_delay)
+                        else:
+                            raise CoinMarketCapAPIError(f"Manual scan: Failed to get cryptocurrency quotes after {max_retries} attempts: {e}")
+                
+                # Create snapshot with validated real-time data (all from same timestamp)
                 snapshot = {
                     'timestamp': int(datetime.now(timezone.utc).timestamp()),
                     'total_market_cap': global_data['total_market_cap'],
-                    'btc_market_cap': btc_data.get('market_cap', 0),
-                    'eth_market_cap': eth_data.get('market_cap', 0),
-                    'btc_price': btc_data.get('price', 0),
+                    'btc_market_cap': btc_market_cap,
+                    'eth_market_cap': eth_market_cap,
+                    'btc_price': btc_price,
+                    'eth_price': eth_price,  # ETH Integration: VALIDATED ETH price
                     'btc_dominance': global_data['btc_dominance'],
                     'data_source': 'coinmarketcap_scanner_manual',
                     'data_quality_score': 1.0,
                     'collection_latency_ms': int((time.time() - start_time) * 1000)
                 }
                 
-                # Step 2: Store market data
+                # Step 3: Store ONLY validated, complete market data
+                logger.info(f"Manual scan: Storing validated market data: BTC=${btc_price:,.2f}, ETH=${eth_price:,.2f}")
                 self.db.insert_market_data(snapshot)
                 
                 scan_duration = int((time.time() - start_time) * 1000)
@@ -402,7 +514,7 @@ class MacroScannerService:
                     'manual_scan': True
                 }
                 
-                # Step 3: Force AI analysis for manual scans
+                # Step 4: Force AI analysis for manual scans
                 try:
                     # Import here to avoid circular imports
                     from .macro_ai_service import trigger_macro_analysis
