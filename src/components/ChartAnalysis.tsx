@@ -58,6 +58,7 @@ import {
 } from '../context/DataContext';
 import { analyzeChart, getAnalysisHistory, createAnalysisRequest, deleteAnalysis, deleteAnalysesBulk, getAnalysisDetails } from '../services/chartAnalysisService';
 import { createTradingRecommendationOverlay, getActiveRecommendationsForTimeframe, deactivateRecommendationsForTicker } from '../services/tradingRecommendationService';
+import { saveTradingRecommendation, fetchActiveTradingRecommendations } from '../services/persistentTradingRecommendationService';
 import { processAnalysisForTradeActions } from '../services/aiTradeIntegrationService';
 import { getActiveTradeOverlay } from '../services/activeTradeService';
 import { prepareContextSync, enhanceAnalysisRequest, validateContextResponse, createEnhancedContextPrompt } from '../services/contextSynchronizationService';
@@ -164,14 +165,37 @@ const ChartAnalysis: React.FC = () => {
     isAnalyzing,
     isLoadingHistory,
     error,
-    activeTradingRecommendations,
     showTradingOverlays
   } = state.chartAnalysisData;
 
-  // Fetch active trades when ticker or timeframe changes
+  // Local state for trading recommendations (fetched from backend)
+  const [activeTradingRecommendations, setActiveTradingRecommendations] = useState<Map<string, TradingRecommendationOverlay>>(new Map());
+
+  // Function to refresh trading recommendations from backend
+  const refreshTradingRecommendations = async () => {
+    if (selectedTicker && timeframe) {
+      try {
+        console.log(`🔄 [ChartAnalysis] Refreshing trading recommendations for ${selectedTicker} ${timeframe}`);
+        const recommendations = await fetchActiveTradingRecommendations(selectedTicker, timeframe);
+        
+        const recommendationMap = new Map<string, TradingRecommendationOverlay>();
+        recommendations.forEach(rec => {
+          recommendationMap.set(`${selectedTicker}-${rec.timeframe}`, rec);
+        });
+        
+        setActiveTradingRecommendations(recommendationMap);
+        console.log(`✅ [ChartAnalysis] Refreshed ${recommendations.length} trading recommendations`);
+      } catch (error) {
+        console.error(`❌ [ChartAnalysis] Failed to refresh trading recommendations:`, error);
+      }
+    }
+  };
+
+  // Fetch active trades and trading recommendations when ticker or timeframe changes
   useEffect(() => {
     if (selectedTicker) {
       fetchActiveTradesForTicker(selectedTicker);
+      refreshTradingRecommendations();
     }
   }, [selectedTicker, timeframe]);
 
@@ -304,10 +328,8 @@ const ChartAnalysis: React.FC = () => {
               tradeActionResult.ticker
             );
             
-            dispatch({
-              type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
-              payload: updatedRecommendations
-            });
+            // Refresh trading recommendations from backend after deactivation
+            await refreshTradingRecommendations();
             
             console.log(`🔒 [ChartAnalysis] Deactivated old recommendations for ${tradeActionResult.ticker}`);
           }
@@ -388,12 +410,8 @@ const ChartAnalysis: React.FC = () => {
         // Step 1: Clear all overlays immediately
         await clearAllChartOverlays();
         
-        // Step 2: Clear all trading recommendation overlays
-        const clearedRecommendations = new Map();
-        dispatch({
-          type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
-          payload: clearedRecommendations
-        });
+        // Step 2: Clear local trading recommendation state (backend data remains)
+        setActiveTradingRecommendations(new Map());
         
         // Step 3: Clear active trade overlays
         setActiveTradeOverlays(new Map());
@@ -416,17 +434,24 @@ const ChartAnalysis: React.FC = () => {
       if (result.recommendations && result.recommendations.action !== 'hold') {
         const tradingOverlay = createTradingRecommendationOverlay(result);
         if (tradingOverlay) {
-          // Store the trading recommendation in the context
-          const updatedRecommendations = new Map(activeTradingRecommendations);
-          updatedRecommendations.set(`${selectedTicker}-${timeframe}`, tradingOverlay);
-          
-          // Update the context with the new recommendations
-          dispatch({
-            type: ActionType.UPDATE_TRADING_RECOMMENDATIONS,
-            payload: updatedRecommendations
-          });
-          
-          console.log(`🎯 [ChartAnalysis] Created trading recommendation overlay for ${selectedTicker} ${timeframe}:`, tradingOverlay);
+          try {
+            // Save the trading recommendation to backend
+            await saveTradingRecommendation(selectedTicker, tradingOverlay);
+            
+            // Refresh local recommendations from backend
+            await refreshTradingRecommendations();
+            
+            console.log(`🎯 [ChartAnalysis] Saved trading recommendation to backend for ${selectedTicker} ${timeframe}:`, tradingOverlay);
+          } catch (error) {
+            console.error(`❌ [ChartAnalysis] Failed to save trading recommendation:`, error);
+            toast({
+              title: 'Warning',
+              description: 'Trading recommendation created but failed to save. It may not persist across reloads.',
+              status: 'warning',
+              duration: 5000,
+              isClosable: true,
+            });
+          }
         }
       }
       
@@ -1347,7 +1372,6 @@ const ChartAnalysis: React.FC = () => {
                   
                   {/* Trading Recommendation Panel */}
                   <TradingRecommendationPanel
-                    recommendations={activeTradingRecommendations}
                     currentTimeframe={timeframe}
                     ticker={selectedTicker}
                   />

@@ -1,0 +1,620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trade Viewer Portal</title>
+    <meta name="description" content="Real-time view of AI-generated trade recommendations and performance">
+    <meta name="robots" content="noindex, nofollow">
+
+    <!-- Favicon -->
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+
+    <!-- Preconnect to improve performance -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+
+    <style>
+        /* Loading screen styles */
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+            color: white;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 20px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            font-family: 'Inter', sans-serif;
+            font-size: 18px;
+            font-weight: 500;
+        }
+
+        .loading-subtitle {
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            opacity: 0.8;
+            margin-top: 10px;
+        }
+
+        /* Fade out animation */
+        .fade-out {
+            animation: fadeOut 0.5s ease-in-out forwards;
+        }
+
+        @keyframes fadeOut {
+            to {
+                opacity: 0;
+                visibility: hidden;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div class="loading-spinner"></div>
+        <div class="loading-text">AI Trade Viewer Portal</div>
+        <div class="loading-subtitle">Loading trade data...</div>
+    </div>
+
+    <!-- React App Root -->
+    <div id="root"></div>
+
+    <!-- Scripts -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@chakra-ui/react@2.8.0/dist/index.js"></script>
+    <script src="https://unpkg.com/framer-motion@10.12.12/dist/framer-motion.js"></script>
+
+    <!-- Main Application Script -->
+    <script type="module">
+        // Import necessary modules
+        const { ChakraProvider, extendTheme, useColorMode } = window.ChakraUI;
+        const { motion } = window.FramerMotion;
+
+        // Custom theme matching the main application
+        const theme = extendTheme({
+            config: {
+                initialColorMode: 'light',
+                useSystemColorMode: false,
+            },
+            colors: {
+                brand: {
+                    50: '#e6f7ff',
+                    100: '#b3e0ff',
+                    200: '#80caff',
+                    300: '#4db3ff',
+                    400: '#1a9dff',
+                    500: '#0080ff',
+                    600: '#0066cc',
+                    700: '#004d99',
+                    800: '#003366',
+                    900: '#001a33',
+                },
+                profit: {
+                    50: '#e6fff0',
+                    100: '#ccffe0',
+                    200: '#99ffc2',
+                    300: '#66ffa3',
+                    400: '#33ff85',
+                    500: '#00ff66',
+                    600: '#00cc52',
+                    700: '#00993d',
+                    800: '#006629',
+                    900: '#003314',
+                },
+                loss: {
+                    50: '#ffe6e6',
+                    100: '#ffcccc',
+                    200: '#ff9999',
+                    300: '#ff6666',
+                    400: '#ff3333',
+                    500: '#ff0000',
+                    600: '#cc0000',
+                    700: '#990000',
+                    800: '#660000',
+                    900: '#330000',
+                }
+            },
+            fonts: {
+                heading: '"Inter", sans-serif',
+                body: '"Inter", sans-serif',
+            }
+        });
+
+        // Simple data service for fetching trades
+        class TradeService {
+            static async fetchActiveTrades() {
+                try {
+                    const response = await fetch('http://localhost:5000/api/active-trades/all');
+                    if (!response.ok) {
+                        if (response.status === 404) return [];
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const data = await response.json();
+                    return data.active_trades || [];
+                } catch (error) {
+                    console.error('Error fetching active trades:', error);
+                    return [];
+                }
+            }
+
+            static async fetchTradeHistory() {
+                try {
+                    const response = await fetch('http://localhost:5000/api/active-trades/history-all');
+                    if (!response.ok) {
+                        if (response.status === 404) return [];
+                        throw new Error(`HTTP ${response.status}`);
+                    }
+                    const data = await response.json();
+                    return data.all_trades || [];
+                } catch (error) {
+                    console.error('Error fetching trade history:', error);
+                    return [];
+                }
+            }
+        }
+
+        // Convert production trade to display format
+        function convertProductionTrade(productionTrade) {
+            const entryTime = new Date(productionTrade.created_at).getTime();
+            const currentTime = Date.now();
+            const timeSinceRecommendation = currentTime - entryTime;
+
+            // Calculate P&L percentage for executed trades
+            let profitLossPercentage = 0;
+            if (productionTrade.status === 'profit_hit' || productionTrade.status === 'stop_hit') {
+                if (productionTrade.entry_price && productionTrade.close_price) {
+                    if (productionTrade.action === 'buy') {
+                        profitLossPercentage = ((productionTrade.close_price - productionTrade.entry_price) / productionTrade.entry_price) * 100;
+                    } else {
+                        profitLossPercentage = ((productionTrade.entry_price - productionTrade.close_price) / productionTrade.entry_price) * 100;
+                    }
+                }
+            }
+
+            return {
+                id: `backend-${productionTrade.id}`,
+                ticker: productionTrade.ticker,
+                timeframe: productionTrade.timeframe,
+                action: productionTrade.action,
+                entryPrice: productionTrade.entry_price,
+                targetPrice: productionTrade.target_price,
+                stopLoss: productionTrade.stop_loss,
+                status: productionTrade.status,
+                confidence: 1.0,
+                aiModel: 'production_system',
+                reasoning: `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
+                entryDate: entryTime,
+                profitLossPercentage: profitLossPercentage,
+                timeSinceRecommendation: timeSinceRecommendation
+            };
+        }
+
+        // Main App Component
+        const App = () => {
+            const [activeTrades, setActiveTrades] = React.useState([]);
+            const [tradeHistory, setTradeHistory] = React.useState([]);
+            const [loading, setLoading] = React.useState(true);
+            const [error, setError] = React.useState(null);
+            const [activeTab, setActiveTab] = React.useState(0);
+            const { colorMode } = useColorMode();
+
+            // Load data on mount
+            React.useEffect(() => {
+                loadData();
+            }, []);
+
+            const loadData = async () => {
+                try {
+                    setLoading(true);
+                    setError(null);
+
+                    const [active, history] = await Promise.all([
+                        TradeService.fetchActiveTrades(),
+                        TradeService.fetchTradeHistory()
+                    ]);
+
+                    setActiveTrades(active.map(convertProductionTrade));
+                    setTradeHistory(history.map(convertProductionTrade));
+
+                } catch (err) {
+                    setError('Failed to load trade data');
+                    console.error('Error loading data:', err);
+                } finally {
+                    setLoading(false);
+                    // Hide loading screen
+                    setTimeout(() => {
+                        const loadingScreen = document.getElementById('loading-screen');
+                        if (loadingScreen) {
+                            loadingScreen.classList.add('fade-out');
+                        }
+                    }, 1000);
+                }
+            };
+
+            const bgColor = colorMode === 'dark' ? 'gray.800' : 'gray.50';
+            const cardBg = colorMode === 'dark' ? 'gray.700' : 'white';
+
+            if (loading) {
+                return React.createElement('div', {
+                    style: {
+                        display: 'flex',
+                        justifyContent: 'center',
+                        alignItems: 'center',
+                        height: '100vh',
+                        fontFamily: 'Inter, sans-serif'
+                    }
+                }, 'Loading AI Trade Viewer...');
+            }
+
+            return React.createElement('div', {
+                style: {
+                    minHeight: '100vh',
+                    background: colorMode === 'dark' ? '#2d3748' : '#f7fafc',
+                    padding: '20px',
+                    fontFamily: 'Inter, sans-serif'
+                }
+            }, [
+                // Header
+                React.createElement('div', {
+                    key: 'header',
+                    style: {
+                        background: cardBg,
+                        padding: '24px',
+                        borderRadius: '12px',
+                        marginBottom: '24px',
+                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                        border: `1px solid ${colorMode === 'dark' ? '#4a5568' : '#e2e8f0'}`
+                    }
+                }, [
+                    React.createElement('h1', {
+                        style: {
+                            fontSize: '28px',
+                            fontWeight: 'bold',
+                            marginBottom: '8px',
+                            color: colorMode === 'dark' ? 'white' : '#2d3748'
+                        }
+                    }, 'AI Trade Viewer Portal'),
+                    React.createElement('p', {
+                        style: {
+                            color: colorMode === 'dark' ? '#a0aec0' : '#718096',
+                            fontSize: '16px'
+                        }
+                    }, 'Real-time view of AI-generated trade recommendations'),
+                    React.createElement('div', {
+                        key: 'stats',
+                        style: {
+                            display: 'flex',
+                            gap: '24px',
+                            marginTop: '16px'
+                        }
+                    }, [
+                        React.createElement('div', { key: 'active' }, [
+                            React.createElement('div', {
+                                style: { fontSize: '24px', fontWeight: 'bold', color: '#38a169' }
+                            }, activeTrades.length),
+                            React.createElement('div', {
+                                style: { fontSize: '14px', color: colorMode === 'dark' ? '#a0aec0' : '#718096' }
+                            }, 'Active Trades')
+                        ]),
+                        React.createElement('div', { key: 'history' }, [
+                            React.createElement('div', {
+                                style: { fontSize: '24px', fontWeight: 'bold', color: '#3182ce' }
+                            }, tradeHistory.length),
+                            React.createElement('div', {
+                                style: { fontSize: '14px', color: colorMode === 'dark' ? '#a0aec0' : '#718096' }
+                            }, 'Total Trades')
+                        ])
+                    ])
+                ]),
+
+                // Tab Navigation
+                React.createElement('div', {
+                    key: 'tabs',
+                    style: {
+                        background: cardBg,
+                        borderRadius: '12px',
+                        marginBottom: '24px',
+                        boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)',
+                        border: `1px solid ${colorMode === 'dark' ? '#4a5568' : '#e2e8f0'}`
+                    }
+                }, [
+                    React.createElement('div', {
+                        style: {
+                            display: 'flex',
+                            borderBottom: `1px solid ${colorMode === 'dark' ? '#4a5568' : '#e2e8f0'}`
+                        }
+                    }, [
+                        ['Active Trades', 'Trade History', 'Performance'].map((tabName, index) => {
+                            const isActive = activeTab === index;
+                            return React.createElement('button', {
+                                key: tabName,
+                                onClick: () => setActiveTab(index),
+                                style: {
+                                    padding: '16px 24px',
+                                    background: 'none',
+                                    border: 'none',
+                                    borderBottom: isActive ? '3px solid #3182ce' : 'none',
+                                    color: isActive ? '#3182ce' : (colorMode === 'dark' ? '#a0aec0' : '#718096'),
+                                    fontWeight: isActive ? '600' : 'normal',
+                                    cursor: 'pointer',
+                                    fontSize: '16px'
+                                }
+                            }, tabName);
+                        })
+                    ]),
+
+                    // Tab Content
+                    React.createElement('div', {
+                        key: 'content',
+                        style: { padding: '24px' }
+                    }, activeTab === 0 ? renderActiveTrades() : activeTab === 1 ? renderTradeHistory() : renderPerformance())
+                ])
+            ]);
+
+            function renderActiveTrades() {
+                if (activeTrades.length === 0) {
+                    return React.createElement('div', {
+                        style: {
+                            textAlign: 'center',
+                            padding: '48px',
+                            color: colorMode === 'dark' ? '#a0aec0' : '#718096'
+                        }
+                    }, [
+                        React.createElement('div', {
+                            style: { fontSize: '48px', marginBottom: '16px' }
+                        }, '📊'),
+                        React.createElement('div', {
+                            style: { fontSize: '18px', fontWeight: 'bold', marginBottom: '8px' }
+                        }, 'No Active Trades'),
+                        React.createElement('div', {
+                            style: { fontSize: '16px' }
+                        }, 'AI trade recommendations will appear here when generated.')
+                    ]);
+                }
+
+                return React.createElement('div', {
+                    style: {
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                        gap: '16px'
+                    }
+                }, activeTrades.map(trade => renderTradeCard(trade, true)));
+            }
+
+            function renderTradeHistory() {
+                if (tradeHistory.length === 0) {
+                    return React.createElement('div', {
+                        style: {
+                            textAlign: 'center',
+                            padding: '48px',
+                            color: colorMode === 'dark' ? '#a0aec0' : '#718096'
+                        }
+                    }, [
+                        React.createElement('div', {
+                            style: { fontSize: '48px', marginBottom: '16px' }
+                        }, '📈'),
+                        React.createElement('div', {
+                            style: { fontSize: '18px', fontWeight: 'bold', marginBottom: '8px' }
+                        }, 'No Trade History'),
+                        React.createElement('div', {
+                            style: { fontSize: '16px' }
+                        }, 'Historical trade data will appear here as trades are completed.')
+                    ]);
+                }
+
+                return React.createElement('div', {
+                    style: {
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))',
+                        gap: '16px'
+                    }
+                }, tradeHistory.map(trade => renderTradeCard(trade, false)));
+            }
+
+            function renderPerformance() {
+                const totalTrades = tradeHistory.length;
+                const profitableTrades = tradeHistory.filter(t => t.profitLossPercentage > 0).length;
+                const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
+                const totalReturn = tradeHistory.reduce((sum, t) => sum + t.profitLossPercentage, 0);
+
+                return React.createElement('div', {
+                    style: { display: 'grid', gap: '24px' }
+                }, [
+                    React.createElement('div', {
+                        key: 'stats',
+                        style: {
+                            display: 'grid',
+                            gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+                            gap: '16px'
+                        }
+                    }, [
+                        createStatCard('Total Trades', totalTrades, '#3182ce'),
+                        createStatCard('Win Rate', `${winRate.toFixed(1)}%`, winRate >= 50 ? '#38a169' : '#e53e3e'),
+                        createStatCard('Total Return', `${totalReturn.toFixed(2)}%`, totalReturn >= 0 ? '#38a169' : '#e53e3e'),
+                        createStatCard('Active Trades', activeTrades.length, '#805ad5')
+                    ])
+                ]);
+            }
+
+            function createStatCard(label, value, color) {
+                return React.createElement('div', {
+                    style: {
+                        background: cardBg,
+                        padding: '20px',
+                        borderRadius: '8px',
+                        textAlign: 'center',
+                        border: `1px solid ${colorMode === 'dark' ? '#4a5568' : '#e2e8f0'}`
+                    }
+                }, [
+                    React.createElement('div', {
+                        style: { fontSize: '32px', fontWeight: 'bold', color, marginBottom: '8px' }
+                    }, value),
+                    React.createElement('div', {
+                        style: { fontSize: '14px', color: colorMode === 'dark' ? '#a0aec0' : '#718096' }
+                    }, label)
+                ]);
+            }
+
+            function renderTradeCard(trade, isActive) {
+                const isBuy = trade.action === 'buy';
+                const timeAgo = formatTimeAgo(trade.timeSinceRecommendation);
+
+                return React.createElement('div', {
+                    key: trade.id,
+                    style: {
+                        background: cardBg,
+                        borderRadius: '8px',
+                        padding: '16px',
+                        border: `1px solid ${colorMode === 'dark' ? '#4a5568' : '#e2e8f0'}`,
+                        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.1)'
+                    }
+                }, [
+                    React.createElement('div', {
+                        style: {
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            marginBottom: '12px'
+                        }
+                    }, [
+                        React.createElement('div', {
+                            style: {
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '8px'
+                            }
+                        }, [
+                            React.createElement('span', {
+                                style: {
+                                    background: isBuy ? '#c6f6d5' : '#fed7d7',
+                                    color: isBuy ? '#22543d' : '#742a2a',
+                                    padding: '4px 8px',
+                                    borderRadius: '4px',
+                                    fontSize: '12px',
+                                    fontWeight: 'bold'
+                                }
+                            }, trade.action.toUpperCase()),
+                            React.createElement('span', {
+                                style: { fontWeight: 'bold', fontSize: '18px' }
+                            }, trade.ticker),
+                            React.createElement('span', {
+                                style: { fontSize: '14px', color: colorMode === 'dark' ? '#a0aec0' : '#718096' }
+                            }, trade.timeframe)
+                        ]),
+                        React.createElement('span', {
+                            style: {
+                                fontSize: '12px',
+                                color: colorMode === 'dark' ? '#a0aec0' : '#718096'
+                            }
+                        }, timeAgo)
+                    ]),
+
+                    React.createElement('div', {
+                        style: {
+                            display: 'grid',
+                            gridTemplateColumns: '1fr 1fr',
+                            gap: '8px',
+                            marginBottom: '12px',
+                            fontSize: '14px'
+                        }
+                    }, [
+                        React.createElement('div', {}, [
+                            React.createElement('div', {
+                                style: { color: colorMode === 'dark' ? '#a0aec0' : '#718096', marginBottom: '4px' }
+                            }, 'Entry Price'),
+                            React.createElement('div', { style: { fontWeight: 'bold' } }, `$${trade.entryPrice.toFixed(2)}`)
+                        ]),
+                        trade.targetPrice && React.createElement('div', {}, [
+                            React.createElement('div', {
+                                style: { color: colorMode === 'dark' ? '#a0aec0' : '#718096', marginBottom: '4px' }
+                            }, 'Target'),
+                            React.createElement('div', {
+                                style: { fontWeight: 'bold', color: '#38a169' }
+                            }, `$${trade.targetPrice.toFixed(2)}`)
+                        ]),
+                        trade.stopLoss && React.createElement('div', {}, [
+                            React.createElement('div', {
+                                style: { color: colorMode === 'dark' ? '#a0aec0' : '#718096', marginBottom: '4px' }
+                            }, 'Stop Loss'),
+                            React.createElement('div', {
+                                style: { fontWeight: 'bold', color: '#e53e3e' }
+                            }, `$${trade.stopLoss.toFixed(2)}`)
+                        ]),
+                        React.createElement('div', {}, [
+                            React.createElement('div', {
+                                style: { color: colorMode === 'dark' ? '#a0aec0' : '#718096', marginBottom: '4px' }
+                            }, 'Confidence'),
+                            React.createElement('div', {
+                                style: { fontWeight: 'bold', color: '#3182ce' }
+                            }, `${(trade.confidence * 100).toFixed(0)}%`)
+                        ])
+                    ]),
+
+                    trade.profitLossPercentage !== undefined && React.createElement('div', {
+                        style: {
+                            background: trade.profitLossPercentage >= 0 ? '#f0fff4' : '#fed7d7',
+                            padding: '8px',
+                            borderRadius: '4px',
+                            textAlign: 'center',
+                            color: trade.profitLossPercentage >= 0 ? '#22543d' : '#742a2a'
+                        }
+                    }, `P&L: ${trade.profitLossPercentage >= 0 ? '+' : ''}${trade.profitLossPercentage.toFixed(2)}%`),
+
+                    React.createElement('div', {
+                        style: {
+                            marginTop: '12px',
+                            fontSize: '13px',
+                            color: colorMode === 'dark' ? '#a0aec0' : '#718096',
+                            lineHeight: '1.4'
+                        }
+                    }, trade.reasoning.length > 100 ? `${trade.reasoning.substring(0, 100)}...` : trade.reasoning)
+                ]);
+            }
+        };
+
+        function formatTimeAgo(milliseconds) {
+            const seconds = Math.floor(milliseconds / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+
+            if (days > 0) return `${days}d ago`;
+            if (hours > 0) return `${hours}h ago`;
+            if (minutes > 0) return `${minutes}m ago`;
+            return `${seconds}s ago`;
+        }
+
+        // Render the app
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(
+            React.createElement(ChakraProvider, { theme: theme },
+                React.createElement(App)
+            )
+        );
+    </script>
+</body>
+</html>

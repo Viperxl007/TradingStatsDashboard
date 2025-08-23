@@ -435,9 +435,9 @@ class ActiveTradeService:
                 
                 # Get the most recent chart analysis timestamp for this ticker
                 cursor.execute('''
-                    SELECT timestamp FROM chart_analysis
+                    SELECT analysis_timestamp FROM chart_analyses
                     WHERE ticker = ?
-                    ORDER BY timestamp DESC
+                    ORDER BY analysis_timestamp DESC
                     LIMIT 1
                 ''', (ticker,))
                 
@@ -1337,7 +1337,7 @@ class ActiveTradeService:
                 cursor.execute('''
                     SELECT * FROM active_trades
                     WHERE ticker = ?
-                    AND status IN ('closed_profit', 'closed_loss', 'closed_user')
+                    AND status IN ('profit_hit', 'stop_hit', 'ai_closed', 'user_closed', 'closed_profit', 'closed_loss', 'closed_user')
                     AND updated_at >= ?
                     ORDER BY updated_at DESC
                 ''', (ticker.upper(), cutoff_time))

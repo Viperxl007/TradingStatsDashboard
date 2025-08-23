@@ -90,8 +90,7 @@ export enum ActionType {
   CAPTURE_CHART_ERROR = 'CAPTURE_CHART_ERROR',
   CLEAR_CHART_ANALYSIS_DATA = 'CLEAR_CHART_ANALYSIS_DATA',
   CLEAR_CHART_OVERLAYS = 'CLEAR_CHART_OVERLAYS',
-  UPDATE_CHART_ANALYSIS_SETTINGS = 'UPDATE_CHART_ANALYSIS_SETTINGS',
-  UPDATE_TRADING_RECOMMENDATIONS = 'UPDATE_TRADING_RECOMMENDATIONS'
+  UPDATE_CHART_ANALYSIS_SETTINGS = 'UPDATE_CHART_ANALYSIS_SETTINGS'
 }
 
 // Define action interfaces
@@ -363,11 +362,6 @@ interface UpdateChartAnalysisSettingsAction {
   payload: Partial<Pick<ChartAnalysisState, 'autoAnalysis' | 'analysisInterval'>>;
 }
 
-interface UpdateTradingRecommendationsAction {
-  type: ActionType.UPDATE_TRADING_RECOMMENDATIONS;
-  payload: Map<string, import('../types/chartAnalysis').TradingRecommendationOverlay>;
-}
-
 // Union of all action types
 type DataAction =
   | ImportDataStartAction
@@ -426,8 +420,7 @@ type DataAction =
   | CaptureChartErrorAction
   | ClearChartAnalysisDataAction
   | ClearChartOverlaysAction
-  | UpdateChartAnalysisSettingsAction
-  | UpdateTradingRecommendationsAction;
+  | UpdateChartAnalysisSettingsAction;
 
 // Initial state
 const initialState: DataState = {
@@ -533,7 +526,6 @@ const initialState: DataState = {
     selectedTicker: '',
     chartScreenshot: null,
     analysisContext: null,
-    activeTradingRecommendations: new Map(),
     isAnalyzing: false,
     isLoadingHistory: false,
     isCapturingChart: false,
@@ -1074,7 +1066,6 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
           currentAnalysis: null,
           chartScreenshot: null,
           analysisContext: null,
-          activeTradingRecommendations: new Map(),
           error: null
           // Keep selectedTicker, analysisHistory, and other settings intact
         }
@@ -1086,15 +1077,6 @@ const dataReducer = (state: DataState, action: DataAction): DataState => {
         chartAnalysisData: {
           ...state.chartAnalysisData,
           ...action.payload
-        }
-      };
-    
-    case ActionType.UPDATE_TRADING_RECOMMENDATIONS:
-      return {
-        ...state,
-        chartAnalysisData: {
-          ...state.chartAnalysisData,
-          activeTradingRecommendations: action.payload
         }
       };
     

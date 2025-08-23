@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trade Viewer Portal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; color: white; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { background: rgba(255, 255, 255, 0.1); border-radius: 12px; padding: 24px; margin-bottom: 24px; backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.2); }
+        .title { font-size: 2.5rem; font-weight: bold; margin-bottom: 8px; }
+        .subtitle { opacity: 0.8; font-size: 1.1rem; }
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px; margin-top: 20px; }
+        .stat-card { background: rgba(255, 255, 255, 0.1); padding: 16px; border-radius: 8px; text-align: center; border: 1px solid rgba(255, 255, 255, 0.2); }
+        .stat-number { font-size: 2rem; font-weight: bold; margin-bottom: 4px; }
+        .stat-label { opacity: 0.8; font-size: 0.9rem; }
+        .tabs { background: rgba(255, 255, 255, 0.1); border-radius: 12px; overflow: hidden; margin-bottom: 24px; border: 1px solid rgba(255, 255, 255, 0.2); }
+        .tab-buttons { display: flex; background: rgba(255, 255, 255, 0.05); border-bottom: 1px solid rgba(255, 255, 255, 0.2); }
+        .tab-button { flex: 1; padding: 16px; background: none; border: none; color: white; cursor: pointer; font-size: 1rem; font-weight: 500; transition: background 0.2s; }
+        .tab-button.active { background: rgba(255, 255, 255, 0.1); border-bottom: 3px solid #3182ce; }
+        .tab-button:hover { background: rgba(255, 255, 255, 0.05); }
+        .tab-content { padding: 24px; }
+        .trade-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+        .trade-card { background: rgba(255, 255, 255, 0.1); border-radius: 8px; padding: 16px; border: 1px solid rgba(255, 255, 255, 0.2); backdrop-filter: blur(10px); }
+        .trade-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .trade-ticker { font-size: 1.2rem; font-weight: bold; }
+        .trade-timeframe { opacity: 0.8; font-size: 0.9rem; }
+        .trade-action { padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
+        .trade-action.buy { background: #38a169; color: white; }
+        .trade-action.sell { background: #e53e3e; color: white; }
+        .trade-details { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 0.9rem; margin-bottom: 12px; }
+        .trade-detail { display: flex; justify-content: space-between; }
+        .trade-detail-label { opacity: 0.8; }
+        .trade-detail-value { font-weight: 500; }
+        .trade-pnl { padding: 8px; border-radius: 4px; text-align: center; font-weight: bold; }
+        .trade-pnl.profit { background: rgba(56, 161, 105, 0.3); color: #38a169; }
+        .trade-pnl.loss { background: rgba(229, 62, 62, 0.3); color: #e53e3e; }
+        .empty-state { text-align: center; padding: 48px; opacity: 0.8; }
+        .empty-icon { font-size: 3rem; margin-bottom: 16px; }
+        .loading { text-align: center; padding: 48px; font-size: 1.2rem; }
+        .error { background: rgba(229, 62, 62, 0.3); border: 1px solid rgba(229, 62, 62, 0.5); padding: 16px; border-radius: 8px; margin-bottom: 24px; }
+        @media (max-width: 768px) { .container { padding: 16px; } .title { font-size: 2rem; } .trade-grid { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">🤖 AI Trade Viewer Portal</h1>
+            <p class="subtitle">Real-time view of AI-generated trade recommendations</p>
+            <div class="stats">
+                <div class="stat-card"><div class="stat-number" id="active-count">0</div><div class="stat-label">Active Trades</div></div>
+                <div class="stat-card"><div class="stat-number" id="total-count">0</div><div class="stat-label">Total Trades</div></div>
+                <div class="stat-card"><div class="stat-number" id="win-rate">0%</div><div class="stat-label">Win Rate</div></div>
+                <div class="stat-card"><div class="stat-number" id="total-return">0%</div><div class="stat-label">Total Return</div></div>
+            </div>
+        </div>
+        <div class="error" id="error-message" style="display: none;">Failed to load trade data. Make sure your backend is running on port 5000</div>
+        <div class="tabs">
+            <div class="tab-buttons">
+                <button class="tab-button active" data-tab="0">Active Trades</button>
+                <button class="tab-button" data-tab="1">Trade History</button>
+                <button class="tab-button" data-tab="2">Performance</button>
+            </div>
+            <div class="tab-content">
+                <div id="loading" class="loading">Loading AI trade data...</div>
+                <div id="active-trades" style="display: none;"></div>
+                <div id="trade-history" style="display: none;"></div>
+                <div id="performance" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let activeTrades = [];
+        let tradeHistory = [];
+        let currentTab = 0;
+
+        // Tab switching
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const tabIndex = parseInt(button.dataset.tab);
+                switchTab(tabIndex);
+            });
+        });
+
+        function switchTab(tabIndex) {
+            currentTab = tabIndex;
+            document.querySelectorAll('.tab-button').forEach((btn, index) => {
+                btn.classList.toggle('active', index === tabIndex);
+            });
+            document.getElementById('loading').style.display = 'none';
+            document.getElementById('active-trades').style.display = tabIndex === 0 ? 'block' : 'none';
+            document.getElementById('trade-history').style.display = tabIndex === 1 ? 'block' : 'none';
+            document.getElementById('performance').style.display = tabIndex === 2 ? 'block' : 'none';
+            if (tabIndex === 0) renderActiveTrades();
+            else if (tabIndex === 1) renderTradeHistory();
+            else renderPerformance();
+        }
+
+        // Data loading - FIXED: Better URL parameter parsing
+        async function loadData() {
+            try {
+                document.getElementById('error-message').style.display = 'none';
+
+                // Get backend IP from URL parameters
+                let backendIP = 'localhost';
+
+                // Method 1: Try URL search params
+                try {
+                    const url = new URL(window.location.href);
+                    const backendParam = url.searchParams.get('backend');
+                    if (backendParam && backendParam !== 'undefined' && backendParam !== '') {
+                        backendIP = backendParam;
+                    }
+                } catch (e) {
+                    console.log('URL parsing failed, trying fallback methods');
+                }
+
+                // Method 2: Try window.location.search
+                if (backendIP === 'localhost') {
+                    try {
+                        const searchParams = new URLSearchParams(window.location.search);
+                        const backendParam = searchParams.get('backend');
+                        if (backendParam && backendParam !== 'undefined' && backendParam !== '') {
+                            backendIP = backendParam;
+                        }
+                    } catch (e) {
+                        console.log('Search params parsing failed');
+                    }
+                }
+
+                // Method 3: Manual parsing
+                if (backendIP === 'localhost') {
+                    try {
+                        const queryString = window.location.search.substring(1);
+                        const params = queryString.split('&');
+                        for (let param of params) {
+                            const [key, value] = param.split('=');
+                            if (key === 'backend' && value && value !== 'undefined' && value !== '') {
+                                backendIP = decodeURIComponent(value);
+                                break;
+                            }
+                        }
+                    } catch (e) {
+                        console.log('Manual parsing failed');
+                    }
+                }
+
+                console.log(`🔗 Connecting to backend: ${backendIP}:5000`);
+
+                const [activeResponse, historyResponse] = await Promise.all([
+                    fetch(`http://${backendIP}:5000/api/active-trades/all`),
+                    fetch(`http://${backendIP}:5000/api/active-trades/history-all`)
+                ]);
+
+                if (!activeResponse.ok || !historyResponse.ok) {
+                    throw new Error(`HTTP ${activeResponse.status} - ${historyResponse.status}`);
+                }
+
+                const activeData = await activeResponse.json();
+                const historyData = await historyResponse.json();
+
+                activeTrades = (activeData.active_trades || []).map(convertTrade);
+                tradeHistory = (historyData.all_trades || []).map(convertTrade);
+
+                updateStats();
+                switchTab(currentTab);
+
+            } catch (error) {
+                console.error('Error loading data:', error);
+                document.getElementById('error-message').style.display = 'block';
+                document.getElementById('error-message').textContent = `Failed to connect to backend at ${backendIP}:5000. Make sure your backend is running and accessible. Error: ${error.message}`;
+                document.getElementById('loading').textContent = 'Failed to load data - check console for details';
+            }
+        }
+
+        function convertTrade(trade) {
+            const entryTime = new Date(trade.created_at).getTime();
+            const currentTime = Date.now();
+            let profitLossPercentage = 0;
+
+            if (trade.status === 'profit_hit' || trade.status === 'stop_hit') {
+                if (trade.entry_price && trade.close_price) {
+                    if (trade.action === 'buy') {
+                        profitLossPercentage = ((trade.close_price - trade.entry_price) / trade.entry_price) * 100;
+                    } else {
+                        profitLossPercentage = ((trade.entry_price - trade.close_price) / trade.entry_price) * 100;
+                    }
+                }
+            }
+
+            return {
+                id: `backend-${trade.id}`,
+                ticker: trade.ticker,
+                timeframe: trade.timeframe,
+                action: trade.action,
+                entryPrice: trade.entry_price,
+                targetPrice: trade.target_price,
+                stopLoss: trade.stop_loss,
+                status: trade.status,
+                confidence: 1.0,
+                aiModel: 'production_system',
+                reasoning: `Production ${trade.action.toUpperCase()} trade from Chart Analysis`,
+                entryDate: entryTime,
+                profitLossPercentage: profitLossPercentage,
+                timeSinceRecommendation: currentTime - entryTime
+            };
+        }
+
+        function updateStats() {
+            const totalTrades = tradeHistory.length;
+            const profitableTrades = tradeHistory.filter(t => t.profitLossPercentage > 0).length;
+            const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
+            const totalReturn = tradeHistory.reduce((sum, t) => sum + t.profitLossPercentage, 0);
+
+            document.getElementById('active-count').textContent = activeTrades.length;
+            document.getElementById('total-count').textContent = totalTrades;
+            document.getElementById('win-rate').textContent = winRate.toFixed(1) + '%';
+            document.getElementById('total-return').textContent = totalReturn.toFixed(2) + '%';
+        }
+
+        function renderActiveTrades() {
+            const container = document.getElementById('active-trades');
+            if (activeTrades.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-icon">📊</div><div style="font-size: 1.2rem; font-weight: bold; margin-bottom: 8px;">No Active Trades</div><div>AI trade recommendations will appear here when generated.</div></div>';
+                return;
+            }
+            container.innerHTML = `<div class="trade-grid">${activeTrades.map(trade => renderTradeCard(trade, true)).join('')}</div>`;
+        }
+
+        function renderTradeHistory() {
+            const container = document.getElementById('trade-history');
+            if (tradeHistory.length === 0) {
+                container.innerHTML = '<div class="empty-state"><div class="empty-icon">📈</div><div style="font-size: 1.2rem; font-weight: bold; margin-bottom: 8px;">No Trade History</div><div>Historical trade data will appear here as trades are completed.</div></div>';
+                return;
+            }
+            container.innerHTML = `<div class="trade-grid">${tradeHistory.map(trade => renderTradeCard(trade, false)).join('')}</div>`;
+        }
+
+        function renderPerformance() {
+            const container = document.getElementById('performance');
+            const totalTrades = tradeHistory.length;
+            const profitableTrades = tradeHistory.filter(t => t.profitLossPercentage > 0).length;
+            const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
+            const totalReturn = tradeHistory.reduce((sum, t) => sum + t.profitLossPercentage, 0);
+
+            container.innerHTML = `
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+                    <div class="stat-card"><div class="stat-number">${totalTrades}</div><div class="stat-label">Total Trades</div></div>
+                    <div class="stat-card"><div class="stat-number">${winRate.toFixed(1)}%</div><div class="stat-label">Win Rate</div></div>
+                    <div class="stat-card"><div class="stat-number">${totalReturn.toFixed(2)}%</div><div class="stat-label">Total Return</div></div>
+                    <div class="stat-card"><div class="stat-number">${activeTrades.length}</div><div class="stat-label">Active Trades</div></div>
+                </div>
+            `;
+        }
+
+        function renderTradeCard(trade, isActive) {
+            const isBuy = trade.action === 'buy';
+            const timeAgo = formatTimeAgo(trade.timeSinceRecommendation);
+
+            return `
+                <div class="trade-card">
+                    <div class="trade-header">
+                        <div><div class="trade-ticker">${trade.ticker}</div><div class="trade-timeframe">${trade.timeframe}</div></div>
+                        <div class="trade-action ${isBuy ? 'buy' : 'sell'}">${trade.action.toUpperCase()}</div>
+                    </div>
+                    <div class="trade-details">
+                        <div class="trade-detail"><span class="trade-detail-label">Entry Price</span><span class="trade-detail-value">$${trade.entryPrice.toFixed(2)}</span></div>
+                        ${trade.targetPrice ? `<div class="trade-detail"><span class="trade-detail-label">Target</span><span class="trade-detail-value" style="color: #38a169;">$${trade.targetPrice.toFixed(2)}</span></div>` : ''}
+                        ${trade.stopLoss ? `<div class="trade-detail"><span class="trade-detail-label">Stop Loss</span><span class="trade-detail-value" style="color: #e53e3e;">$${trade.stopLoss.toFixed(2)}</span></div>` : ''}
+                        <div class="trade-detail"><span class="trade-detail-label">Confidence</span><span class="trade-detail-value" style="color: #3182ce;">${(trade.confidence * 100).toFixed(0)}%</span></div>
+                    </div>
+                    ${trade.profitLossPercentage !== undefined ? `<div class="trade-pnl ${trade.profitLossPercentage >= 0 ? 'profit' : 'loss'}">P&L: ${trade.profitLossPercentage >= 0 ? '+' : ''}${trade.profitLossPercentage.toFixed(2)}%</div>` : ''}
+                    <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 8px;">${timeAgo} • ${trade.aiModel}</div>
+                    <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 4px; line-height: 1.3;">${trade.reasoning.length > 80 ? trade.reasoning.substring(0, 80) + '...' : trade.reasoning}</div>
+                </div>
+            `;
+        }
+
+        function formatTimeAgo(milliseconds) {
+            const seconds = Math.floor(milliseconds / 1000);
+            const minutes = Math.floor(seconds / 60);
+            const hours = Math.floor(minutes / 60);
+            const days = Math.floor(hours / 24);
+            if (days > 0) return `${days}d ago`;
+            if (hours > 0) return `${hours}h ago`;
+            if (minutes > 0) return `${minutes}m ago`;
+            return `${seconds}s ago`;
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(loadData, 30000);
+
+        // Initial load
+        loadData();
+    </script>
+</body>
+</html>

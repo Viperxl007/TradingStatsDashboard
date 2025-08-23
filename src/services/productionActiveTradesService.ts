@@ -26,6 +26,7 @@ export interface ProductionActiveTrade {
   close_price?: number;
   close_reason?: string;
   realized_pnl?: number;
+  reasoning?: string;
 }
 
 export interface ProductionActiveTradesResponse {
@@ -162,7 +163,7 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
     entryPrice: productionTrade.entry_price,
     targetPrice: productionTrade.target_price,
     stopLoss: productionTrade.stop_loss,
-    reasoning: `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
+    reasoning: productionTrade.reasoning || `Production ${productionTrade.action.toUpperCase()} trade from Chart Analysis`,
     
     // Trade Execution - CRITICAL FIX: Only set actual entry data for executed trades
     status: mapProductionStatusToAIStatus(productionTrade.status),

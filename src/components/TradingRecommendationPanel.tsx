@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Box,
   VStack,
@@ -12,14 +12,17 @@ import {
   Icon,
   Flex,
   Divider,
-  Tooltip
+  Tooltip,
+  Spinner,
+  Alert,
+  AlertIcon
 } from '@chakra-ui/react';
 import { FiTarget, FiShield, FiTrendingUp, FiTrendingDown, FiClock } from 'react-icons/fi';
 import { TradingRecommendationOverlay as TradingRecommendationType } from '../types/chartAnalysis';
 import { formatRecommendationSummary, isRecommendationActive } from '../services/tradingRecommendationService';
+import { fetchActiveTradingRecommendations } from '../services/persistentTradingRecommendationService';
 
 interface TradingRecommendationPanelProps {
-  recommendations: Map<string, TradingRecommendationType>;
   currentTimeframe: string;
   ticker: string;
 }
@@ -31,18 +34,94 @@ interface TradingRecommendationPanelProps {
  * Shows entry, target, stop loss, and risk/reward information
  */
 const TradingRecommendationPanel: React.FC<TradingRecommendationPanelProps> = ({
-  recommendations,
   currentTimeframe,
   ticker
 }) => {
   const { colorMode } = useColorMode();
+  
+  // Local state for recommendations fetched from backend
+  const [recommendations, setRecommendations] = useState<TradingRecommendationType[]>([]);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch recommendations from backend when ticker or timeframe changes
+  useEffect(() => {
+    const loadRecommendations = async () => {
+      if (!ticker || !currentTimeframe) {
+        setRecommendations([]);
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
+      
+      try {
+        console.log(`🔍 [TradingRecommendationPanel] Fetching recommendations for ${ticker} ${currentTimeframe}`);
+        const data = await fetchActiveTradingRecommendations(ticker, currentTimeframe);
+        setRecommendations(data);
+        console.log(`✅ [TradingRecommendationPanel] Loaded ${data.length} recommendations`);
+      } catch (err) {
+        const errorMessage = err instanceof Error ? err.message : 'Failed to load recommendations';
+        console.error(`❌ [TradingRecommendationPanel] Error loading recommendations:`, err);
+        setError(errorMessage);
+        setRecommendations([]);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadRecommendations();
+  }, [ticker, currentTimeframe]);
 
   // Get the current recommendation for this ticker and timeframe
-  const currentRecommendation = recommendations.get(`${ticker}-${currentTimeframe}`);
+  const currentRecommendation = recommendations.find(rec =>
+    rec.timeframe === currentTimeframe && isRecommendationActive(rec)
+  );
 
-  // Check if the recommendation is still active
-  const isActive = currentRecommendation ? isRecommendationActive(currentRecommendation) : false;
+  // Check if we have an active recommendation
+  const isActive = !!currentRecommendation;
 
+  // Show loading state
+  if (isLoading) {
+    return (
+      <Card>
+        <CardHeader>
+          <HStack spacing={2}>
+            <Icon as={FiClock} color="blue.500" />
+            <Text fontSize="lg" fontWeight="semibold">Trading Recommendations</Text>
+          </HStack>
+        </CardHeader>
+        <CardBody>
+          <VStack spacing={4} align="center" py={4}>
+            <Spinner size="md" color="blue.500" />
+            <Text color="gray.500">Loading recommendations...</Text>
+          </VStack>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  // Show error state
+  if (error) {
+    return (
+      <Card>
+        <CardHeader>
+          <HStack spacing={2}>
+            <Icon as={FiShield} color="red.500" />
+            <Text fontSize="lg" fontWeight="semibold">Trading Recommendations</Text>
+          </HStack>
+        </CardHeader>
+        <CardBody>
+          <Alert status="error" borderRadius="md">
+            <AlertIcon />
+            <Text>Failed to load recommendations: {error}</Text>
+          </Alert>
+        </CardBody>
+      </Card>
+    );
+  }
+
+  // Show no recommendations state
   if (!currentRecommendation || !isActive) {
     return (
       <Card>

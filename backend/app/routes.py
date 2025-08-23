@@ -2094,17 +2094,39 @@ def get_all_active_trades():
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT ticker, timeframe, status, action, entry_price, target_price,
-                       stop_loss, current_price, unrealized_pnl, created_at, updated_at,
-                       close_time, close_price, close_reason, realized_pnl
-                FROM active_trades
-                WHERE status IN ('waiting', 'active')
-                ORDER BY updated_at DESC
+                SELECT at.ticker, at.timeframe, at.status, at.action, at.entry_price, at.target_price,
+                       at.stop_loss, at.current_price, at.unrealized_pnl, at.created_at, at.updated_at,
+                       at.close_time, at.close_price, at.close_reason, at.realized_pnl,
+                       ca.analysis_data
+                FROM active_trades at
+                LEFT JOIN chart_analyses ca ON at.analysis_id = ca.id
+                WHERE at.status IN ('waiting', 'active')
+                ORDER BY at.updated_at DESC
             ''')
             
             active_trades = []
             for row in cursor.fetchall():
-                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
+                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl, analysis_data = row
+                
+                # Extract AI reasoning from chart analysis data
+                reasoning = None
+                if analysis_data:
+                    try:
+                        import json
+                        parsed_analysis = json.loads(analysis_data)
+                        # Extract reasoning from the chart analysis - this is where the real AI reasoning is stored
+                        reasoning = (parsed_analysis.get('recommendations', {}).get('reasoning') or
+                                   parsed_analysis.get('analysis', {}).get('reasoning') or
+                                   parsed_analysis.get('reasoning') or
+                                   parsed_analysis.get('ai_reasoning') or
+                                   parsed_analysis.get('recommendation_reasoning'))
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        logger.warning(f"Failed to parse analysis data for {ticker}")
+                
+                # Fallback reasoning if none found
+                if not reasoning:
+                    reasoning = f"Production {action.upper()} trade from Chart Analysis"
+                
                 active_trades.append({
                     'ticker': ticker,
                     'timeframe': timeframe,
@@ -2120,7 +2142,8 @@ def get_all_active_trades():
                     'close_time': close_time,
                     'close_price': close_price,
                     'close_reason': close_reason,
-                    'realized_pnl': realized_pnl
+                    'realized_pnl': realized_pnl,
+                    'reasoning': reasoning
                 })
         
         return jsonify({
@@ -2171,6 +2194,250 @@ def delete_active_trade_by_id(trade_id):
             
     except Exception as e:
         logger.error(f"Error deleting trade {trade_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+# Trading Recommendations API Endpoints
+@api_bp.route('/trading-recommendations', methods=['POST'])
+def create_trading_recommendation():
+    """
+    Create a new trading recommendation
+    
+    Expected JSON payload:
+    {
+        "id": "recommendation-123",
+        "ticker": "BTCUSD",
+        "timeframe": "1h",
+        "timestamp": 1640995200,
+        "action": "buy",
+        "entryPrice": 50000,
+        "targetPrice": 55000,
+        "stopLoss": 48000,
+        "riskReward": 2.5,
+        "reasoning": "Strong bullish setup",
+        "confidence": 0.85,
+        "analysisId": "analysis-456"
+    }
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        # Validate required fields
+        required_fields = ['id', 'ticker', 'timeframe', 'timestamp', 'action']
+        for field in required_fields:
+            if field not in data:
+                return jsonify({"error": f"Missing required field: {field}"}), 400
+        
+        # Save the recommendation
+        result = trading_recommendation_service.save_trading_recommendation(data)
+        
+        return jsonify({
+            "success": True,
+            "recommendation": result,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error creating trading recommendation: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/<ticker>', methods=['GET'])
+def get_trading_recommendations(ticker):
+    """
+    Get trading recommendations for a specific ticker
+    
+    Query parameters:
+    - timeframe: Optional timeframe filter
+    - active_only: If true, only return active recommendations (default: true)
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        timeframe = request.args.get('timeframe')
+        active_only = request.args.get('active_only', 'true').lower() == 'true'
+        
+        if active_only:
+            recommendations = trading_recommendation_service.get_active_recommendations(ticker, timeframe)
+        else:
+            recommendations = trading_recommendation_service.get_recommendations_history(ticker)
+            if timeframe:
+                recommendations = [r for r in recommendations if r['timeframe'] == timeframe]
+        
+        return jsonify({
+            "success": True,
+            "recommendations": recommendations,
+            "count": len(recommendations),
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting trading recommendations for {ticker}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/<ticker>/<timeframe>/active', methods=['GET'])
+def get_active_recommendations_for_timeframe(ticker, timeframe):
+    """
+    Get active trading recommendations for a specific ticker and timeframe
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        recommendations = trading_recommendation_service.get_active_recommendations(ticker, timeframe)
+        
+        return jsonify({
+            "success": True,
+            "recommendations": recommendations,
+            "count": len(recommendations),
+            "ticker": ticker,
+            "timeframe": timeframe,
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error getting active recommendations for {ticker} {timeframe}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/id/<recommendation_id>', methods=['GET'])
+def get_trading_recommendation_by_id(recommendation_id):
+    """
+    Get a specific trading recommendation by ID
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        recommendation = trading_recommendation_service.get_recommendation_by_id(recommendation_id)
+        
+        if recommendation:
+            return jsonify({
+                "success": True,
+                "recommendation": recommendation,
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": "Recommendation not found",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error getting recommendation {recommendation_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/id/<recommendation_id>', methods=['PUT'])
+def update_trading_recommendation(recommendation_id):
+    """
+    Update a trading recommendation status
+    
+    Expected JSON payload:
+    {
+        "isActive": false,
+        "status": "deactivated"  // optional
+    }
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        is_active = data.get('isActive')
+        status = data.get('status')
+        
+        if is_active is None:
+            return jsonify({"error": "isActive field is required"}), 400
+        
+        success = trading_recommendation_service.update_recommendation_status(
+            recommendation_id, is_active, status
+        )
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Recommendation {recommendation_id} updated successfully",
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": "Recommendation not found or could not be updated",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error updating recommendation {recommendation_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/id/<recommendation_id>', methods=['DELETE'])
+def deactivate_trading_recommendation(recommendation_id):
+    """
+    Deactivate a trading recommendation
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        success = trading_recommendation_service.deactivate_recommendation(recommendation_id)
+        
+        if success:
+            return jsonify({
+                "success": True,
+                "message": f"Recommendation {recommendation_id} deactivated successfully",
+                "timestamp": datetime.now().timestamp()
+            })
+        else:
+            return jsonify({
+                "error": "Recommendation not found or could not be deactivated",
+                "timestamp": datetime.now().timestamp()
+            }), 404
+        
+    except Exception as e:
+        logger.error(f"Error deactivating recommendation {recommendation_id}: {str(e)}")
+        return jsonify({
+            "error": str(e),
+            "timestamp": datetime.now().timestamp()
+        }), 500
+
+@api_bp.route('/trading-recommendations/cleanup/expired', methods=['DELETE'])
+def cleanup_expired_recommendations():
+    """
+    Clean up expired trading recommendations
+    """
+    try:
+        from services.trading_recommendation_service import trading_recommendation_service
+        
+        expired_count = trading_recommendation_service.cleanup_expired_recommendations()
+        
+        return jsonify({
+            "success": True,
+            "expired_count": expired_count,
+            "message": f"Cleaned up {expired_count} expired recommendations",
+            "timestamp": datetime.now().timestamp()
+        })
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up expired recommendations: {str(e)}")
         return jsonify({
             "error": str(e),
             "timestamp": datetime.now().timestamp()
