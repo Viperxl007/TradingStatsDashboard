@@ -245,9 +245,6 @@ export interface ChartAnalysisState {
   // Analysis context
   analysisContext: AnalysisContext | null;
   
-  // Active trading recommendations by timeframe (NEW)
-  activeTradingRecommendations: Map<string, TradingRecommendationOverlay>;
-  
   // UI State
   isAnalyzing: boolean;
   isLoadingHistory: boolean;

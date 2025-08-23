@@ -13,7 +13,7 @@ from app import create_app
 from app.rate_limiter import update_rate_limiter_config
 
 # Check for required packages
-required_packages = ['flask', 'flask_cors', 'yfinance', 'numpy', 'scipy', 'finance_calendars', 'pandas']
+required_packages = ['flask', 'flask_cors', 'yfinance', 'numpy', 'scipy', 'finance_calendars', 'pandas', 'aiohttp']
 missing_packages = []
 
 for package in required_packages:

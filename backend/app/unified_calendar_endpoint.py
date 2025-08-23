@@ -35,6 +35,114 @@ def convert_for_json(obj):
 # Create blueprint for unified calendar endpoints
 unified_calendar_bp = Blueprint('unified_calendar', __name__)
 
+def _perform_unified_calendar_analysis(ticker, current_price, earnings_date):
+    """
+    Core unified calendar analysis logic extracted from the route handler.
+    This function performs the actual analysis without Flask request context.
+    
+    Args:
+        ticker: Stock ticker symbol
+        current_price: Current stock price
+        earnings_date: Earnings date string (YYYY-MM-DD)
+        
+    Returns:
+        Dict containing analysis results
+        
+    Raises:
+        Exception: If analysis fails
+    """
+    logger.info(f"🎯 Starting unified calendar analysis for {ticker} at ${current_price} with earnings {earnings_date}")
+    
+    # Create unified strike selector
+    try:
+        strike_selector = create_strike_selector(ticker, current_price)
+    except Exception as e:
+        logger.error(f"Failed to create strike selector for {ticker}: {str(e)}")
+        raise Exception(f'Failed to initialize options data for {ticker}: {str(e)}')
+    
+    # Find optimal calendar spread strikes using unified logic
+    try:
+        strike_info = strike_selector.find_calendar_spread_strikes(earnings_date)
+    except StrikeSelectionError as e:
+        logger.error(f"Strike selection failed for {ticker}: {str(e)}")
+        raise Exception(f'Strike selection failed: {str(e)}')
+    
+    front_exp = strike_info['front_expiration']
+    back_exp = strike_info['back_expiration']
+    strike = strike_info['strike']
+    option_type = strike_info['option_type']
+    validation_info = strike_info['validation_info']
+    
+    logger.info(f"✅ Strike selection successful for {ticker}: ${strike} {option_type}, {front_exp} -> {back_exp}")
+    
+    # Calculate spread cost using the selected strikes
+    try:
+        spread_cost_result = calculate_spread_cost_unified(
+            strike_selector, front_exp, back_exp, strike, option_type
+        )
+    except Exception as e:
+        logger.error(f"Spread cost calculation failed for {ticker}: {str(e)}")
+        raise Exception(f'Spread cost calculation failed: {str(e)}')
+    
+    # Calculate liquidity score using the same strikes
+    try:
+        liquidity_result = calculate_liquidity_score_unified(
+            strike_selector, front_exp, back_exp, strike, option_type, current_price
+        )
+    except Exception as e:
+        logger.error(f"Liquidity calculation failed for {ticker}: {str(e)}")
+        # For CCEP and other problematic tickers, provide a fallback liquidity score
+        logger.warning(f"Using fallback liquidity calculation for {ticker}")
+        liquidity_result = {
+            'liquidity_score': 5.0,  # Reasonable fallback score
+            'liquidity_details': {
+                'front_liquidity': {'score': 5.0, 'has_zero_bid': False, 'spread_dollars': 0.1},
+                'back_liquidity': {'score': 5.0, 'has_zero_bid': False, 'spread_dollars': 0.1},
+                'combined_calculation': 'Fallback calculation due to data issues',
+                'has_zero_bids': False,
+                'spread_impact': 0.1,
+                'zero_bid_penalty_applied': False,
+                'fallback_used': True
+            }
+        }
+    
+    # Combine results - include liquidity_details for backward compatibility
+    result = {
+        'success': True,
+        'ticker': ticker,
+        'current_price': float(current_price),
+        'earnings_date': earnings_date,
+        
+        # Strike selection info
+        'front_expiration': front_exp,
+        'back_expiration': back_exp,
+        'strike': float(strike),
+        'option_type': option_type,
+        
+        # Spread cost results
+        'spread_cost': float(spread_cost_result['spread_cost']),
+        
+        # Liquidity results
+        'liquidity_score': float(liquidity_result['liquidity_score']),
+        'liquidity_details': liquidity_result['liquidity_details'],
+        
+        # Combined analysis
+        'analysis_timestamp': datetime.now().isoformat(),
+        'data_quality': {
+            'strike_distance_pct': float(validation_info['distance_from_atm_pct']),
+            'common_strikes_available': int(validation_info['common_strikes_count']),
+            'both_legs_validated': bool(validation_info['front_validated']) and bool(validation_info['back_validated'])
+        }
+    }
+    
+    logger.info(f"🎉 Unified calendar analysis completed for {ticker}:")
+    logger.info(f"   Spread Cost: ${spread_cost_result['spread_cost']:.2f}")
+    logger.info(f"   Liquidity Score: {liquidity_result['liquidity_score']:.2f}")
+    logger.info(f"   Strike: ${strike} {option_type}")
+    
+    return result
+
+
 @unified_calendar_bp.route('/api/calendar-analysis/<ticker>', methods=['POST'])
 def unified_calendar_analysis(ticker):
     """
@@ -53,94 +161,11 @@ def unified_calendar_analysis(ticker):
         if not current_price or not earnings_date:
             return jsonify({'error': 'current_price and earnings_date are required'}), 400
         
-        logger.info(f"🎯 Starting unified calendar analysis for {ticker} at ${current_price} with earnings {earnings_date}")
-        
-        # Create unified strike selector
+        # Perform the core analysis using the extracted function
         try:
-            strike_selector = create_strike_selector(ticker, current_price)
+            result = _perform_unified_calendar_analysis(ticker, current_price, earnings_date)
         except Exception as e:
-            logger.error(f"Failed to create strike selector for {ticker}: {str(e)}")
-            return jsonify({'error': f'Failed to initialize options data for {ticker}: {str(e)}'}), 404
-        
-        # Find optimal calendar spread strikes using unified logic
-        try:
-            strike_info = strike_selector.find_calendar_spread_strikes(earnings_date)
-        except StrikeSelectionError as e:
-            logger.error(f"Strike selection failed for {ticker}: {str(e)}")
-            return jsonify({'error': f'Strike selection failed: {str(e)}'}), 404
-        
-        front_exp = strike_info['front_expiration']
-        back_exp = strike_info['back_expiration']
-        strike = strike_info['strike']
-        option_type = strike_info['option_type']
-        validation_info = strike_info['validation_info']
-        
-        logger.info(f"✅ Strike selection successful for {ticker}: ${strike} {option_type}, {front_exp} -> {back_exp}")
-        
-        # Calculate spread cost using the selected strikes
-        try:
-            spread_cost_result = calculate_spread_cost_unified(
-                strike_selector, front_exp, back_exp, strike, option_type
-            )
-        except Exception as e:
-            logger.error(f"Spread cost calculation failed for {ticker}: {str(e)}")
-            return jsonify({'error': f'Spread cost calculation failed: {str(e)}'}), 500
-        
-        # Calculate liquidity score using the same strikes
-        try:
-            liquidity_result = calculate_liquidity_score_unified(
-                strike_selector, front_exp, back_exp, strike, option_type, current_price
-            )
-        except Exception as e:
-            logger.error(f"Liquidity calculation failed for {ticker}: {str(e)}")
-            # For CCEP and other problematic tickers, provide a fallback liquidity score
-            logger.warning(f"Using fallback liquidity calculation for {ticker}")
-            liquidity_result = {
-                'liquidity_score': 5.0,  # Reasonable fallback score
-                'liquidity_details': {
-                    'front_liquidity': {'score': 5.0, 'has_zero_bid': False, 'spread_dollars': 0.1},
-                    'back_liquidity': {'score': 5.0, 'has_zero_bid': False, 'spread_dollars': 0.1},
-                    'combined_calculation': 'Fallback calculation due to data issues',
-                    'has_zero_bids': False,
-                    'spread_impact': 0.1,
-                    'zero_bid_penalty_applied': False,
-                    'fallback_used': True
-                }
-            }
-        
-        # Combine results - include liquidity_details for backward compatibility
-        result = {
-            'success': True,
-            'ticker': ticker,
-            'current_price': float(current_price),
-            'earnings_date': earnings_date,
-            
-            # Strike selection info
-            'front_expiration': front_exp,
-            'back_expiration': back_exp,
-            'strike': float(strike),
-            'option_type': option_type,
-            
-            # Spread cost results
-            'spread_cost': float(spread_cost_result['spread_cost']),
-            
-            # Liquidity results
-            'liquidity_score': float(liquidity_result['liquidity_score']),
-            'liquidity_details': liquidity_result['liquidity_details'],
-            
-            # Combined analysis
-            'analysis_timestamp': datetime.now().isoformat(),
-            'data_quality': {
-                'strike_distance_pct': float(validation_info['distance_from_atm_pct']),
-                'common_strikes_available': int(validation_info['common_strikes_count']),
-                'both_legs_validated': bool(validation_info['front_validated']) and bool(validation_info['back_validated'])
-            }
-        }
-        
-        logger.info(f"🎉 Unified calendar analysis completed for {ticker}:")
-        logger.info(f"   Spread Cost: ${spread_cost_result['spread_cost']:.2f}")
-        logger.info(f"   Liquidity Score: {liquidity_result['liquidity_score']:.2f}")
-        logger.info(f"   Strike: ${strike} {option_type}")
+            return jsonify({'error': str(e)}), 500
         
         # Try to serialize the result and handle any remaining JSON issues
         try:
@@ -155,18 +180,14 @@ def unified_calendar_analysis(ticker):
                 'ticker': ticker,
                 'current_price': float(current_price),
                 'earnings_date': earnings_date,
-                'front_expiration': front_exp,
-                'back_expiration': back_exp,
-                'strike': float(strike),
-                'option_type': option_type,
-                'spread_cost': float(spread_cost_result['spread_cost']),
-                'liquidity_score': float(liquidity_result['liquidity_score']),
+                'front_expiration': result.get('front_expiration', ''),
+                'back_expiration': result.get('back_expiration', ''),
+                'strike': float(result.get('strike', 0)),
+                'option_type': result.get('option_type', ''),
+                'spread_cost': float(result.get('spread_cost', 0)),
+                'liquidity_score': float(result.get('liquidity_score', 0)),
                 'analysis_timestamp': datetime.now().isoformat(),
-                'data_quality': {
-                    'strike_distance_pct': float(validation_info.get('distance_from_atm_pct', 0)),
-                    'common_strikes_available': int(validation_info.get('common_strikes_count', 0)),
-                    'both_legs_validated': bool(validation_info.get('front_validated', False)) and bool(validation_info.get('back_validated', False))
-                },
+                'data_quality': result.get('data_quality', {}),
                 'warning': 'Some detailed data omitted due to serialization issues'
             }
             
@@ -366,30 +387,39 @@ def calculate_liquidity_score_unified(strike_selector, front_exp, back_exp, stri
         raise
 
 
-# Backward compatibility endpoints that redirect to unified endpoint
+# Backward compatibility endpoints that use the core analysis function
 @unified_calendar_bp.route('/api/spread-cost/calendar/<ticker>', methods=['POST'])
 def spread_cost_compatibility(ticker):
     """
     Backward compatibility endpoint for spread cost calculation.
-    Redirects to unified endpoint and returns only spread cost data.
+    Uses the core unified analysis function and returns only spread cost data.
     """
     try:
-        # Call unified endpoint
-        unified_result = unified_calendar_analysis(ticker)
+        # Validate request
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
         
-        if unified_result[1] != 200:  # If error occurred
-            return unified_result
+        data = request.get_json()
+        current_price = data.get('current_price')
+        earnings_date = data.get('earnings_date')
         
-        data = unified_result[0].get_json()
+        if not current_price or not earnings_date:
+            return jsonify({'error': 'current_price and earnings_date are required'}), 400
+        
+        # Use the core analysis function directly (no recursion)
+        try:
+            result = _perform_unified_calendar_analysis(ticker, current_price, earnings_date)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
         
         # Return only spread cost related data for backward compatibility
         return jsonify({
-            'spread_cost': data['spread_cost'],
-            'front_expiration': data['front_expiration'],
-            'back_expiration': data['back_expiration'],
-            'strike': data['strike'],
-            'option_type': data['option_type'],
-            'ticker': data['ticker']
+            'spread_cost': result['spread_cost'],
+            'front_expiration': result['front_expiration'],
+            'back_expiration': result['back_expiration'],
+            'strike': result['strike'],
+            'option_type': result['option_type'],
+            'ticker': result['ticker']
         }), 200
         
     except Exception as e:
@@ -401,31 +431,40 @@ def spread_cost_compatibility(ticker):
 def liquidity_compatibility(ticker):
     """
     Backward compatibility endpoint for liquidity calculation.
-    Redirects to unified endpoint and returns only liquidity data.
+    Uses the core unified analysis function and returns only liquidity data.
     """
     try:
-        # Call unified endpoint
-        unified_result = unified_calendar_analysis(ticker)
+        # Validate request
+        if not request.is_json:
+            return jsonify({'error': 'Request must be JSON'}), 400
         
-        if unified_result[1] != 200:  # If error occurred
-            return unified_result
+        data = request.get_json()
+        current_price = data.get('current_price')
+        earnings_date = data.get('earnings_date')
         
-        data = unified_result[0].get_json()
+        if not current_price or not earnings_date:
+            return jsonify({'error': 'current_price and earnings_date are required'}), 400
+        
+        # Use the core analysis function directly (no recursion)
+        try:
+            result = _perform_unified_calendar_analysis(ticker, current_price, earnings_date)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 500
         
         # Check if liquidity_details exists
-        if 'liquidity_details' not in data:
-            logger.error(f"liquidity_details missing from unified response for {ticker}. Available keys: {list(data.keys())}")
+        if 'liquidity_details' not in result:
+            logger.error(f"liquidity_details missing from unified response for {ticker}. Available keys: {list(result.keys())}")
             return jsonify({'error': 'liquidity_details missing from response'}), 500
         
-        liquidity_details = data['liquidity_details']
+        liquidity_details = result['liquidity_details']
         
         # Return only liquidity related data for backward compatibility
         return jsonify({
-            'liquidity_score': data['liquidity_score'],
-            'front_expiration': data['front_expiration'],
-            'back_expiration': data['back_expiration'],
-            'strike': data['strike'],
-            'option_type': data['option_type'],
+            'liquidity_score': result['liquidity_score'],
+            'front_expiration': result['front_expiration'],
+            'back_expiration': result['back_expiration'],
+            'strike': result['strike'],
+            'option_type': result['option_type'],
             'front_liquidity': liquidity_details.get('front_liquidity', {}),
             'back_liquidity': liquidity_details.get('back_liquidity', {}),
             'spread_impact': liquidity_details.get('spread_impact', 0),

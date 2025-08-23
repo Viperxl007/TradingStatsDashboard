@@ -8,7 +8,7 @@ and provides comprehensive trade status information to the AI.
 
 import logging
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, Optional, List, Tuple
 import sqlite3
 import os
@@ -84,15 +84,20 @@ class ActiveTradeService:
                 logger.debug(f"🛡️ Trade {trade['id']} created {time_since_creation:.1f} minutes ago - skipping historical check (grace period)")
                 return None
             
-            # CRITICAL: For ACTIVE trades, use trigger hit time as the baseline, not last analysis time
-            # For WAITING trades, this method should not be called, but if it is, use creation time
-            if trade['status'] == TradeStatus.ACTIVE.value and trade.get('trigger_hit_time'):
-                baseline_time = self._safe_parse_datetime(trade['trigger_hit_time'])
-                baseline_description = "trigger hit time"
-            else:
-                # Fallback to creation time for safety
-                baseline_time = created_time
-                baseline_description = "trade creation time"
+            # CRITICAL FIX: Use last chart analysis time as baseline for ALL trades
+            # This ensures we check ALL price movement since the last AI chart read
+            baseline_time = self._get_last_chart_analysis_time(ticker)
+            baseline_description = "last chart analysis time"
+            
+            # Fallback logic if no chart analysis time found
+            if not baseline_time:
+                logger.warning(f"No chart analysis time found for {ticker}, using fallback logic")
+                if trade['status'] == TradeStatus.ACTIVE.value and trade.get('trigger_hit_time'):
+                    baseline_time = self._safe_parse_datetime(trade['trigger_hit_time'])
+                    baseline_description = "trigger hit time (fallback)"
+                else:
+                    baseline_time = created_time
+                    baseline_description = "trade creation time (fallback)"
             
             if not baseline_time:
                 logger.debug(f"No valid baseline time found for trade {trade['id']}, skipping historical check")
@@ -430,9 +435,9 @@ class ActiveTradeService:
                 
                 # Get the most recent chart analysis timestamp for this ticker
                 cursor.execute('''
-                    SELECT timestamp FROM chart_analysis
+                    SELECT analysis_timestamp FROM chart_analyses
                     WHERE ticker = ?
-                    ORDER BY timestamp DESC
+                    ORDER BY analysis_timestamp DESC
                     LIMIT 1
                 ''', (ticker,))
                 
@@ -767,8 +772,71 @@ class ActiveTradeService:
                     existing_trade = cursor.fetchone()
                     if existing_trade:
                         existing_id, existing_status = existing_trade
-                        logger.info(f"🔄 Existing {existing_status} trade found for {ticker} (ID: {existing_id}). Returning existing trade instead of creating duplicate.")
-                        return existing_id
+                        
+                        # CRITICAL FIX: Handle trade modifications properly
+                        # When AI recommends different parameters, we need to either:
+                        # 1. UPDATE existing trade with new parameters, OR
+                        # 2. DELETE old trade and create new one
+                        
+                        # Get existing trade details for comparison
+                        cursor.execute('SELECT entry_price, target_price, stop_loss FROM active_trades WHERE id = ?', (existing_id,))
+                        existing_details = cursor.fetchone()
+                        existing_entry, existing_target, existing_stop = existing_details
+                        
+                        # Check if parameters are different (trade modification scenario)
+                        params_changed = (
+                            abs(float(existing_entry) - float(entry_price)) > 0.01 or
+                            (existing_target and target_price and abs(float(existing_target) - float(target_price)) > 0.01) or
+                            (existing_stop and stop_loss and abs(float(existing_stop) - float(stop_loss)) > 0.01)
+                        )
+                        
+                        if params_changed:
+                            logger.info(f"🔄 Trade modification detected for {ticker} (ID: {existing_id})")
+                            logger.info(f"🔄 Old: Entry=${existing_entry}, Target=${existing_target}, Stop=${existing_stop}")
+                            logger.info(f"🔄 New: Entry=${entry_price}, Target=${target_price}, Stop=${stop_loss}")
+                            
+                            # CRITICAL FIX: Always handle trade modifications in backend, regardless of age
+                            # The AI makes the final decision on trade modifications - no arbitrary time limits
+                            cursor.execute('SELECT created_at FROM active_trades WHERE id = ?', (existing_id,))
+                            created_at_str = cursor.fetchone()[0]
+                            created_at = datetime.fromisoformat(created_at_str.replace('Z', '+00:00'))
+                            trade_age_minutes = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)).total_seconds() / 60
+                            
+                            logger.info(f"🔄 Auto-updating trade {existing_id} (age: {trade_age_minutes:.1f} minutes) - AI recommendation takes precedence")
+                            
+                            # Always update trade parameters when AI recommends changes
+                            cursor.execute('''
+                                UPDATE active_trades
+                                SET entry_price = ?, target_price = ?, stop_loss = ?,
+                                    analysis_id = ?, entry_strategy = ?, entry_condition = ?,
+                                    original_analysis_data = ?, original_context = ?, updated_at = ?
+                                WHERE id = ?
+                            ''', (
+                                entry_price, target_price, stop_loss,
+                                analysis_id, entry_strategy, entry_condition,
+                                json.dumps(analysis_data), json.dumps(context) if context else None,
+                                datetime.now(), existing_id
+                            ))
+                            
+                            # Add trade update record for the modification
+                            self._add_trade_update(cursor, existing_id, entry_price, 'trade_modified', {
+                                'old_entry_price': existing_entry,
+                                'new_entry_price': entry_price,
+                                'old_target_price': existing_target,
+                                'new_target_price': target_price,
+                                'old_stop_loss': existing_stop,
+                                'new_stop_loss': stop_loss,
+                                'modification_reason': 'ai_recommendation_change',
+                                'trade_age_minutes': trade_age_minutes
+                            })
+                            
+                            conn.commit()
+                            logger.info(f"✅ Updated existing trade {existing_id} for {ticker} with new AI parameters")
+                            return existing_id
+                        else:
+                            # Parameters are the same, just return existing trade
+                            logger.info(f"🔄 Existing {existing_status} trade found for {ticker} (ID: {existing_id}) with same parameters. Returning existing trade.")
+                            return existing_id
                     
                     # Insert new trade (only if no existing active trade)
                     cursor.execute('''
@@ -1269,7 +1337,7 @@ class ActiveTradeService:
                 cursor.execute('''
                     SELECT * FROM active_trades
                     WHERE ticker = ?
-                    AND status IN ('closed_profit', 'closed_loss', 'closed_user')
+                    AND status IN ('profit_hit', 'stop_hit', 'ai_closed', 'user_closed', 'closed_profit', 'closed_loss', 'closed_user')
                     AND updated_at >= ?
                     ORDER BY updated_at DESC
                 ''', (ticker.upper(), cutoff_time))
@@ -1331,41 +1399,23 @@ class ActiveTradeService:
                 logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by current price: {progress.get('exit_reason')}")
                 return None
             
-            # CRITICAL FIX: Only check historical exit conditions for ACTIVE trades that have been active for a reasonable time
-            # WAITING trades should NEVER be subject to historical exit checks as they haven't been triggered yet
-            if trade['status'] == TradeStatus.ACTIVE.value:
-                # Additional safety check: ensure trade has been active for at least 1 minute before checking historical exits
-                trigger_time = self._safe_parse_datetime(trade.get('trigger_hit_time'))
-                if trigger_time:
-                    time_since_trigger = (datetime.now() - trigger_time).total_seconds() / 60  # minutes
-                    if time_since_trigger >= 1:
-                        historical_exit = self._check_historical_exit_conditions(ticker, trade)
-                        if historical_exit:
-                            logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data: {historical_exit.get('exit_reason')}")
-                            return None
-                    else:
-                        logger.debug(f"🛡️ Trade {trade['id']} triggered {time_since_trigger:.1f} minutes ago - skipping historical check (trigger grace period)")
+            # CRITICAL FIX: Check historical exit conditions for BOTH ACTIVE and WAITING trades
+            # This ensures ALL trades are properly checked for stop loss/profit target hits since last chart read
+            created_time = self._safe_parse_datetime(trade.get('created_at'))
+            if created_time:
+                time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
+                # Reduced grace period to 2 minutes to catch stop losses faster
+                if time_since_creation >= 2:
+                    logger.info(f"🎯 [HISTORICAL CHECK] Checking historical exit conditions for {trade['status']} trade {trade['id']}")
+                    historical_exit = self._check_historical_exit_conditions(ticker, trade)
+                    if historical_exit:
+                        logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data: {historical_exit.get('exit_reason')}")
+                        return None
                 else:
-                    # CRITICAL FIX: For ACTIVE trades without trigger_hit_time, use creation time as fallback
-                    # This ensures stop loss checking still occurs for active trades
-                    created_time = self._safe_parse_datetime(trade.get('created_at'))
-                    if created_time:
-                        time_since_creation = (datetime.now() - created_time).total_seconds() / 60  # minutes
-                        if time_since_creation >= 5:  # 5 minute grace period for newly created trades
-                            logger.warning(f"🔧 [STOP LOSS FIX] Trade {trade['id']} missing trigger_hit_time - using creation time for historical check")
-                            logger.warning(f"🔧 [STOP LOSS FIX] This ensures stop loss detection works even without trigger timestamp")
-                            historical_exit = self._check_historical_exit_conditions(ticker, trade)
-                            if historical_exit:
-                                logger.info(f"🎯 Trade {trade['id']} for {ticker} closed by historical data (fallback method): {historical_exit.get('exit_reason')}")
-                                return None
-                        else:
-                            logger.debug(f"🛡️ Trade {trade['id']} created {time_since_creation:.1f} minutes ago - skipping historical check (creation grace period)")
-                    else:
-                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Trade {trade['id']} has no trigger_hit_time AND no valid created_at - this prevents historical stop loss checking!")
-                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Trade status: {trade['status']}, Entry: ${trade['entry_price']}, Stop: ${trade.get('stop_loss')}")
-                        logger.warning(f"🚨 [TRIGGER TIME DIAGNOSTIC] Without trigger_hit_time, only current price (${current_price}) is checked for stop loss")
-            elif trade['status'] == TradeStatus.WAITING.value:
-                logger.debug(f"🛡️ Trade {trade['id']} is WAITING - historical exit checks are disabled for waiting trades")
+                    logger.debug(f"🛡️ Trade {trade['id']} created {time_since_creation:.1f} minutes ago - skipping historical check (grace period)")
+            else:
+                logger.warning(f"🚨 [HISTORICAL CHECK] Trade {trade['id']} has no valid created_at - this prevents historical stop loss checking!")
+                logger.warning(f"🚨 [HISTORICAL CHECK] Trade status: {trade['status']}, Entry: ${trade['entry_price']}, Stop: ${trade.get('stop_loss')}")
             
             # Refresh trade data after potential updates
             trade = self.get_active_trade(ticker)

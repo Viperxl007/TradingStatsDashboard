@@ -95,6 +95,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+
 pip-log.txt
 pip-delete-this-directory.txt
 
@@ -126,6 +127,8 @@ dmypy.json
 # Python packaging
 *.egg-info/
 .eggs/
+*.egg
+
 build/
 develop-eggs/
 downloads/
@@ -137,7 +140,7 @@ parts/
 sdist/
 var/
 wheels/
-*.egg
+.installed.cfg
 
 # Jupyter Notebook
 .ipynb_checkpoints

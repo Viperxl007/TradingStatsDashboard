@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Trade Viewer Portal</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: white;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .title {
+            font-size: 2.5rem;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .subtitle {
+            opacity: 0.8;
+            font-size: 1.1rem;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 16px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stat-number {
+            font-size: 2rem;
+            font-weight: bold;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            opacity: 0.8;
+            font-size: 0.9rem;
+        }
+
+        .tabs {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .tab-buttons {
+            display: flex;
+            background: rgba(255, 255, 255, 0.05);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .tab-button {
+            flex: 1;
+            padding: 16px;
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .tab-button.active {
+            background: rgba(255, 255, 255, 0.1);
+            border-bottom: 3px solid #3182ce;
+        }
+
+        .tab-button:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        .tab-content {
+            padding: 24px;
+        }
+
+        .trade-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 16px;
+        }
+
+        .trade-card {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            padding: 16px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            backdrop-filter: blur(10px);
+        }
+
+        .trade-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+
+        .trade-ticker {
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+
+        .trade-timeframe {
+            opacity: 0.8;
+            font-size: 0.9rem;
+        }
+
+        .trade-action {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-weight: bold;
+        }
+
+        .trade-action.buy {
+            background: #38a169;
+            color: white;
+        }
+
+        .trade-action.sell {
+            background: #e53e3e;
+            color: white;
+        }
+
+        .trade-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            font-size: 0.9rem;
+            margin-bottom: 12px;
+        }
+
+        .trade-detail {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .trade-detail-label {
+            opacity: 0.8;
+        }
+
+        .trade-detail-value {
+            font-weight: 500;
+        }
+
+        .trade-pnl {
+            padding: 8px;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: bold;
+        }
+
+        .trade-pnl.profit {
+            background: rgba(56, 161, 105, 0.3);
+            color: #38a169;
+        }
+
+        .trade-pnl.loss {
+            background: rgba(229, 62, 62, 0.3);
+            color: #e53e3e;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 48px;
+            opacity: 0.8;
+        }
+
+        .empty-icon {
+            font-size: 3rem;
+            margin-bottom: 16px;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 48px;
+            font-size: 1.2rem;
+        }
+
+        .error {
+            background: rgba(229, 62, 62, 0.3);
+            border: 1px solid rgba(229, 62, 62, 0.5);
+            padding: 16px;
+            border-radius: 8px;
+            margin-bottom: 24px;
+        }
+
+        @media (max-width: 768px) {
+            .container {
+                padding: 16px;
+            }
+
+            .title {
+                font-size: 2rem;
+            }
+
+            .trade-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 class="title">🤖 AI Trade Viewer Portal</h1>
+            <p class="subtitle">Real-time view of AI-generated trade recommendations</p>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-number" id="active-count">0</div>
+                    <div class="stat-label">Active Trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="total-count">0</div>
+                    <div class="stat-label">Total Trades</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="win-rate">0%</div>
+                    <div class="stat-label">Win Rate</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="total-return">0%</div>
+                    <div class="stat-label">Total Return</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="error" id="error-message" style="display: none;">
+            Failed to load trade data. Make sure your backend is running on 192.168.0.112:5000
+        </div>
+
+        <div class="tabs">
+            <div class="tab-buttons">
+                <button class="tab-button active" data-tab="0">Active Trades</button>
+                <button class="tab-button" data-tab="1">Trade History</button>
+                <button class="tab-button" data-tab="2">Performance</button>
+            </div>
+            <div class="tab-content">
+                <div id="loading" class="loading">Loading AI trade data...</div>
+                <div id="active-trades" style="display: none;"></div>
+                <div id="trade-history" style="display: none;"></div>
+                <div id="performance" style="display: none;"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let activeTrades = [];
+        let tradeHistory = [];
+        let currentTab = 0;
+
+        // Tab switching
+        document.querySelectorAll('.tab-button').forEach(button => {
+            button.addEventListener('click', () => {
+                const tabIndex = parseInt(button.dataset.tab);
+                switchTab(tabIndex);
+            });
+        });
+
+        function switchTab(tabIndex) {
+            currentTab = tabIndex;
+
+            // Update button states
+            document.querySelectorAll('.tab-button').forEach((btn, index) => {
