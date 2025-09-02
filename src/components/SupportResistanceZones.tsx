@@ -25,9 +25,13 @@ const SupportResistanceZones: React.FC<SupportResistanceZonesProps> = ({
     if (chart && seriesRef.current.length > 0) {
       seriesRef.current.forEach(series => {
         try {
-          chart.removeSeries(series);
+          // Check if series is valid before removing
+          if (series && typeof series === 'object') {
+            chart.removeSeries(series);
+          }
         } catch (error) {
-          console.warn('Failed to remove series:', error);
+          // Silently handle removal errors - series might already be removed
+          console.debug('Support/resistance series already removed or invalid:', error instanceof Error ? error.message : 'Unknown error');
         }
       });
       seriesRef.current = [];

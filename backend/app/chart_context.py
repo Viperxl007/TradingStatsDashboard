@@ -57,9 +57,17 @@ class ChartContextManager:
                         confidence_score REAL,
                         image_hash TEXT,
                         context_data TEXT,
+                        prompt_version TEXT DEFAULT 'v1.0',
                         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
                     )
                 ''')
+                
+                # Add prompt_version column if it doesn't exist (for existing databases)
+                try:
+                    cursor.execute('ALTER TABLE chart_analyses ADD COLUMN prompt_version TEXT DEFAULT "v1.0"')
+                except sqlite3.OperationalError:
+                    # Column already exists
+                    pass
                 
                 # Create indexes for chart_analyses
                 cursor.execute('''
@@ -138,7 +146,7 @@ class ChartContextManager:
     
     def store_analysis(self, ticker: str, analysis_data: Dict[str, Any],
                       image_hash: Optional[str] = None, context_data: Optional[Dict] = None,
-                      timeframe: str = "1h") -> int:
+                      timeframe: str = "1h", prompt_version: str = "v2.0") -> int:
         """
         Store a chart analysis in the database and create active trade if applicable.
         
@@ -159,15 +167,16 @@ class ChartContextManager:
                     
                     cursor.execute('''
                         INSERT INTO chart_analyses
-                        (ticker, analysis_timestamp, analysis_data, confidence_score, image_hash, context_data)
-                        VALUES (?, ?, ?, ?, ?, ?)
+                        (ticker, analysis_timestamp, analysis_data, confidence_score, image_hash, context_data, prompt_version)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         ticker.upper(),
                         datetime.now(),
                         json.dumps(analysis_data),
                         analysis_data.get('confidence_score', 0.5),
                         image_hash,
-                        json.dumps(context_data) if context_data else None
+                        json.dumps(context_data) if context_data else None,
+                        prompt_version
                     ))
                     
                     analysis_id = cursor.lastrowid
@@ -191,7 +200,27 @@ class ChartContextManager:
                             logger.info(f"🔄 MAINTAIN recommendation detected for {ticker}: Skipping trade creation as AI recommends maintaining existing position")
                             should_skip_trade_creation = True
                     
-                    # Create active trade if this analysis contains a buy/sell recommendation and not MAINTAIN
+                    # CRITICAL FIX: Check quality score threshold before creating active trades
+                    # Only create active trades for recommendations with quality score >= 65%
+                    if not should_skip_trade_creation:
+                        recommendations = analysis_data.get('recommendations', {})
+                        
+                        # Try to get quality score first, fallback to confidence
+                        quality_score = (analysis_data.get('quality_score') or
+                                       recommendations.get('quality_score') or
+                                       recommendations.get('confidence', 0.0))
+                        
+                        # Convert to percentage if it's in decimal format (0.0-1.0)
+                        if isinstance(quality_score, (int, float)) and quality_score <= 1.0:
+                            quality_pct = quality_score * 100
+                        else:
+                            quality_pct = float(quality_score) if quality_score else 0.0
+                        
+                        if quality_pct < 65.0:
+                            logger.info(f"🚫 Low quality trade for {ticker}: {quality_pct:.1f}% < 65% threshold. Skipping active trade creation.")
+                            should_skip_trade_creation = True
+                    
+                    # Create active trade if this analysis contains a buy/sell recommendation and meets confidence threshold
                     if not should_skip_trade_creation:
                         try:
                             trade_id = self.active_trade_service.create_trade_from_analysis(

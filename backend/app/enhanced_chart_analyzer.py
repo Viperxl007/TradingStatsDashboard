@@ -107,7 +107,7 @@ class EnhancedChartAnalyzer:
             # Combine all analyses
             comprehensive_analysis = self._combine_analyses(
                 ticker, initial_analysis, technical_analysis,
-                levels_analysis, trading_analysis, timeframe, context_data
+                levels_analysis, trading_analysis, timeframe, context_data, model_to_use
             )
             
             logger.info(f"Successfully completed comprehensive analysis for {ticker}")
@@ -140,8 +140,9 @@ class EnhancedChartAnalyzer:
         if context_data:
             additional_context = f"Market Context: {json.dumps(context_data, indent=2)}"
         
-        # Get the contextual prompt
-        contextual_prompt = PromptBuilderService.build_contextual_analysis_prompt(
+        # Get the contextual prompt using V2 enhanced service
+        prompt_service = PromptBuilderService()
+        contextual_prompt = prompt_service.build_contextual_analysis_prompt(
             ticker=ticker,
             timeframe=timeframe,
             current_price=current_price,
@@ -311,8 +312,9 @@ Provide EXACT price levels you can see on the chart. Count actual tests of level
         sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
         from services.prompt_builder_service import PromptBuilderService
         
-        # Build the contextual prompt for trading recommendations
-        contextual_prompt = PromptBuilderService.build_contextual_analysis_prompt(
+        # Build the contextual prompt for trading recommendations using V2 enhanced service
+        prompt_service = PromptBuilderService()
+        contextual_prompt = prompt_service.build_contextual_analysis_prompt(
             ticker=ticker,
             timeframe=timeframe,
             current_price=current_price,
@@ -426,7 +428,7 @@ EXAMPLE for multiple strategies:
                 ]
             }
             
-            response = requests.post(self.api_url, headers=headers, json=payload, timeout=45)
+            response = requests.post(self.api_url, headers=headers, json=payload, timeout=75)
             
             if response.status_code != 200:
                 logger.error(f"Claude API error in {stage}: {response.status_code} - {response.text}")
@@ -463,7 +465,7 @@ EXAMPLE for multiple strategies:
             return {"error": f"Request failed in {stage}: {str(e)}"}
     
     def _combine_analyses(self, ticker: str, initial: Dict, technical: Dict,
-                         levels: Dict, trading: Dict, timeframe: str = '1D', context_data: Optional[Dict] = None) -> Dict[str, Any]:
+                         levels: Dict, trading: Dict, timeframe: str = '1D', context_data: Optional[Dict] = None, model_used: str = None) -> Dict[str, Any]:
         """Combine all analysis stages into comprehensive result."""
         
         # Extract data from each stage, handling errors gracefully
@@ -485,6 +487,7 @@ EXAMPLE for multiple strategies:
             "summary": self._generate_comprehensive_summary(initial, technical, levels, trading),
             "sentiment": self._determine_sentiment(chart_overview, trading),
             "confidence": self._calculate_overall_confidence(initial, technical, levels, trading),
+            "quality_score": self._extract_quality_score(initial, technical, levels, trading),
             
             # Key levels (formatted for frontend)
             "keyLevels": self._format_key_levels(levels),
@@ -513,6 +516,14 @@ EXAMPLE for multiple strategies:
                 "stage2_success": 'error' not in technical,
                 "stage3_success": 'error' not in levels,
                 "stage4_success": 'error' not in trading
+            },
+            
+            # Model information for performance tracking
+            "modelUsed": model_used or self.model,
+            "analysisMetadata": {
+                "model": model_used or self.model,
+                "timestamp": datetime.now().timestamp(),
+                "version": "enhanced_v2.0"
             },
             
             # Context data if provided
@@ -614,8 +625,56 @@ EXAMPLE for multiple strategies:
         except Exception:
             return 'neutral'
     
+    def _extract_quality_score(self, initial: Dict, technical: Dict, levels: Dict, trading: Dict) -> float:
+        """Extract the OVERALL QUALITY score from AI response as specified in the prompt."""
+        try:
+            # Look for quality score in various possible locations
+            quality_score = None
+            
+            # Check trading analysis first (most likely location)
+            if trading.get('overall_quality'):
+                quality_score = trading['overall_quality']
+            elif trading.get('quality_score'):
+                quality_score = trading['quality_score']
+            elif trading.get('setup_quality'):
+                quality_score = trading['setup_quality']
+            
+            # Check initial analysis
+            elif initial.get('overall_quality'):
+                quality_score = initial['overall_quality']
+            elif initial.get('quality_score'):
+                quality_score = initial['quality_score']
+            
+            # Check levels analysis
+            elif levels.get('overall_quality'):
+                quality_score = levels['overall_quality']
+            elif levels.get('quality_score'):
+                quality_score = levels['quality_score']
+            
+            # Check technical analysis
+            elif technical.get('overall_quality'):
+                quality_score = technical['overall_quality']
+            elif technical.get('quality_score'):
+                quality_score = technical['quality_score']
+            
+            if quality_score is not None:
+                # Convert to percentage if needed
+                if isinstance(quality_score, (int, float)):
+                    if quality_score <= 1.0:
+                        return quality_score * 100  # Convert decimal to percentage
+                    else:
+                        return min(100.0, max(0.0, float(quality_score)))  # Clamp to 0-100
+            
+            # Fallback: return a low quality score to indicate we couldn't extract it
+            logger.warning("Could not extract OVERALL QUALITY score from AI response - using fallback")
+            return 45.0  # Below 65% threshold to indicate poor quality extraction
+            
+        except Exception as e:
+            logger.error(f"Error extracting quality score: {str(e)}")
+            return 45.0
+
     def _calculate_overall_confidence(self, initial: Dict, technical: Dict, levels: Dict, trading: Dict) -> float:
-        """Calculate overall confidence score."""
+        """Calculate technical confidence score based on data completeness and stage success."""
         try:
             confidences = []
             
@@ -931,13 +990,34 @@ EXAMPLE for multiple strategies:
             else:
                 reasoning = base_reasoning
 
+            # Extract quality score from trading analysis
+            quality_score = None
+            if trading.get('overall_quality'):
+                quality_score = trading['overall_quality']
+            elif trading.get('quality_score'):
+                quality_score = trading['quality_score']
+            elif trading.get('setup_quality'):
+                quality_score = trading['setup_quality']
+            
+            # Convert quality score to percentage if needed
+            if quality_score is not None:
+                if isinstance(quality_score, (int, float)):
+                    if quality_score <= 1.0:
+                        quality_score = quality_score * 100  # Convert decimal to percentage
+                    else:
+                        quality_score = min(100.0, max(0.0, float(quality_score)))  # Clamp to 0-100
+            else:
+                quality_score = 45.0  # Fallback below threshold
+
             return {
                 "action": action,
                 "entryPrice": entry_price,
                 "targetPrice": target_price,
                 "stopLoss": stop_loss,
                 "riskReward": risk_reward,
-                "reasoning": reasoning
+                "reasoning": reasoning,
+                "confidence": quality_score / 100.0,  # Store as decimal for compatibility
+                "quality_score": quality_score  # Store as percentage for clarity
             }
             
         except Exception as e:

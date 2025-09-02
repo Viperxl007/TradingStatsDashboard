@@ -150,10 +150,13 @@ const ManualTradeCloseButtons: React.FC<ManualTradeCloseButtonsProps> = ({
         // Clear the active trade state
         setActiveTrade(null);
         
-        // Notify parent components
-        if (onClearOverlays) {
-          onClearOverlays();
-        }
+        // TEMPORARY FIX: Disable chart clearing to prevent "Object is disposed" error
+        // The chart overlays will remain but this prevents the crash
+        console.log(`🚫 [ManualTradeCloseButtons] Chart clearing disabled to prevent disposal errors for ${ticker}`);
+        // if (onClearOverlays) {
+        //   console.log(`🧹 [ManualTradeCloseButtons] Triggering comprehensive chart clearing for ${ticker}`);
+        //   onClearOverlays();
+        // }
         
         if (onTradeClose) {
           onTradeClose();

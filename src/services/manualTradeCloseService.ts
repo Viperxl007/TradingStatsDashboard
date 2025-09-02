@@ -9,6 +9,7 @@
 
 import { closeActiveTradeInProduction } from './productionActiveTradesService';
 import { TradingRecommendationOverlay } from '../types/chartAnalysis';
+import { fetchActiveTradingRecommendations, deactivateRecommendation } from './persistentTradingRecommendationService';
 
 export type ManualCloseReason = 'profit_hit' | 'stop_hit' | 'user_closed';
 
@@ -66,6 +67,40 @@ export const closeTradeManually = async (
     );
 
     if (success) {
+      // CRITICAL: Clear trading recommendations from backend database
+      try {
+        console.log(`🧹 [ManualTradeClose] Clearing trading recommendations for ${request.ticker} after manual closure`);
+        
+        // Get all active recommendations for all timeframes for this ticker
+        const timeframes = ['1m', '5m', '15m', '1h', '4h', '1D'];
+        const allRecommendations = [];
+        
+        for (const timeframe of timeframes) {
+          try {
+            const recommendations = await fetchActiveTradingRecommendations(request.ticker, timeframe);
+            allRecommendations.push(...recommendations);
+          } catch (error) {
+            // Continue if no recommendations found for this timeframe
+            console.log(`📭 [ManualTradeClose] No recommendations found for ${request.ticker} ${timeframe}`);
+          }
+        }
+        
+        // Deactivate all found recommendations
+        for (const recommendation of allRecommendations) {
+          try {
+            await deactivateRecommendation(recommendation.id);
+            console.log(`🔒 [ManualTradeClose] Deactivated recommendation ${recommendation.id} for ${request.ticker}`);
+          } catch (error) {
+            console.error(`❌ [ManualTradeClose] Failed to deactivate recommendation ${recommendation.id}:`, error);
+          }
+        }
+        
+        console.log(`✅ [ManualTradeClose] Cleared ${allRecommendations.length} trading recommendations for ${request.ticker}`);
+      } catch (error) {
+        console.error(`❌ [ManualTradeClose] Error clearing trading recommendations:`, error);
+        // Don't fail the trade closure if recommendation clearing fails
+      }
+
       const reasonText = {
         profit_hit: 'Profit Target Hit',
         stop_hit: 'Stop Loss Hit',

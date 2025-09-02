@@ -350,6 +350,22 @@
         }
         .trade-card:hover::after { opacity: 1; }
         .trade-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .ai-model-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 8px;
+            border-radius: 6px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+            margin-bottom: 8px;
+            display: inline-block;
+        }
+        .ai-model-badge.opus { background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%); }
+        .ai-model-badge.sonnet { background: linear-gradient(135deg, #4ecdc4 0%, #44a08d 100%); }
+        .ai-model-badge.haiku { background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%); color: #2d3748; }
         .trade-ticker { font-size: 1.3rem; font-weight: bold; color: #ffffff; }
         .trade-timeframe { opacity: 0.8; font-size: 0.9rem; color: #cbd5e0; }
         .trade-action { padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; font-weight: bold; }
@@ -911,7 +927,7 @@
                 stopLoss: trade.stop_loss,
                 status: trade.status,
                 confidence: 1.0,
-                aiModel: 'production_system',
+                aiModel: trade.ai_model || 'unknown',
                 reasoning: trade.reasoning || `Production ${trade.action.toUpperCase()} trade from Chart Analysis`,
                 entryDate: entryTime,
                 profitLossPercentage: profitLossPercentage,
@@ -978,6 +994,7 @@
                     <div class="recommendation-title">🤖 AI Analysis</div>
                     <div class="recommendation-content">
                         <strong>Model:</strong> ${trade.aiModel}<br>
+                        <strong>Prompt Version:</strong> ${trade.promptVersion || trade.rawTrade.prompt_version || 'v1.0'}<br>
                         <strong>Confidence:</strong> ${(trade.confidence * 100).toFixed(1)}%<br>
                         <strong>Status:</strong> ${trade.status}<br>
                         <strong>Created:</strong> ${new Date(trade.entryDate).toLocaleString()}<br>
@@ -1065,12 +1082,31 @@
             }
         }
 
+        function getModelBadgeInfo(aiModel) {
+            if (!aiModel) return { name: 'Unknown', class: '' };
+            
+            // Extract model name and determine badge style
+            if (aiModel.includes('opus-4-1')) return { name: 'Opus 4.1', class: 'opus' };
+            if (aiModel.includes('opus-4')) return { name: 'Opus 4', class: 'opus' };
+            if (aiModel.includes('opus')) return { name: 'Opus 3', class: 'opus' };
+            if (aiModel.includes('sonnet-4')) return { name: 'Sonnet 4', class: 'sonnet' };
+            if (aiModel.includes('3-7-sonnet')) return { name: 'Sonnet 3.7', class: 'sonnet' };
+            if (aiModel.includes('3-5-sonnet')) return { name: 'Sonnet 3.5', class: 'sonnet' };
+            if (aiModel.includes('sonnet')) return { name: 'Sonnet 3', class: 'sonnet' };
+            if (aiModel.includes('haiku')) return { name: 'Haiku', class: 'haiku' };
+            
+            // Fallback for unknown models
+            return { name: aiModel.replace('claude-', '').replace(/\d{8}/g, '').trim(), class: '' };
+        }
+
         function renderTradeCard(trade, isActive) {
             const isBuy = trade.action === 'buy';
             const timeAgo = formatTimeAgo(trade.timeSinceRecommendation);
+            const modelInfo = getModelBadgeInfo(trade.aiModel);
 
             return `
                 <div class="trade-card" onclick="showTradeById('${trade.id}')">
+                    <div class="ai-model-badge ${modelInfo.class}">🤖 ${modelInfo.name}</div>
                     <div class="trade-header">
                         <div><div class="trade-ticker">${trade.ticker}</div><div class="trade-timeframe">${trade.timeframe}</div></div>
                         <div class="trade-action ${isBuy ? 'buy' : 'sell'}">${trade.action.toUpperCase()}</div>
@@ -1079,10 +1115,10 @@
                         <div class="trade-detail"><span class="trade-detail-label">Entry Price</span><span class="trade-detail-value">$${trade.entryPrice.toFixed(2)}</span></div>
                         ${trade.targetPrice ? `<div class="trade-detail"><span class="trade-detail-label">Target</span><span class="trade-detail-value" style="color: #68d391;">$${trade.targetPrice.toFixed(2)}</span></div>` : ''}
                         ${trade.stopLoss ? `<div class="trade-detail"><span class="trade-detail-label">Stop Loss</span><span class="trade-detail-value" style="color: #fc8181;">$${trade.stopLoss.toFixed(2)}</span></div>` : ''}
-                        <div class="trade-detail"><span class="trade-detail-label">Confidence</span><span class="trade-detail-value" style="color: #4299e1;">${(trade.confidence * 100).toFixed(0)}%</span></div>
+                        <div class="trade-detail"><span class="trade-detail-label">Quality</span><span class="trade-detail-value" style="color: #4299e1;">${trade.quality_score ? trade.quality_score.toFixed(0) + '%' : (trade.confidence * 100).toFixed(0) + '%'}</span></div>
                     </div>
                     ${trade.profitLossPercentage !== undefined ? `<div class="trade-pnl ${trade.profitLossPercentage >= 0 ? 'profit' : 'loss'}">P&L: ${trade.profitLossPercentage >= 0 ? '+' : ''}${trade.profitLossPercentage.toFixed(2)}%</div>` : ''}
-                    <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 12px; color: #a0aec0;">${timeAgo} • ${trade.aiModel}</div>
+                    <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 12px; color: #a0aec0;">${timeAgo}</div>
                     <div style="font-size: 0.8rem; opacity: 0.8; margin-top: 6px; line-height: 1.4; color: #cbd5e0;">${trade.reasoning.length > 80 ? trade.reasoning.substring(0, 80) + '...' : trade.reasoning}</div>
                 </div>
             `;

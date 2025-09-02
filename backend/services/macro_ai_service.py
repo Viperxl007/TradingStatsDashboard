@@ -99,7 +99,7 @@ class MacroAIService:
             )
             
             # Step 5: Process and validate results
-            processed_result = self._process_ai_result(ai_result, chart_data, analysis_timestamp)
+            processed_result = self._process_ai_result(ai_result, chart_data, analysis_timestamp, model_to_use)
             
             # Step 6: Store analysis in database
             analysis_id = self.db.insert_sentiment_analysis(processed_result)
@@ -281,9 +281,10 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
         
         return prompt.strip()
     
-    def _process_ai_result(self, ai_result: Dict[str, Any], 
-                          chart_data: Dict[str, Any], 
-                          analysis_timestamp: int) -> Dict[str, Any]:
+    def _process_ai_result(self, ai_result: Dict[str, Any],
+                          chart_data: Dict[str, Any],
+                          analysis_timestamp: int,
+                          model_used: str) -> Dict[str, Any]:
         """
         Process and validate AI analysis result.
         
@@ -291,6 +292,7 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
             ai_result (Dict[str, Any]): Raw AI result
             chart_data (Dict[str, Any]): Chart generation data
             analysis_timestamp (int): Analysis timestamp
+            model_used (str): The actual Claude model used for analysis
             
         Returns:
             Dict[str, Any]: Processed result for database storage
@@ -352,7 +354,7 @@ REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only
                 'ai_reasoning': ai_result['reasoning'],
                 'chart_data_hash': chart_data['chart_data_hash'],
                 'processing_time_ms': chart_data['processing_time_ms'],
-                'model_used': self.default_model,
+                'model_used': model_used,
                 'prompt_version': 'v1.0',
                 'btc_chart_image': chart_data['btc_chart_image'],
                 'eth_chart_image': chart_data['eth_chart_image'],

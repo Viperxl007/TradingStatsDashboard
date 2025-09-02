@@ -47,6 +47,7 @@ import { format } from 'date-fns';
 import { AITradeEntry, AITradeStatus } from '../../types/aiTradeTracker';
 import { getAllActiveTradesForAITracker, closeActiveTradeInProduction } from '../../services/productionActiveTradesService';
 import { getStatusColorScheme, getStatusDisplayText } from '../../utils/statusMapping';
+import { clearAllChartOverlays } from '../../utils/chartOverlayUtils';
 
 interface AIActiveTradesPanelProps {
   onError: (error: string) => void;
@@ -150,6 +151,8 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
    */
   const handleCancelTrade = async (trade: AITradeEntry) => {
     try {
+      console.log(`🗑️ [AIActiveTradesPanel] Cancelling trade for ${trade.ticker}`);
+      
       // Close the trade via production API
       const success = await closeActiveTradeInProduction(
         trade.ticker,
@@ -158,12 +161,16 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
       );
       
       if (success) {
+        // Clear chart overlays for this ticker to remove orphaned drawings
+        console.log(`🧹 [AIActiveTradesPanel] Clearing chart overlays for cancelled trade: ${trade.ticker}`);
+        await clearAllChartOverlays();
+        
         await loadActiveTrades();
         onTradeUpdate();
         
         toast({
           title: 'Trade Cancelled',
-          description: 'Trade has been cancelled',
+          description: 'Trade has been cancelled and chart overlays cleared',
           status: 'info',
           duration: 3000,
           isClosable: true,
@@ -178,6 +185,7 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
         });
       }
     } catch (error) {
+      console.error('❌ [AIActiveTradesPanel] Error cancelling trade:', error);
       toast({
         title: 'Cancel Failed',
         description: 'Failed to cancel trade',
@@ -446,6 +454,9 @@ const AIActiveTradesPanel: React.FC<AIActiveTradesPanelProps> = ({ onError, onTr
                     <Text fontWeight="bold" mb={2}>Trade Information</Text>
                     <VStack align="start" spacing={2}>
                       <Text><strong>AI Model:</strong> {selectedTrade.aiModel}</Text>
+                      {selectedTrade.promptVersion && (
+                        <Text><strong>Prompt Version:</strong> {selectedTrade.promptVersion}</Text>
+                      )}
                       <Text><strong>Sentiment:</strong> {selectedTrade.sentiment}</Text>
                       <Text><strong>Confidence:</strong> {(selectedTrade.confidence * 100).toFixed(1)}%</Text>
                       <Text><strong>Risk/Reward:</strong> {selectedTrade.riskReward?.toFixed(2) || 'N/A'}</Text>

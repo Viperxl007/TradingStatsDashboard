@@ -55,11 +55,20 @@ class TradingRecommendationService:
                         is_active BOOLEAN DEFAULT 1,
                         expires_at INTEGER,
                         analysis_id TEXT,
+                        ai_model TEXT,
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                         status TEXT DEFAULT 'active'
                     )
                 ''')
+                
+                # Add ai_model column to existing tables if it doesn't exist
+                try:
+                    cursor.execute('ALTER TABLE trading_recommendations ADD COLUMN ai_model TEXT')
+                    logger.info("✅ Added ai_model column to trading_recommendations table")
+                except sqlite3.OperationalError as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Could not add ai_model column: {e}")
                 
                 # Create indexes for efficient querying
                 cursor.execute('''
@@ -116,10 +125,10 @@ class TradingRecommendationService:
                     # Insert new recommendation
                     cursor.execute('''
                         INSERT INTO trading_recommendations (
-                            id, ticker, timeframe, timestamp, action, entry_price, 
-                            target_price, stop_loss, risk_reward, reasoning, 
-                            confidence, is_active, expires_at, analysis_id, status
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            id, ticker, timeframe, timestamp, action, entry_price,
+                            target_price, stop_loss, risk_reward, reasoning,
+                            confidence, is_active, expires_at, analysis_id, ai_model, status
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (
                         recommendation_data['id'],
                         recommendation_data['ticker'],
@@ -135,6 +144,7 @@ class TradingRecommendationService:
                         recommendation_data.get('isActive', True),
                         recommendation_data.get('expiresAt'),
                         recommendation_data.get('analysisId'),
+                        recommendation_data.get('aiModel', 'unknown'),
                         RecommendationStatus.ACTIVE.value
                     ))
                     
@@ -167,10 +177,10 @@ class TradingRecommendationService:
                 cursor = conn.cursor()
                 
                 cursor.execute('''
-                    UPDATE trading_recommendations 
-                    SET action = ?, entry_price = ?, target_price = ?, stop_loss = ?, 
-                        risk_reward = ?, reasoning = ?, confidence = ?, is_active = ?, 
-                        expires_at = ?, updated_at = CURRENT_TIMESTAMP, status = ?
+                    UPDATE trading_recommendations
+                    SET action = ?, entry_price = ?, target_price = ?, stop_loss = ?,
+                        risk_reward = ?, reasoning = ?, confidence = ?, is_active = ?,
+                        expires_at = ?, ai_model = ?, updated_at = CURRENT_TIMESTAMP, status = ?
                     WHERE ticker = ? AND timeframe = ? AND analysis_id = ?
                 ''', (
                     recommendation_data['action'],
@@ -182,6 +192,7 @@ class TradingRecommendationService:
                     recommendation_data.get('confidence', 0.0),
                     recommendation_data.get('isActive', True),
                     recommendation_data.get('expiresAt'),
+                    recommendation_data.get('aiModel', 'unknown'),
                     RecommendationStatus.ACTIVE.value,
                     recommendation_data['ticker'],
                     recommendation_data['timeframe'],
@@ -251,6 +262,7 @@ class TradingRecommendationService:
                     rec['isActive'] = bool(rec.pop('is_active'))
                     rec['expiresAt'] = rec.pop('expires_at')
                     rec['analysisId'] = rec.pop('analysis_id')
+                    rec['aiModel'] = rec.pop('ai_model', 'unknown')
                     recommendations.append(rec)
                 
                 logger.info(f"📋 Retrieved {len(recommendations)} active recommendations for {ticker}" + 

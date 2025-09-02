@@ -75,15 +75,18 @@ class MacroBootstrapService:
         """
         try:
             # Check if we have sufficient historical data
+            # Calculate 90 days ago in Unix timestamp format
+            ninety_days_ago = int(datetime.now(timezone.utc).timestamp()) - (90 * 24 * 60 * 60)
+            
             query = """
                 SELECT COUNT(*) as count,
                        MIN(timestamp) as earliest_date,
                        MAX(timestamp) as latest_date
                 FROM macro_market_data
-                WHERE timestamp >= datetime('now', '-90 days')
+                WHERE timestamp >= ?
             """
             
-            result = self.db.execute_query(query)
+            result = self.db.execute_query(query, (ninety_days_ago,))
             if result:
                 count = result[0]['count']
                 earliest = result[0]['earliest_date']

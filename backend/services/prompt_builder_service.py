@@ -3,94 +3,223 @@ Prompt Builder Service
 
 This service builds comprehensive prompts with historical context and forward-looking validation
 to enhance AI analysis accuracy while preventing erratic recommendations.
+
+VERSION 2.0 ENHANCEMENTS:
+- Macro context integration
+- Quality scoring system
+- Historical performance feedback
+- Enhanced "No Trade" emphasis
+- Systematic quality gates
 """
 
 import logging
+import sqlite3
+import os
+import numpy as np
+from datetime import datetime, timezone
 from typing import Optional, Dict, Any
 
 logger = logging.getLogger(__name__)
 
 class PromptBuilderService:
-    """Service for building contextual analysis prompts"""
+    """Service for building contextual analysis prompts with V2 enhancements"""
     
-    @staticmethod
-    def build_contextual_analysis_prompt(ticker: str, timeframe: str, current_price: float,
+    def __init__(self, db_path: Optional[str] = None):
+        """Initialize with database path for historical performance tracking"""
+        self.db_path = db_path or os.path.join(os.path.dirname(__file__), '..', 'instance', 'chart_analysis.db')
+    
+    def _build_macro_context_section(self) -> str:
+        """Get latest macro sentiment for context"""
+        try:
+            from .macro_ai_service import get_latest_macro_sentiment
+            macro = get_latest_macro_sentiment()
+            
+            if not macro:
+                return ""
+            
+            # Only include if analysis is recent (< 24 hours old)
+            if macro.get('analysis_timestamp'):
+                age_hours = (datetime.now().timestamp() - macro['analysis_timestamp']) / 3600
+                if age_hours > 24:
+                    return ""
+            
+            return f"""
+MARKET MACRO CONTEXT (Overall Market Conditions):
+- Market Confidence: {macro.get('overall_confidence', 0)}%
+- BTC Trend: {macro.get('btc_trend_direction', 'UNKNOWN')} ({macro.get('btc_trend_strength', 0)}% strength)
+- Trade Permission: {macro.get('trade_permission', 'UNKNOWN')}
+- Market Regime: {macro.get('market_regime', 'UNKNOWN')}
+
+⚠️ MACRO FILTER RULES:
+- If Trade Permission is NO_TRADE: DO NOT recommend any trades regardless of chart setup
+- If Trade Permission is SELECTIVE: Only recommend trades with 80%+ confidence
+- If Market Confidence < 40%: Reduce position sizes by 50% or recommend NO TRADE
+- If asset is moving against macro trend: Require higher confidence (70%+)
+"""
+        except Exception as e:
+            logger.warning(f"Could not get macro context: {e}")
+            return ""
+    
+    def _get_historical_performance_context(self, ticker: str) -> str:
+        """Get historical win/loss rate for this ticker"""
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                
+                # Get last 20 completed trades for this ticker
+                cursor.execute('''
+                    SELECT status, entry_price, close_price, realized_pnl, close_reason
+                    FROM active_trades
+                    WHERE ticker = ? AND status IN ('profit_hit', 'stop_hit', 'user_closed')
+                    ORDER BY close_time DESC
+                    LIMIT 20
+                ''', (ticker.upper(),))
+                
+                trades = cursor.fetchall()
+                
+                if not trades:
+                    return ""
+                
+                wins = sum(1 for t in trades if t[0] == 'profit_hit')
+                win_rate = (wins / len(trades)) * 100
+                
+                # Calculate average win/loss percentages
+                win_pnls = [t[3] for t in trades if t[0] == 'profit_hit' and t[3] is not None]
+                loss_pnls = [abs(t[3]) for t in trades if t[0] in ['stop_hit', 'user_closed'] and t[3] is not None and t[3] < 0]
+                
+                avg_win = np.mean(win_pnls) if win_pnls else 0
+                avg_loss = np.mean(loss_pnls) if loss_pnls else 0
+                
+                return f"""
+HISTORICAL PERFORMANCE FOR {ticker}:
+- Last {len(trades)} trades: {win_rate:.1f}% win rate
+- Average Win: +${avg_win:.2f}
+- Average Loss: -${avg_loss:.2f}
+
+⚠️ CALIBRATION NOTICE:
+{"This ticker has been UNDERPERFORMING. Be extra selective." if win_rate < 40 else ""}
+{"This ticker has normal performance. Standard criteria apply." if 40 <= win_rate <= 60 else ""}
+{"This ticker has been OVERPERFORMING. Maintain discipline, don't get greedy." if win_rate > 60 else ""}
+"""
+        except Exception as e:
+            logger.warning(f"Could not get historical performance: {e}")
+            return ""
+    
+    def build_contextual_analysis_prompt(self, ticker: str, timeframe: str, current_price: float,
                                        context: Optional[Dict[str, Any]] = None,
                                        additional_context: str = "") -> str:
-        """Build comprehensive prompt with historical context and forward-looking validation"""
+        """Build comprehensive prompt with macro context, quality gates, and historical performance feedback (V2)"""
         
-        logger.info(f"🔨 Building contextual prompt for {ticker} at ${current_price}")
+        logger.info(f"🔨 Building enhanced contextual prompt for {ticker} at ${current_price}")
         
-        # Base analysis prompt
-        base_prompt = f"""
-Analyze this {timeframe} chart for {ticker} trading opportunities.
+        # Get macro context
+        macro_context = self._build_macro_context_section()
+        
+        # Get historical performance
+        performance_context = self._get_historical_performance_context(ticker)
+        
+        # Build the complete prompt
+        prompt = f"""
+COMPREHENSIVE CHART ANALYSIS REQUEST FOR {ticker}
 
 CURRENT MARKET STATE:
 - Ticker: {ticker}
 - Current Price: ${current_price}
 - Timeframe: {timeframe}
-        """.strip()
+
+{macro_context}
+
+{performance_context}
+
+QUALITY GATES (Most should pass for trade recommendation):
+□ Trend clarity score ≥ 7/10 
+□ Support/Resistance quality ≥ 6/10 
+□ Risk/Reward ratio ≥ 2:1 
+□ Overall setup quality ≥ 60% 
+□ No conflict with macro trend (if macro confidence < 60%, require 70%+ setup quality)
+
+ANALYSIS FRAMEWORK:
+
+1. SETUP QUALITY SCORING (MANDATORY):
+Rate each factor 1-10:
+- Trend Clarity: _/10
+- Support/Resistance Quality: _/10
+- Volume Confirmation: _/10
+- Pattern Completion: _/10
+- Risk/Reward Ratio: _/10
+- Momentum Alignment: _/10
+OVERALL QUALITY: _% (average × 10)
+
+2. TRADE DECISION MATRIX:
+- 80-100% Quality + Good Macro = HIGH CONFIDENCE TRADE (full size)
+- 70-79% Quality + Good Macro = MODERATE TRADE (half size)
+- 65-69% Quality + Bad Macro = LOW CONFIDENCE TRADE (quarter size)
+- Below 65% Quality = NO TRADE (regardless of macro)
+
+3. NO TRADE SCENARIOS (SELECTIVE POSITION):
+You should recommend NO TRADE if MULTIPLE of these conditions exist:
+- Choppy/unclear price action AND low quality score
+- Risk/Reward below 1.5:1 AND poor trend clarity
+- Quality score below 50% (not 60% - be less restrictive)
+- Macro Trade Permission is NO_TRADE (hard rule)
+- Multiple conflicting timeframe signals
+- Very low volume AND poor liquidity
+
+4. MANDATORY SKIP CONDITIONS (Any ONE of these = NO TRADE):
+- Risk/Reward below 2:1
+- Quality score below 65%
+- Macro Trade Permission is NO_TRADE
+
+IMPORTANT: "NO TRADE" should be used when setups are genuinely poor quality. Look for valid trading opportunities with reasonable quality scores (50%+). Professional traders are selective but still find 20-30% of setups tradeable.
+
+{self._build_context_section(context) if context else ""}
+
+{self._build_forward_looking_section(current_price)}
+
+{additional_context}
+
+RESPONSE REQUIREMENTS:
+Your response MUST include:
+
+1. QUALITY ASSESSMENT SECTION:
+"Quality Score: X%
+- Trend Clarity: X/10
+- Support/Resistance: X/10
+- Volume: X/10
+- Risk/Reward: X/10
+Trade Decision: [HIGH_CONFIDENCE/MODERATE/NO_TRADE]"
+
+2. If recommending a trade, include:
+- Entry price with SPECIFIC trigger condition
+- Stop loss with clear invalidation reasoning
+- Target with realistic probability assessment
+- Position size recommendation based on quality
+
+3. If recommending NO TRADE, include:
+- Specific reasons why setup doesn't qualify
+- What would need to change for a valid setup
+- Suggested monitoring levels
+
+Remember: Professional traders are selective but still find 20-30% of setups tradeable. Quality over quantity ALWAYS wins.
+Default to NO TRADE unless the setup is exceptional.
+
+PROMPT VERSION: v2.0 (Enhanced with macro context, quality gates, and historical performance)
+"""
         
-        # Add context if available (historical or active trade)
-        context_section = ""
-        if context and context.get('has_context'):
-            # Use context_urgency to determine context type since context_type is not set
-            context_urgency = context.get('context_urgency', '')
-            if context_urgency in ['recent', 'active']:
-                context_section = PromptBuilderService._build_context_section(context)
-                logger.info(f"📝 Added historical context: {context_urgency} ({context['hours_ago']:.1f}h ago)")
-            elif context.get('context_type') == 'active_trade':
-                # Fallback for explicit active trade context (if ever implemented)
-                context_section = PromptBuilderService._build_active_trade_context_section(context)
-                logger.info(f"📝 Added active trade context: {context.get('status', 'unknown')} trade")
-            else:
-                # Reference or other context types
-                context_section = PromptBuilderService._build_context_section(context)
-                logger.info(f"📝 Added reference context: {context_urgency} ({context['hours_ago']:.1f}h ago)")
-        else:
-            logger.info("📝 No context added - fresh analysis")
-            
-        # Forward-looking validation requirements
-        forward_looking_section = PromptBuilderService._build_forward_looking_section(current_price)
-        
-        # Additional context
-        additional_section = f"\nADDITIONAL CONTEXT:\n{additional_context}" if additional_context else ""
-        
-        # Combine all sections
-        full_prompt = f"""
-{base_prompt}
-
-{context_section}
-
-{forward_looking_section}
-
-{additional_section}
-
-ANALYSIS REQUIREMENTS:
-□ Provide specific entry/exit levels with clear reasoning
-□ Address any existing position status if applicable
-□ Ensure all recommendations are actionable from current price
-□ Include confidence levels for all recommendations
-□ Specify risk/reward ratios
-□ MANDATORY: Include a "Context Assessment" section in your response explaining how you addressed any previous positions
-
-RESPONSE FORMAT REQUIREMENT:
-Your Stage 4 JSON response MUST include a "context_assessment" field that explains:
-- How you evaluated any existing positions
-- What decision you made (MAINTAIN/MODIFY/CLOSE/NEW) and why
-- CRITICAL: Entry strategy status - was the entry condition triggered or still waiting?
-- The specific reasoning for your position assessment
-- Any changes from previous recommendations and justification
-
-Example: "context_assessment": "EXISTING POSITION CONFIRMED: The previous buy recommendation at $37.50 remains valid. Entry Strategy Status: The 'pullback' strategy condition 'Wait for pullback to 35.50-36.00 support zone' has NOT been triggered yet - price has not reached the pullback level, so we are still WAITING for entry. The analysis was made 11h ago but NO TRADE was executed - we are still waiting for the pullback condition. Current analysis shows the uptrend is intact with no fundamental changes to market structure. Maintaining the same entry level and strategy as the technical setup remains unchanged."
-        """.strip()
-        
-        logger.info(f"✅ Contextual prompt built - {len(full_prompt)} characters")
-        return full_prompt
+        logger.info(f"✅ Enhanced contextual prompt built - {len(prompt)} characters")
+        return prompt
     
-    @staticmethod
-    def _build_context_section(context: Dict[str, Any]) -> str:
+    def _build_context_section(self, context: Dict[str, Any]) -> str:
         """Build the historical context section of the prompt"""
+        
+        # Defensive programming: Ensure required keys exist
+        if 'context_urgency' not in context:
+            logger.warning("Missing 'context_urgency' key in context, defaulting to 'reference'")
+            context['context_urgency'] = 'reference'
+        
+        if 'context_message' not in context:
+            logger.warning("Missing 'context_message' key in context, using default message")
+            context['context_message'] = "Previous analysis context"
         
         # Build trigger status section
         trigger_section = ""
@@ -217,8 +346,7 @@ If you choose MAINTAIN, use the EXACT SAME entry price in your recommendations.
         else:  # reference or error
             return f"{context['context_message']}"
     
-    @staticmethod
-    def _build_active_trade_context_section(context: Dict[str, Any]) -> str:
+    def _build_active_trade_context_section(self, context: Dict[str, Any]) -> str:
         """Build the active trade context section of the prompt"""
         
         trade_status = context.get('status', 'unknown')
@@ -318,8 +446,7 @@ you should DEFAULT to maintaining the active position. The trade is currently sh
 📊 FRESH ANALYSIS: Since the previous trade is closed, you may provide new recommendations based on current market conditions.
             """.strip()
     
-    @staticmethod
-    def _build_forward_looking_section(current_price: float) -> str:
+    def _build_forward_looking_section(self, current_price: float) -> str:
         """Build the forward-looking validation section"""
         return f"""
 CRITICAL FORWARD-LOOKING REQUIREMENTS:

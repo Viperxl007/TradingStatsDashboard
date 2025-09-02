@@ -88,13 +88,29 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
   const [marketData, setMarketData] = useState<CandlestickData[]>([]);
   const [priceChange, setPriceChange] = useState<{ value: number; percentage: number } | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [forceRecreation, setForceRecreation] = useState(0); // Force recreation counter
 
   // Notify parent when capturing state changes
   useEffect(() => {
+    console.log('🔍 [DIAGNOSTIC] Capturing state changed to:', isCapturing);
+    console.log('🔍 [DIAGNOSTIC] Chart exists:', !!chartRef.current);
+    console.log('🔍 [DIAGNOSTIC] Loading state:', isLoading);
+    
     if (onCapturingStateChange) {
       onCapturingStateChange(isCapturing);
     }
-  }, [isCapturing, onCapturingStateChange]);
+    
+    // Auto-reset capturing state after 30 seconds to prevent permanent blocking
+    if (isCapturing) {
+      const timeoutId = setTimeout(() => {
+        console.warn('🚨 [CRITICAL FIX] Capturing state stuck for 30 seconds - auto-resetting');
+        console.log('🔧 [CRITICAL FIX] This prevents permanent chart loading issues');
+        setIsCapturing(false);
+      }, 30000);
+      
+      return () => clearTimeout(timeoutId);
+    }
+  }, [isCapturing, onCapturingStateChange, isLoading]);
 
   // Listen for chart overlay clearing events (triggered when trades are closed)
   useEffect(() => {
@@ -119,6 +135,12 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         // Trigger recreation by setting loading state
         setIsLoading(true);
         setError(null);
+        
+        // Force chart recreation after clearing overlays
+        setTimeout(() => {
+          console.log('🔧 [SIMPLE FIX] Forcing chart recreation after overlay clear');
+          setForceRecreation(prev => prev + 1); // This will trigger the main useEffect
+        }, 200);
       }
     };
 
@@ -144,35 +166,37 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         setIsLoading(true);
         setError(null);
         
-        // Small delay to ensure DOM is clean
+        // Small delay to ensure DOM is clean, then force recreation
         setTimeout(() => {
-          // The main useEffect will handle recreation when dependencies change
-          console.log('🎯 [ModernChart] Chart recreation triggered');
+          console.log('🎯 [SIMPLE FIX] Chart recreation triggered - forcing initialization');
+          setForceRecreation(prev => prev + 1); // This will trigger the main useEffect
         }, 100);
       }
     };
 
     // Add event listeners
-    window.addEventListener('clearChartOverlays', handleClearOverlays as EventListener);
-    window.addEventListener('forceChartRefresh', handleForceRefresh as EventListener);
+    window.addEventListener('clearChartOverlays', handleClearOverlays as unknown as EventListener);
+    window.addEventListener('forceChartRefresh', handleForceRefresh as unknown as EventListener);
 
     // Cleanup
     return () => {
-      window.removeEventListener('clearChartOverlays', handleClearOverlays as EventListener);
-      window.removeEventListener('forceChartRefresh', handleForceRefresh as EventListener);
+      window.removeEventListener('clearChartOverlays', handleClearOverlays as unknown as EventListener);
+      window.removeEventListener('forceChartRefresh', handleForceRefresh as unknown as EventListener);
     };
   }, [symbol, timeframe, period]);
 
   // Expose capturing control methods
   const startCapturing = useCallback(() => {
     console.log('🎯 [ModernChart] Starting capture mode');
+    console.log('🔍 [DIAGNOSTIC] Previous capturing state:', isCapturing);
     setIsCapturing(true);
-  }, []);
+  }, [isCapturing]);
 
   const stopCapturing = useCallback(() => {
     console.log('🎯 [ModernChart] Stopping capture mode');
+    console.log('🔍 [DIAGNOSTIC] Previous capturing state:', isCapturing);
     setIsCapturing(false);
-  }, []);
+  }, [isCapturing]);
 
   // Modern color palette with flair
   const colors = {
@@ -444,6 +468,10 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         // Skip initialization if we're currently capturing
         if (isCapturing) {
           console.log('🚫 [ModernChart] Skipping chart initialization during capture');
+          console.log('🔍 [DIAGNOSTIC] Chart stuck in capturing state - this may cause loading issues');
+          console.log('🔍 [DIAGNOSTIC] isCapturing state:', isCapturing);
+          console.log('🔍 [DIAGNOSTIC] Chart exists:', !!chartRef.current);
+          console.log('🔍 [DIAGNOSTIC] Loading state:', isLoading);
           return;
         }
         
@@ -700,7 +728,7 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
         vwapSeriesRef.current = null;
       }
     };
-  }, [symbol, timeframe, period, colorMode]); // Recreate chart when any of these change
+  }, [symbol, timeframe, period, colorMode, forceRecreation]);
 
   // Separate effect for handling key levels and trading overlays without recreating the chart
   useEffect(() => {
@@ -748,11 +776,11 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
 
   if (error) {
     return (
-      <Box 
-        height={height} 
-        width={width} 
-        position="relative" 
-        borderRadius="xl" 
+      <Box
+        height={height}
+        width={width}
+        position="relative"
+        borderRadius="xl"
         overflow="hidden"
         bg={currentColors.background}
         border="1px solid"
@@ -875,20 +903,20 @@ const ModernCandlestickChart: React.FC<ModernCandlestickChartProps> = ({
       
       {/* Loading State */}
       {isLoading && (
-        <Center 
-          position="absolute" 
-          top={showHeader ? "81px" : "0"} 
-          left="0" 
-          right="0" 
-          bottom="0" 
-          bg={colorMode === 'dark' ? 'rgba(26, 32, 44, 0.8)' : 'rgba(255, 255, 255, 0.8)'} 
+        <Center
+          position="absolute"
+          top={showHeader ? "81px" : "0"}
+          left="0"
+          right="0"
+          bottom="0"
+          bg={colorMode === 'dark' ? 'rgba(26, 32, 44, 0.8)' : 'rgba(255, 255, 255, 0.8)'}
           backdropFilter="blur(4px)"
           zIndex="10"
         >
           <VStack spacing={4}>
             <Box position="relative">
-              <Spinner 
-                size="xl" 
+              <Spinner
+                size="xl"
                 color={currentColors.accent}
                 thickness="3px"
                 speed="0.8s"

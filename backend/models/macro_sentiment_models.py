@@ -578,7 +578,7 @@ class MacroSentimentDatabase:
                 
                 cursor.execute('''
                     SELECT analysis_timestamp, overall_confidence, trade_permission, market_regime
-                    FROM macro_sentiment_analysis 
+                    FROM macro_sentiment_analysis
                     WHERE analysis_timestamp > ?
                     ORDER BY analysis_timestamp ASC
                 ''', (start_timestamp,))
@@ -589,6 +589,36 @@ class MacroSentimentDatabase:
         except Exception as e:
             logger.error(f"Error getting confidence history: {str(e)}")
             return []
+    
+    def execute_query(self, query: str, params: tuple = None) -> Optional[List[Dict[str, Any]]]:
+        """
+        Execute a generic SQL query and return results.
+        
+        Args:
+            query (str): SQL query to execute
+            params (tuple, optional): Query parameters
+            
+        Returns:
+            Optional[List[Dict[str, Any]]]: Query results as list of dictionaries, or None on error
+        """
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
+                
+                rows = cursor.fetchall()
+                return [dict(row) for row in rows]
+                
+        except Exception as e:
+            logger.error(f"Error executing query: {str(e)}")
+            logger.error(f"Query: {query}")
+            logger.error(f"Params: {params}")
+            return None
 
 
 # Global database instance

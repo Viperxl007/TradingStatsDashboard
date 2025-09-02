@@ -33,9 +33,13 @@ const TradingRecommendationOverlay: React.FC<TradingRecommendationOverlayProps> 
     if (chart && overlaySeriesRef.current.length > 0) {
       overlaySeriesRef.current.forEach(series => {
         try {
-          chart.removeSeries(series);
+          // Check if series is valid before removing
+          if (series && typeof series === 'object') {
+            chart.removeSeries(series);
+          }
         } catch (error) {
-          console.warn('Failed to remove overlay series:', error);
+          // Silently handle removal errors - series might already be removed
+          console.debug('Overlay series already removed or invalid:', error instanceof Error ? error.message : 'Unknown error');
         }
       });
       overlaySeriesRef.current = [];

@@ -1907,17 +1907,47 @@ def get_all_trades_history():
             cursor = conn.cursor()
             
             cursor.execute('''
-                SELECT id, ticker, timeframe, status, action, entry_price, target_price,
-                       stop_loss, current_price, unrealized_pnl, created_at, updated_at,
-                       close_time, close_price, close_reason, realized_pnl
-                FROM active_trades
-                ORDER BY updated_at DESC
+                SELECT at.id, at.ticker, at.timeframe, at.status, at.action, at.entry_price, at.target_price,
+                       at.stop_loss, at.current_price, at.unrealized_pnl, at.created_at, at.updated_at,
+                       at.close_time, at.close_price, at.close_reason, at.realized_pnl,
+                       ca.analysis_data, ca.prompt_version
+                FROM active_trades at
+                LEFT JOIN chart_analyses ca ON at.analysis_id = ca.id
+                ORDER BY at.updated_at DESC
                 LIMIT 1000
             ''')
             
             all_trades = []
             for row in cursor.fetchall():
-                id, ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl = row
+                id, ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl, analysis_data, prompt_version = row
+                
+                # Extract AI model information and quality score from chart analysis data
+                ai_model = None
+                quality_score = None
+                if analysis_data:
+                    try:
+                        import json
+                        parsed_analysis = json.loads(analysis_data)
+                        # Extract AI model information
+                        ai_model = (parsed_analysis.get('model_used') or
+                                   parsed_analysis.get('ai_model') or
+                                   parsed_analysis.get('model'))
+                        
+                        # Extract quality score
+                        quality_score = (parsed_analysis.get('quality_score') or
+                                       parsed_analysis.get('recommendations', {}).get('quality_score') or
+                                       parsed_analysis.get('recommendations', {}).get('confidence', 0.0) * 100)
+                    except (json.JSONDecodeError, AttributeError, TypeError):
+                        logger.warning(f"Failed to parse analysis data for {ticker}")
+                
+                # Fallback AI model if none found
+                if not ai_model:
+                    ai_model = "unknown"
+                
+                # Fallback quality score if none found
+                if not quality_score:
+                    quality_score = 50.0  # Default fallback
+                
                 all_trades.append({
                     'id': id,
                     'ticker': ticker,
@@ -1934,7 +1964,10 @@ def get_all_trades_history():
                     'close_time': close_time,
                     'close_price': close_price,
                     'close_reason': close_reason,
-                    'realized_pnl': realized_pnl
+                    'realized_pnl': realized_pnl,
+                    'ai_model': ai_model,
+                    'quality_score': quality_score,
+                    'prompt_version': prompt_version
                 })
         
         return jsonify({
@@ -2097,7 +2130,7 @@ def get_all_active_trades():
                 SELECT at.ticker, at.timeframe, at.status, at.action, at.entry_price, at.target_price,
                        at.stop_loss, at.current_price, at.unrealized_pnl, at.created_at, at.updated_at,
                        at.close_time, at.close_price, at.close_reason, at.realized_pnl,
-                       ca.analysis_data
+                       ca.analysis_data, ca.prompt_version
                 FROM active_trades at
                 LEFT JOIN chart_analyses ca ON at.analysis_id = ca.id
                 WHERE at.status IN ('waiting', 'active')
@@ -2106,10 +2139,12 @@ def get_all_active_trades():
             
             active_trades = []
             for row in cursor.fetchall():
-                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl, analysis_data = row
+                ticker, timeframe, status, action, entry_price, target_price, stop_loss, current_price, unrealized_pnl, created_at, updated_at, close_time, close_price, close_reason, realized_pnl, analysis_data, prompt_version = row
                 
-                # Extract AI reasoning from chart analysis data
+                # Extract AI reasoning, model information, and quality score from chart analysis data
                 reasoning = None
+                ai_model = None
+                quality_score = None
                 if analysis_data:
                     try:
                         import json
@@ -2120,12 +2155,30 @@ def get_all_active_trades():
                                    parsed_analysis.get('reasoning') or
                                    parsed_analysis.get('ai_reasoning') or
                                    parsed_analysis.get('recommendation_reasoning'))
+                        
+                        # Extract AI model information
+                        ai_model = (parsed_analysis.get('model_used') or
+                                   parsed_analysis.get('ai_model') or
+                                   parsed_analysis.get('model'))
+                        
+                        # Extract quality score
+                        quality_score = (parsed_analysis.get('quality_score') or
+                                       parsed_analysis.get('recommendations', {}).get('quality_score') or
+                                       parsed_analysis.get('recommendations', {}).get('confidence', 0.0) * 100)
                     except (json.JSONDecodeError, AttributeError, TypeError):
                         logger.warning(f"Failed to parse analysis data for {ticker}")
                 
                 # Fallback reasoning if none found
                 if not reasoning:
                     reasoning = f"Production {action.upper()} trade from Chart Analysis"
+                
+                # Fallback AI model if none found
+                if not ai_model:
+                    ai_model = "unknown"
+                
+                # Fallback quality score if none found
+                if not quality_score:
+                    quality_score = 50.0  # Default fallback
                 
                 active_trades.append({
                     'ticker': ticker,
@@ -2143,7 +2196,10 @@ def get_all_active_trades():
                     'close_price': close_price,
                     'close_reason': close_reason,
                     'realized_pnl': realized_pnl,
-                    'reasoning': reasoning
+                    'reasoning': reasoning,
+                    'ai_model': ai_model,
+                    'quality_score': quality_score,
+                    'prompt_version': prompt_version
                 })
         
         return jsonify({

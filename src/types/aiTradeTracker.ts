@@ -90,6 +90,7 @@ export interface AITradeEntry {
   
   // AI Analysis Data
   aiModel: string; // Claude model used for analysis
+  promptVersion?: string; // Prompt version used for analysis (e.g., "v2.0")
   confidence: number; // 0-1 scale from AI analysis
   confidenceLevel: AITradeConfidence; // Categorized confidence
   sentiment: 'bullish' | 'bearish' | 'neutral';

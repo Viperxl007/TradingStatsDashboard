@@ -88,6 +88,9 @@ const ChartAnalysis: React.FC = () => {
   const [hasInitialAnalysis, setHasInitialAnalysis] = useState(false);
   const [additionalContext, setAdditionalContext] = useState('');
   const [chartInstance, setChartInstance] = useState<any>(null);
+  const [selectedModel, setSelectedModel] = useState<string>(() => {
+    return localStorage.getItem('selectedClaudeModel') || '';
+  });
   const { isOpen: isContextOpen, onOpen: onContextOpen, onClose: onContextClose } = useDisclosure();
   
   // Technical Indicator toggles
@@ -239,7 +242,7 @@ const ChartAnalysis: React.FC = () => {
   };
 
   // Handle chart analysis
-  const handleAnalyzeChart = async (chartImage: string, contextOverride?: string, selectedModel?: string) => {
+  const handleAnalyzeChart = async (chartImage: string, contextOverride?: string, modelOverride?: string) => {
     if (!selectedTicker) {
       toast({
         title: 'No Ticker Selected',
@@ -263,12 +266,13 @@ const ChartAnalysis: React.FC = () => {
       const contextToUse = contextOverride || additionalContext.trim() || undefined;
       
       console.log(`🔍 [ChartAnalysis] Creating analysis request with timeframe: ${timeframe}`);
+      const modelToUse = modelOverride || selectedModel || '';
       const baseRequest = createAnalysisRequest(
         selectedTicker,
         chartImage,
         timeframe,
         contextToUse,
-        selectedModel,
+        modelToUse,
         currentPrice
       );
       
@@ -400,34 +404,37 @@ const ChartAnalysis: React.FC = () => {
         });
       }
       
-      // CRITICAL: Check if trade closure was detected and clear overlays first
+      // CRITICAL: Check if trade closure was detected and clear OLD overlays first
+      let chartWasCleared = false;
       if ((result as any).trade_closure_detected || (result as any).clear_chart_overlays) {
-        console.log(`🧹 [ChartAnalysis] Trade closure detected for ${selectedTicker} - clearing all chart overlays and forcing chart refresh`);
+        console.log(`🧹 [ChartAnalysis] Trade closure detected for ${selectedTicker} - clearing OLD chart overlays only (preserving new analysis)`);
+        chartWasCleared = true;
         
         // Import and use the chart overlay utility
         const { clearAllChartOverlays, forceChartRefresh } = await import('../utils/chartOverlayUtils');
         
-        // Step 1: Clear all overlays immediately
+        // Step 1: Store the new analysis result BEFORE clearing anything to prevent race conditions
+        const preservedAnalysisResult = { ...result };
+        console.log(`🛡️ [ChartAnalysis] PRESERVING new analysis data for ${selectedTicker} - stored analysis ID: ${preservedAnalysisResult.analysis_id}`);
+        
+        // Step 2: Clear all overlays immediately
         await clearAllChartOverlays();
         
-        // Step 2: Clear local trading recommendation state (backend data remains)
+        // Step 3: Clear local trading recommendation state (backend data remains)
         setActiveTradingRecommendations(new Map());
         
-        // Step 3: Clear active trade overlays
+        // Step 4: Clear active trade overlays
         setActiveTradeOverlays(new Map());
-        
-        // Step 4: Clear any existing analysis data to ensure clean state
-        dispatch(clearChartAnalysisData());
         
         // Step 5: Force chart refresh to ensure clean rendering
         await forceChartRefresh();
         
-        console.log(`✅ [ChartAnalysis] Chart overlays cleared and chart refreshed for ${selectedTicker} due to trade closure`);
+        // Step 6: Shorter wait since we're not clearing everything
+        await new Promise(resolve => setTimeout(resolve, 300));
         
-        // Step 6: Wait longer for chart to fully refresh and render clean
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        
-        console.log(`🎯 [ChartAnalysis] Chart should now be clean for fresh AI analysis of ${selectedTicker}`);
+        // Step 7: CRITICAL - Immediately restore the analysis data to prevent UI blanking
+        dispatch(analyzeChartSuccess(preservedAnalysisResult));
+        console.log(`✅ [ChartAnalysis] Chart overlays cleared and analysis data restored for ${selectedTicker} - analysis ID: ${preservedAnalysisResult.analysis_id}`);
       }
       
       // Create trading recommendation overlay if we have recommendations
@@ -470,23 +477,51 @@ const ChartAnalysis: React.FC = () => {
       // Wait for overlays to render, then capture marked-up chart BEFORE switching tabs
       setTimeout(async () => {
         try {
-          console.log('📸 Capturing post-analysis chart with overlays...');
+          // SKIP screenshot capture if chart was cleared due to trade closure
+          if (chartWasCleared) {
+            console.log('🚫 [ChartAnalysis] Skipping post-analysis screenshot - chart was cleared due to trade closure');
+            console.log('📊 Analysis complete - staying on Chart Viewer tab');
+            return;
+          }
+          
+          console.log('📸 [ChartAnalysis] Starting post-analysis screenshot capture...');
+          console.log('🔍 [DIAGNOSTIC] Chart instance exists:', !!chartInstance);
+          console.log('🔍 [DIAGNOSTIC] Selected ticker:', selectedTicker);
+          console.log('🔍 [DIAGNOSTIC] Analysis ID:', result.analysis_id);
           
           // Import screenshot functions
           const { captureChartScreenshotNative, captureChartScreenshot } = await import('../services/chartAnalysisService');
           
           let markedUpScreenshot: string | undefined;
           
-          // Try native screenshot first
+          // CRITICAL FIX: Add timeout protection for screenshot capture
+          const screenshotTimeout = new Promise<string>((_, reject) =>
+            setTimeout(() => reject(new Error('Screenshot capture timeout after 10 seconds')), 10000)
+          );
+          
+          // Try native screenshot first with timeout protection
           if (chartInstance) {
             try {
-              markedUpScreenshot = await captureChartScreenshotNative(chartInstance);
+              console.log('🔍 [DIAGNOSTIC] Attempting native screenshot capture...');
+              markedUpScreenshot = await Promise.race([
+                captureChartScreenshotNative(chartInstance),
+                screenshotTimeout
+              ]);
               console.log('✅ Post-analysis native screenshot successful!');
             } catch (nativeError) {
               console.warn('⚠️ Post-analysis native screenshot failed, falling back to html2canvas:', nativeError);
               const chartContainer = document.querySelector('[data-testid="modern-chart-container"]') as HTMLElement;
               if (chartContainer) {
-                markedUpScreenshot = await captureChartScreenshot(chartContainer);
+                try {
+                  console.log('🔍 [DIAGNOSTIC] Attempting html2canvas screenshot capture...');
+                  markedUpScreenshot = await Promise.race([
+                    captureChartScreenshot(chartContainer),
+                    screenshotTimeout
+                  ]);
+                } catch (fallbackError) {
+                  console.error('❌ [DIAGNOSTIC] Both screenshot methods failed:', fallbackError);
+                  // Continue without screenshot to prevent blocking
+                }
               }
             }
           } else {
@@ -508,7 +543,15 @@ const ChartAnalysis: React.FC = () => {
                 ...result,
                 markedUpChartImageBase64: markedUpScreenshot
               };
-              dispatch(analyzeChartSuccess(updatedResult));
+              
+              // RACE CONDITION FIX: Only dispatch if we haven't already dispatched due to overlay clearing
+              const currentAnalysisId = state.chartAnalysisData?.currentAnalysis?.analysis_id;
+              if (!currentAnalysisId || currentAnalysisId !== result.analysis_id) {
+                dispatch(analyzeChartSuccess(updatedResult));
+                console.log('✅ Post-analysis chart captured and analysis state updated');
+              } else {
+                console.log('🔄 Post-analysis chart captured but analysis state already current - skipping duplicate dispatch');
+              }
               
               console.log('✅ Post-analysis chart captured and stored for historical reference');
             } catch (updateError) {
@@ -518,7 +561,15 @@ const ChartAnalysis: React.FC = () => {
                 ...result,
                 markedUpChartImageBase64: markedUpScreenshot
               };
-              dispatch(analyzeChartSuccess(updatedResult));
+              
+              // RACE CONDITION FIX: Only dispatch if we haven't already dispatched due to overlay clearing
+              const currentAnalysisId = state.chartAnalysisData?.currentAnalysis?.analysis_id;
+              if (!currentAnalysisId || currentAnalysisId !== result.analysis_id) {
+                dispatch(analyzeChartSuccess(updatedResult));
+                console.log('✅ Post-analysis fallback: analysis state updated despite backend error');
+              } else {
+                console.log('🔄 Post-analysis fallback: analysis state already current - skipping duplicate dispatch');
+              }
             }
           }
           
@@ -526,7 +577,19 @@ const ChartAnalysis: React.FC = () => {
           console.log('📊 Analysis complete - staying on Chart Viewer tab to show marked-up chart');
         } catch (error) {
           console.warn('⚠️ Failed to capture post-analysis chart:', error);
+          console.log('🔍 [DIAGNOSTIC] Screenshot error details:', error);
           // Don't switch tabs - let user see the chart with overlays
+        } finally {
+          // CRITICAL FIX: Always ensure capturing state is reset
+          console.log('🔧 [CRITICAL FIX] Ensuring capturing state is reset after screenshot attempt');
+          if (chartInstance && typeof chartInstance.stopCapturing === 'function') {
+            try {
+              chartInstance.stopCapturing();
+              console.log('✅ [CRITICAL FIX] Capturing state reset via chartInstance.stopCapturing()');
+            } catch (resetError) {
+              console.warn('⚠️ [CRITICAL FIX] Failed to reset capturing state via chartInstance:', resetError);
+            }
+          }
         }
       }, 3000); // Wait 3 seconds for overlays to fully render
       
@@ -794,7 +857,27 @@ const ChartAnalysis: React.FC = () => {
   // Handle clear overlays callback
   const handleClearOverlays = () => {
     console.log('🧹 [ChartAnalysis] Clearing chart overlays...');
+    
+    // Clear local trading recommendation state immediately
+    setActiveTradingRecommendations(new Map());
+    
+    // Clear active trade overlays immediately
+    setActiveTradeOverlays(new Map());
+    
+    // Dispatch the Redux action
     dispatch(clearChartOverlays());
+    
+    // Use async clearing in background without blocking
+    (async () => {
+      try {
+        const { clearAllChartOverlays, forceChartRefresh } = await import('../utils/chartOverlayUtils');
+        await clearAllChartOverlays();
+        await forceChartRefresh();
+        console.log('✅ [ChartAnalysis] Chart overlays cleared comprehensively');
+      } catch (error) {
+        console.error('❌ [ChartAnalysis] Error clearing chart overlays:', error);
+      }
+    })();
   };
 
   // Handle chart analysis from the main "Analyze Chart" button
@@ -875,7 +958,7 @@ const ChartAnalysis: React.FC = () => {
       
       // Get additional context and selected model
       const contextToUse = additionalContext.trim() || undefined;
-      const selectedModel = localStorage.getItem('selectedClaudeModel') || '';
+      const modelToUse = selectedModel || '';
       
       console.log('🤖 Sending to AI for analysis...');
       // Trigger the analysis with the captured screenshot
@@ -1147,8 +1230,9 @@ const ChartAnalysis: React.FC = () => {
                     <HStack justify="space-between" align="center">
                       <Box flex={1}>
                         <ModelSelector
-                          selectedModel={localStorage.getItem('selectedClaudeModel') || ''}
+                          selectedModel={selectedModel}
                           onModelChange={(modelId: string) => {
+                            setSelectedModel(modelId);
                             localStorage.setItem('selectedClaudeModel', modelId);
                           }}
                           isDisabled={isAnalyzing}
@@ -1215,8 +1299,8 @@ const ChartAnalysis: React.FC = () => {
                                         if (base64) {
                                           const imageData = base64.split(',')[1];
                                           const context = additionalContext.trim() || undefined;
-                                          const selectedModel = localStorage.getItem('selectedClaudeModel') || '';
-                                          handleAnalyzeChart(imageData, context, selectedModel);
+                                          const modelToUse = selectedModel || '';
+                                          handleAnalyzeChart(imageData, context, modelToUse);
                                           onContextClose();
                                         }
                                       };

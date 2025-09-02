@@ -27,25 +27,32 @@ CLAUDE_API_KEY = os.environ.get('CLAUDE_API_KEY')
 CLAUDE_MODELS = [
     # Claude 4 Models (Latest)
     {
+        "id": "claude-opus-4-1-20250805",
+        "name": "Claude Opus 4.1",
+        "description": "Most advanced and capable model - recommended upgrade from Opus 4",
+        "max_tokens": 32000,
+        "cost_per_1k_tokens": 0.015
+    },
+    {
         "id": "claude-sonnet-4-20250514",
         "name": "Claude Sonnet 4",
         "description": "Latest Sonnet model with improved reasoning and intelligence",
-        "max_tokens": 8192,
+        "max_tokens": 64000,
         "cost_per_1k_tokens": 0.003
     },
     {
         "id": "claude-opus-4-20250514",
         "name": "Claude Opus 4",
-        "description": "Most capable model with superior reasoning for complex analysis",
-        "max_tokens": 8192,
+        "description": "Most capable model with superior reasoning (upgrade to 4.1 recommended)",
+        "max_tokens": 32000,
         "cost_per_1k_tokens": 0.015
     },
     # Claude 3.7 Models
     {
         "id": "claude-3-7-sonnet-20250219",
         "name": "Claude 3.7 Sonnet",
-        "description": "Advanced Sonnet model with extended capabilities",
-        "max_tokens": 8192,
+        "description": "High-performance model with toggleable extended thinking (up to 128k tokens with beta header)",
+        "max_tokens": 64000,
         "cost_per_1k_tokens": 0.003
     },
     # Claude 3.5 Models
@@ -87,8 +94,8 @@ CLAUDE_MODELS = [
     }
 ]
 
-# Default Claude model for chart analysis (using latest Claude 4 Sonnet)
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-20250514"
+# Default Claude model for chart analysis (using latest Claude Opus 4.1)
+DEFAULT_CLAUDE_MODEL = "claude-opus-4-1-20250805"
 
 # Rate limiting configuration for Yahoo Finance API calls
 YF_RATE_LIMIT = {

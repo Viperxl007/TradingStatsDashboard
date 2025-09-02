@@ -1,0 +1,380 @@
+================================================================================
+TRADING STATS DASHBOARD - PROMPT VERSION 1 BACKUP
+================================================================================
+Created: 2025-01-23
+Purpose: Complete backup of all prompts before implementing V2 enhancements
+Source: backend/services/prompt_builder_service.py and backend/services/macro_ai_service.py
+
+================================================================================
+1. MAIN CONTEXTUAL ANALYSIS PROMPT (PromptBuilderService.build_contextual_analysis_prompt)
+================================================================================
+
+BASE PROMPT TEMPLATE:
+"""
+Analyze this {timeframe} chart for {ticker} trading opportunities.
+
+CURRENT MARKET STATE:
+- Ticker: {ticker}
+- Current Price: ${current_price}
+- Timeframe: {timeframe}
+"""
+
+CONTEXT SECTION (Recent Analysis):
+"""
+{context_message}:
+- Action: {action} at ${entry_price}
+- Entry Strategy: {entry_strategy}
+- Entry Condition: {entry_condition}
+- Price when analysis was made: ${previous_analysis_price}
+- Current price: ${current_price}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Sentiment: {sentiment} (confidence: {confidence})
+- Reasoning: {reasoning}...
+
+{trigger_section}
+
+🚨 CRITICAL REQUIREMENT - EXISTING POSITION ASSESSMENT:
+You MUST explicitly address this recent position in your analysis. Choose ONE of the following:
+
+A) MAINTAIN EXISTING POSITION: If the previous recommendation is still valid, state:
+   "EXISTING POSITION CONFIRMED: The previous {action} recommendation at ${entry_price} remains valid. Current analysis supports maintaining this position."
+   
+   ⚠️ CRITICAL ENTRY STRATEGY STATUS: The previous recommendation was a "{entry_strategy}" strategy with condition: "{entry_condition}"
+   
+   🚨 IMPORTANT: The timestamp ({hours_ago}h ago) refers to when the ANALYSIS was made, NOT when any trade was executed.
+   
+   🔍 ENTRY TRIGGER ANALYSIS: Based on candlestick data analysis:
+   {"✅ ENTRY TRIGGER HAS BEEN HIT - " + trigger_message if trigger_hit else "⏳ ENTRY TRIGGER NOT YET HIT - Still waiting for entry condition"}
+   
+   ⚠️ IMPORTANT: If maintaining, you MUST use the EXACT SAME entry price (${entry_price}) in your recommendations.
+   DO NOT suggest a different entry price unless there's a fundamental change in market structure.
+
+B) MODIFY EXISTING POSITION: If adjustments are needed, state:
+   "POSITION MODIFICATION: The previous {action} at ${entry_price} needs adjustment due to [specific reason]. New levels: [specify changes]"
+
+C) CLOSE EXISTING POSITION: If the position should be closed, state:
+   "POSITION CLOSURE: The previous {action} at ${entry_price} should be closed due to [specific fundamental change]. Reason: [explain what changed]"
+
+D) NEW POSITION (ONLY if fundamentally different): If recommending a completely new position, you MUST:
+   1. First address the existing position status
+   2. Explain what FUNDAMENTALLY changed to invalidate the previous analysis
+   3. Justify why a new position is warranted instead of modifying the existing one
+
+🔒 CONSISTENCY RULE: Unless there's a clear fundamental change (major support/resistance break, trend reversal, etc.),
+you should MAINTAIN the existing position with the SAME entry price. Minor price movements do NOT justify new entry levels.
+
+⚠️ DO NOT ignore the existing position. You must explicitly reference it in your recommendations section.
+"""
+
+CONTEXT SECTION (Active Trade):
+"""
+{context_message}:
+- Action: {action} at ${entry_price}
+- Entry Strategy: {entry_strategy}
+- Entry Condition: {entry_condition}
+- Price when analysis was made: ${previous_analysis_price}
+- Current price: ${current_price}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Original sentiment: {sentiment}
+- Original reasoning: {summary}...
+
+{trigger_section}
+
+📊 ACTIVE POSITION ASSESSMENT REQUIRED:
+You MUST evaluate the existing position and provide explicit guidance:
+
+1. POSITION STATUS: Is the {action} position at ${entry_price} still valid?
+
+2. ENTRY STRATEGY STATUS: The previous recommendation was a "{entry_strategy}" strategy with condition: "{entry_condition}"
+   
+   🚨 IMPORTANT: The timestamp ({hours_ago}h ago) refers to when the ANALYSIS was made, NOT when any trade was executed.
+   
+   🔍 CRITICAL TEMPORAL ANALYSIS: You have the price when the analysis was made (${previous_analysis_price}) vs current price (${current_price}).
+   
+   You MUST determine and state:
+   - Has this entry condition been triggered SINCE the previous analysis was made?
+   - If PULLBACK strategy to ${entry_price}: Has price dropped to that level SINCE the analysis was made at ${previous_analysis_price}?
+   - If BREAKOUT strategy: Has the breakout occurred with volume SINCE the analysis was made?
+   - Current position status: WAITING for entry condition OR entry condition has been TRIGGERED since analysis
+   
+   ⚠️ DO NOT assume the trade was executed just because an analysis was made. The analysis timestamp ≠ trade execution.
+   ⚠️ DO NOT assume entry condition was triggered just because price hit that level at some point - it must have happened AFTER the analysis.
+
+3. CURRENT EVALUATION: Based on current chart conditions, should this position be:
+   - MAINTAINED (if thesis still holds) - DEFAULT CHOICE unless fundamentally changed
+   - MODIFIED (if levels need adjustment)
+   - CLOSED (if thesis invalidated)
+   - REPLACED (if fundamentally different opportunity exists)
+
+4. EXPLICIT RECOMMENDATION: You must state one of:
+   "MAINTAIN: Continue holding the {action} position from ${entry_price}"
+   "MODIFY: Adjust the {action} position levels to [new levels] due to [reason]"
+   "CLOSE: Exit the {action} position due to [specific change in thesis]"
+   "REPLACE: Close existing position and enter new position due to [fundamental change]"
+
+🔒 BIAS TOWARD CONSISTENCY: Unless there's a clear fundamental change in market structure,
+you should DEFAULT to MAINTAINING the existing position. Minor price fluctuations do NOT justify position changes.
+
+⚠️ Do not provide new recommendations without first addressing the existing position status.
+If you choose MAINTAIN, use the EXACT SAME entry price in your recommendations.
+"""
+
+ACTIVE TRADE CONTEXT SECTIONS:
+
+WAITING TRADE:
+"""
+🎯 ACTIVE TRADE MONITORING - WAITING FOR ENTRY:
+- Trade ID: {trade_id}
+- Action: {action} at ${entry_price}
+- Entry Strategy: {entry_strategy}
+- Entry Condition: {entry_condition}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Current Price: ${current_price}
+- Time Since Setup: {time_since_creation} hours
+- Status: WAITING for entry trigger
+
+🚨 CRITICAL - ACTIVE TRADE ASSESSMENT REQUIRED:
+You MUST acknowledge this WAITING trade and assess its current status:
+
+A) MAINTAIN WAITING POSITION: If the entry condition is still valid, state:
+   "ACTIVE TRADE CONFIRMED: Maintaining {action} setup at ${entry_price}. Entry condition '{entry_condition}' has not been triggered yet. Current analysis supports continuing to wait for entry."
+
+B) MODIFY ENTRY LEVELS: If market conditions have changed, state:
+   "TRADE MODIFICATION: Adjusting {action} entry from ${entry_price} to [new price] due to [specific market structure change]."
+
+C) CANCEL WAITING TRADE: If the setup is no longer valid, state:
+   "TRADE CANCELLATION: Canceling {action} setup at ${entry_price} due to [specific reason - trend invalidation/market structure change]."
+
+🔒 CONSISTENCY RULE: Unless there's a fundamental change in market structure, you should MAINTAIN the existing trade setup.
+The trade was created {time_since_creation} hours ago and is still waiting for the entry condition to be met.
+
+⚠️ You MUST explicitly address this waiting trade in your recommendations. Do not ignore it or create conflicting recommendations.
+"""
+
+ACTIVE TRADE:
+"""
+🎯 ACTIVE TRADE MONITORING - TRADE IS OPEN:
+- Trade ID: {trade_id}
+- Position: {action} at ${entry_price}
+- Current Price: ${current_price}
+- Target: ${target_price} | Stop: ${stop_loss}
+- Unrealized P&L: ${unrealized_pnl} ({pnl_status})
+- Time Since Entry: {time_since_trigger} hours
+- Max Favorable: ${max_favorable_price}
+- Max Adverse: ${max_adverse_price}
+- Status: ACTIVE TRADE IN PROGRESS
+
+🚨 CRITICAL - ACTIVE TRADE MANAGEMENT REQUIRED:
+You MUST acknowledge this ACTIVE trade and provide explicit guidance:
+
+A) MAINTAIN ACTIVE POSITION: If the trade thesis still holds, state:
+   "ACTIVE TRADE CONFIRMED: Maintaining {action} position from ${entry_price}. Current P&L: ${unrealized_pnl}. Technical analysis supports holding the position toward target ${target_price}."
+
+B) SUGGEST EARLY CLOSE: ONLY if there are overwhelming technical reasons, state:
+   "EARLY CLOSE RECOMMENDED: Close {action} position at ${current_price} due to [CRITICAL market structure change]. Reason: [specific technical invalidation]."
+   
+   ⚠️ IMPORTANT: Early close should ONLY be suggested for:
+   - Major trend reversal with strong confirmation
+   - Critical support/resistance break with volume
+   - Fundamental market structure change
+   - NOT for minor pullbacks or temporary weakness
+
+C) ADJUST STOP/TARGET: If risk management needs updating, state:
+   "POSITION ADJUSTMENT: Modify stop loss to [new level] and/or target to [new level] due to [specific technical development]."
+
+🔒 BIAS TOWARD HOLDING: Unless there's overwhelming evidence of trend invalidation or major market structure change,
+you should DEFAULT to maintaining the active position. The trade is currently showing {pnl_status} of ${unrealized_pnl}.
+
+⚠️ You MUST explicitly address this active trade. Do not provide conflicting recommendations or ignore the open position.
+"""
+
+TRIGGER STATUS SECTIONS:
+
+TRIGGER HIT:
+"""
+🎯 ENTRY TRIGGER STATUS: ✅ TRIGGERED
+{trigger_message}
+- Trigger occurred at: {trigger_time}
+- Trigger price: ${trigger_price}
+- Target entry price: ${entry_price}
+
+🚨 CRITICAL: The entry condition HAS BEEN TRIGGERED since the last analysis. You must acknowledge this in your assessment.
+"""
+
+TRIGGER NOT HIT:
+"""
+🎯 ENTRY TRIGGER STATUS: ⏳ NOT TRIGGERED
+The entry condition has NOT been triggered since the last analysis.
+- Entry price target: ${entry_price}
+- Current price: ${current_price}
+- Status: Still WAITING for entry condition to be met
+"""
+
+FORWARD-LOOKING SECTION:
+"""
+CRITICAL FORWARD-LOOKING REQUIREMENTS:
+🎯 Current price is ${current_price} - ALL recommendations must be actionable from this level
+
+ENTRY SPECIFICATION REQUIREMENTS:
+- If entry price > current price: State "waiting for breakout above ${current_price}"
+- If entry price < current price: State "waiting for pullback to [price]" 
+- If entry price ≈ current price: State "immediate entry opportunity"
+- If suggesting retest of a level: Explicitly state "on retest of [level]"
+
+VALIDATION CHECKLIST:
+□ Entry strategy clearly defined (immediate/pullback/breakout/retest)
+□ Price relationship to current level specified  
+□ Time horizon for entry opportunity stated
+□ Risk management levels forward-looking
+"""
+
+ANALYSIS REQUIREMENTS:
+"""
+ANALYSIS REQUIREMENTS:
+□ Provide specific entry/exit levels with clear reasoning
+□ Address any existing position status if applicable
+□ Ensure all recommendations are actionable from current price
+□ Include confidence levels for all recommendations
+□ Specify risk/reward ratios
+□ MANDATORY: Include a "Context Assessment" section in your response explaining how you addressed any previous positions
+
+RESPONSE FORMAT REQUIREMENT:
+Your Stage 4 JSON response MUST include a "context_assessment" field that explains:
+- How you evaluated any existing positions
+- What decision you made (MAINTAIN/MODIFY/CLOSE/NEW) and why
+- CRITICAL: Entry strategy status - was the entry condition triggered or still waiting?
+- The specific reasoning for your position assessment
+- Any changes from previous recommendations and justification
+
+Example: "context_assessment": "EXISTING POSITION CONFIRMED: The previous buy recommendation at $37.50 remains valid. Entry Strategy Status: The 'pullback' strategy condition 'Wait for pullback to 35.50-36.00 support zone' has NOT been triggered yet - price has not reached the pullback level, so we are still WAITING for entry. The analysis was made 11h ago but NO TRADE was executed - we are still waiting for the pullback condition. Current analysis shows the uptrend is intact with no fundamental changes to market structure. Maintaining the same entry level and strategy as the technical setup remains unchanged."
+"""
+
+================================================================================
+2. MACRO AI ANALYSIS PROMPT (MacroAIService._build_analysis_prompt)
+================================================================================
+
+MACRO ANALYSIS PROMPT:
+"""
+You are an expert cryptocurrency macro analyst. Analyze the provided 5 charts showing comprehensive market data over the past {data_points} data points.
+
+CHARTS PROVIDED FOR ANALYSIS:
+1. Bitcoin Price Chart - BTC price movements and trends
+2. Ethereum Price Chart - ETH price movements and trends
+3. Bitcoin Dominance Chart - BTC's market share percentage
+4. Altcoin Strength Index Chart - Overall altcoin performance ratio
+5. ETH/BTC Ratio Chart - ETH market cap relative to BTC market cap (shows ETH strength vs BTC)
+
+CURRENT MARKET CONTEXT:
+- BTC Price: ${btc_price} (Change: {btc_change}%)
+- ETH Price: ${eth_price} (Change: {eth_change}%)
+- BTC Dominance: {btc_dominance}% (Change: {dominance_change}%)
+- Alt Strength Ratio: {alt_strength} (Change: {alt_change}%)
+
+ANALYSIS REQUIREMENTS:
+
+1. CONFIDENCE SCORING (0-100):
+   - Use the ENTIRE 0-100 range responsibly
+   - 0-25: Very uncertain/choppy conditions
+   - 26-50: Low confidence/mixed signals
+   - 51-75: Moderate confidence/some clarity
+   - 76-100: High confidence/clear trends
+   - Be BRUTALLY HONEST - no false positives or sugar-coating
+
+2. TREND ANALYSIS:
+   - BTC Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
+   - ETH Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
+   - ALT Trend: Direction (UP/DOWN/SIDEWAYS) and Strength (0-100)
+   - Base analysis on observable chart patterns, not speculation
+
+3. TRADE PERMISSION LEVELS:
+   - NO_TRADE: Choppy, uncertain conditions - preserve capital
+   - SELECTIVE: Some opportunities but be very careful
+   - ACTIVE: Good conditions for active trading
+   - AGGRESSIVE: Excellent trending conditions
+
+4. MARKET REGIME CLASSIFICATION:
+   - BTC_SEASON: BTC outperforming, dominance rising
+   - ALT_SEASON: Alts outperforming, dominance falling
+   - TRANSITION: Unclear leadership, mixed signals
+   - BEAR_MARKET: Overall declining conditions
+
+CRITICAL REQUIREMENTS:
+- Ground ALL analysis in observable chart data
+- Acknowledge uncertainty when present
+- Distinguish between high-confidence trends vs choppy conditions
+- Provide specific reasoning for confidence scores
+- Be realistic about market conditions
+
+Respond with ONLY a JSON object in this exact format:
+
+{
+    "overall_confidence": <0-100 integer>,
+    "btc_trend_direction": "<UP|DOWN|SIDEWAYS>",
+    "btc_trend_strength": <0-100 integer>,
+    "eth_trend_direction": "<UP|DOWN|SIDEWAYS>",
+    "eth_trend_strength": <0-100 integer>,
+    "alt_trend_direction": "<UP|DOWN|SIDEWAYS>",
+    "alt_trend_strength": <0-100 integer>,
+    "trade_permission": "<NO_TRADE|SELECTIVE|ACTIVE|AGGRESSIVE>",
+    "market_regime": "<BTC_SEASON|ALT_SEASON|TRANSITION|BEAR_MARKET>",
+    "reasoning": "<detailed analysis explaining your confidence scores and recommendations>"
+}
+
+REMEMBER: Use the full 0-100 confidence range. Be honest about uncertainty. Only recommend active trading when conditions clearly support it.
+"""
+
+================================================================================
+3. TRIGGER DETECTION LOGIC (AnalysisContextService._check_entry_trigger_hit)
+================================================================================
+
+CURRENT TRIGGER DETECTION ALGORITHM:
+
+For BUY actions:
+- If BREAKOUT trade: trigger_hit = (candle_high >= entry_price)
+- If TRADITIONAL trade: trigger_hit = (candle_low <= entry_price)
+
+For SELL actions:
+- If BREAKOUT trade: trigger_hit = (candle_low <= entry_price)
+- If TRADITIONAL trade: trigger_hit = (candle_low <= entry_price)
+
+BREAKOUT DETECTION KEYWORDS:
+- "break", "breakout", "above", "resistance", "through"
+
+NOTES:
+- Uses candlestick high/low prices for trigger detection
+- Age limit: 48 hours for historical analysis (bypassed for active trades)
+- Returns trigger_hit, trigger_details, trigger_message
+
+================================================================================
+4. CONTEXT BUILDING PATTERNS
+================================================================================
+
+CONTEXT URGENCY LEVELS:
+- "recent": Analysis made recently, still relevant
+- "active": Active trade context
+- "reference": Older reference context
+
+CONTEXT MESSAGE PATTERNS:
+- "📊 RECENT ANALYSIS FOUND ({hours_ago:.1f}h ago)"
+- "🎯 ACTIVE TRADE CONTEXT FOUND"
+- "📚 REFERENCE CONTEXT FOUND ({hours_ago:.1f}h ago)"
+
+ENTRY STRATEGY TYPES:
+- "pullback": Wait for price to dip to entry level
+- "breakout": Wait for price to break above/below entry level
+- "immediate": Enter at current market price
+- "retest": Wait for retest of specific level
+
+================================================================================
+END OF PROMPT V1 BACKUP
+================================================================================
+This backup captures all prompt templates, context building logic, trigger detection
+algorithms, and response format requirements as they existed before V2 enhancements.
+
+Date: 2025-01-23
+Total Lines: ~400
+Source Files: 
+- backend/services/prompt_builder_service.py
+- backend/services/macro_ai_service.py  
+- backend/services/analysis_context_service.py
+================================================================================

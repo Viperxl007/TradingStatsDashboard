@@ -418,7 +418,47 @@ class AnalysisContextService:
                 
                 if action == 'buy':
                     if is_breakout_trade:
-                        # BREAKOUT BUY: Wait for price to break ABOVE entry price
+                        # BREAKOUT BUY: Wait for price to break ABOVE entry price (limit order triggers on touch)
+                        if candle_high > entry_price:  # Use > not >= to avoid exact price matches
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_high,
+                                'entry_price': entry_price,
+                                'candle_data': candle,
+                                'volume_confirmed': candle.get('volume', 0) > candle.get('avg_volume', 0)
+                            }
+                            logger.info(f"🎯 BREAKOUT BUY TRIGGER HIT for {ticker}: price broke above ${candle_high} (target: ${entry_price}) at {candle_time}")
+                            break
+                    else:
+                        # PULLBACK BUY: Wait for price to dip TO OR BELOW entry price
+                        if candle_low <= entry_price:
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_low,
+                                'entry_price': entry_price,
+                                'candle_data': candle
+                            }
+                            logger.info(f"🎯 PULLBACK BUY TRIGGER HIT for {ticker}: price dipped to ${candle_low} (target: ${entry_price}) at {candle_time}")
+                            break
+                
+                elif action == 'sell':
+                    if is_breakout_trade:
+                        # BREAKOUT SELL: Wait for price to break BELOW entry price (limit order triggers on touch)
+                        if candle_low < entry_price:  # Use < not <= to avoid exact price matches
+                            trigger_hit = True
+                            trigger_details = {
+                                'trigger_time': candle_time,
+                                'trigger_price': candle_low,
+                                'entry_price': entry_price,
+                                'candle_data': candle,
+                                'volume_confirmed': candle.get('volume', 0) > candle.get('avg_volume', 0)
+                            }
+                            logger.info(f"🎯 BREAKOUT SELL TRIGGER HIT for {ticker}: price broke below ${candle_low} (target: ${entry_price}) at {candle_time}")
+                            break
+                    else:
+                        # PULLBACK SELL: Wait for price to rise TO OR ABOVE entry price
                         if candle_high >= entry_price:
                             trigger_hit = True
                             trigger_details = {
@@ -427,45 +467,7 @@ class AnalysisContextService:
                                 'entry_price': entry_price,
                                 'candle_data': candle
                             }
-                            logger.info(f"🎯 BREAKOUT BUY TRIGGER HIT for {ticker}: price broke above ${candle_high} (target: ${entry_price}) at {candle_time}")
-                            break
-                    else:
-                        # TRADITIONAL BUY: Wait for price to dip TO OR BELOW entry price
-                        if candle_low <= entry_price:
-                            trigger_hit = True
-                            trigger_details = {
-                                'trigger_time': candle_time,
-                                'trigger_price': candle_low,
-                                'entry_price': entry_price,
-                                'candle_data': candle
-                            }
-                            logger.info(f"🎯 TRADITIONAL BUY TRIGGER HIT for {ticker}: price dipped to ${candle_low} (target: ${entry_price}) at {candle_time}")
-                            break
-                
-                elif action == 'sell':
-                    if is_breakout_trade:
-                        # BREAKOUT SELL: Wait for price to break BELOW entry price
-                        if candle_low <= entry_price:
-                            trigger_hit = True
-                            trigger_details = {
-                                'trigger_time': candle_time,
-                                'trigger_price': candle_low,
-                                'entry_price': entry_price,
-                                'candle_data': candle
-                            }
-                            logger.info(f"🎯 BREAKOUT SELL TRIGGER HIT for {ticker}: price broke below ${candle_low} (target: ${entry_price}) at {candle_time}")
-                            break
-                    else:
-                        # TRADITIONAL SELL: Wait for price to fall TO OR BELOW entry price
-                        if candle_low <= entry_price:
-                            trigger_hit = True
-                            trigger_details = {
-                                'trigger_time': candle_time,
-                                'trigger_price': candle_low,
-                                'entry_price': entry_price,
-                                'candle_data': candle
-                            }
-                            logger.info(f"🎯 TRADITIONAL SELL TRIGGER HIT for {ticker}: price fell to ${candle_low} (target: ${entry_price}) at {candle_time}")
+                            logger.info(f"🎯 PULLBACK SELL TRIGGER HIT for {ticker}: price rose to ${candle_high} (target: ${entry_price}) at {candle_time}")
                             break
             
             if trigger_hit:

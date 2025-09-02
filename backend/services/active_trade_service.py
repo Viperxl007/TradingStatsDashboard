@@ -688,12 +688,30 @@ class ActiveTradeService:
                 logger.info(f"No trade created for {ticker}: action is '{action}' (not buy/sell)")
                 return None
             
+            # CRITICAL FIX: Check quality score threshold before extracting trade parameters
+            # This prevents the "No entry price found" warning for low-quality trades
+            
+            # Try to get quality score first, fallback to confidence
+            quality_score = (analysis_data.get('quality_score') or
+                           recommendations.get('quality_score') or
+                           recommendations.get('confidence', 0.0))
+            
+            # Convert to percentage if it's in decimal format (0.0-1.0)
+            if isinstance(quality_score, (int, float)) and quality_score <= 1.0:
+                quality_pct = quality_score * 100
+            else:
+                quality_pct = float(quality_score) if quality_score else 0.0
+            
+            if quality_pct < 65.0:
+                logger.info(f"🚫 Low quality trade for {ticker}: {quality_pct:.1f}% < 65% threshold. Skipping trade creation.")
+                return None
+            
             entry_price = recommendations.get('entryPrice')
             target_price = recommendations.get('targetPrice')
             stop_loss = recommendations.get('stopLoss')
             
             if not entry_price:
-                logger.warning(f"No entry price found in recommendations for {ticker}")
+                logger.warning(f"No entry price found in recommendations for {ticker} (quality: {quality_pct:.1f}%)")
                 return None
             
             # Extract entry strategy details
@@ -762,12 +780,13 @@ class ActiveTradeService:
                 with sqlite3.connect(self.db_path) as conn:
                     cursor = conn.cursor()
                     
-                    # Check if there's already an active trade for this ticker
+                    # Check if there's already an active trade for this ticker AND timeframe
+                    # CRITICAL FIX: Include timeframe filtering to allow multiple trades per ticker on different timeframes
                     cursor.execute('''
                         SELECT id, status FROM active_trades
-                        WHERE ticker = ? AND status IN ('waiting', 'active')
+                        WHERE ticker = ? AND timeframe = ? AND status IN ('waiting', 'active')
                         ORDER BY created_at DESC LIMIT 1
-                    ''', (ticker.upper(),))
+                    ''', (ticker.upper(), timeframe))
                     
                     existing_trade = cursor.fetchone()
                     if existing_trade:
@@ -894,15 +913,20 @@ class ActiveTradeService:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
                 
-                query = '''
-                    SELECT * FROM active_trades
-                    WHERE ticker = ? AND status IN ('waiting', 'active')
-                '''
-                params = [ticker.upper()]
-                
+                # CRITICAL FIX: Always filter by timeframe when provided to enable multiple trades per ticker
                 if timeframe:
-                    query += ' AND timeframe = ?'
-                    params.append(timeframe)
+                    query = '''
+                        SELECT * FROM active_trades
+                        WHERE ticker = ? AND timeframe = ? AND status IN ('waiting', 'active')
+                    '''
+                    params = [ticker.upper(), timeframe]
+                else:
+                    # When no timeframe specified, get the most recent trade across all timeframes
+                    query = '''
+                        SELECT * FROM active_trades
+                        WHERE ticker = ? AND status IN ('waiting', 'active')
+                    '''
+                    params = [ticker.upper()]
                 
                 query += ' ORDER BY created_at DESC LIMIT 1'
                 

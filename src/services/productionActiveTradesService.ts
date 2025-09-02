@@ -27,6 +27,7 @@ export interface ProductionActiveTrade {
   close_reason?: string;
   realized_pnl?: number;
   reasoning?: string;
+  prompt_version?: string;
 }
 
 export interface ProductionActiveTradesResponse {
@@ -154,6 +155,7 @@ export const convertProductionTradeToAITrade = (productionTrade: ProductionActiv
     
     // AI Analysis Data
     aiModel: 'production_system',
+    promptVersion: productionTrade.prompt_version || 'v1.0', // Default to v1.0 if not specified
     confidence: 1.0, // Production trades have 100% confidence
     confidenceLevel: 'very_high',
     sentiment: productionTrade.action === 'buy' ? 'bullish' : 'bearish',
